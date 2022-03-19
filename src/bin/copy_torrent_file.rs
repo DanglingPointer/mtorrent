@@ -1,6 +1,5 @@
-use std::fs;
-
-mod benc;
+use mtorrent::benc;
+use std::{env, fs};
 
 fn print_entity(entity: &benc::Element) {
     match entity {
@@ -33,13 +32,26 @@ fn print_entity(entity: &benc::Element) {
 }
 
 fn main() {
-    let file_content = fs::read("/home/mikhailv/Movies/torrents/example.torrent").unwrap();
-    let entity = benc::Element::from_bytes(&file_content).unwrap();
+    let args: Vec<String> = env::args().collect();
+    println!("{:?}", args);
+
+    let source = if args.len() >= 2 {
+        args[1].to_owned()
+    } else {
+        "/home/mikhailv/Movies/torrents/example.torrent".to_string()
+    };
+
+    let dest = if args.len() >= 3 {
+        args[2].to_owned()
+    } else {
+        "/home/mikhailv/Movies/torrents/example_copy.torrent".to_string()
+    };
+
+    let source_content = fs::read(source).unwrap();
+    let entity = benc::Element::from_bytes(&source_content).unwrap();
+
     print_entity(&entity);
 
-    fs::write(
-        "/home/mikhailv/Movies/torrents/example_copy.torrent",
-        entity.to_bytes(),
-    )
-    .unwrap();
+    let dest_content = entity.to_bytes();
+    fs::write(dest, dest_content).unwrap();
 }
