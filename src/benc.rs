@@ -26,6 +26,18 @@ impl Element {
     }
 }
 
+impl From<&str> for Element {
+    fn from(text: &str) -> Self {
+        Element::ByteString(Vec::<u8>::from(text))
+    }
+}
+
+impl From<i64> for Element {
+    fn from(number: i64) -> Self {
+        Element::Integer(number)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
     EmptySource,
