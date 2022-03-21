@@ -63,6 +63,23 @@ impl From<str::Utf8Error> for ParseError {
     }
 }
 
+pub fn convert_dictionary(src: BTreeMap<Element, Element>) -> BTreeMap<String, Element> {
+    fn to_string_key(pair: (Element, Element)) -> Option<(String, Element)> {
+        let (key, value) = pair;
+        match key {
+            Element::ByteString(data) => {
+                if let Ok(text) = String::from_utf8(data) {
+                    Some((text, value))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+    src.into_iter().filter_map(to_string_key).collect()
+}
+
 const DELIMITER_STRING: u8 = b':';
 const PREFIX_INTEGER: u8 = b'i';
 const PREFIX_LIST: u8 = b'l';

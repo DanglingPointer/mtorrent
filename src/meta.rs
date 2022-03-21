@@ -23,8 +23,8 @@ impl TryFrom<benc::Element> for MetaInfo {
 
         match (root_dictionary, info_element) {
             (Some(root), Some(benc::Element::Dictionary(info))) => Ok(MetaInfo {
-                root: to_string_key_dictionary(root),
-                info: to_string_key_dictionary(info),
+                root: benc::convert_dictionary(root),
+                info: benc::convert_dictionary(info),
             }),
             _ => Err(()),
         }
@@ -87,25 +87,6 @@ impl MetaInfo {
             None
         }
     }
-}
-
-fn to_string_key_dictionary(
-    src: BTreeMap<benc::Element, benc::Element>,
-) -> BTreeMap<String, benc::Element> {
-    fn to_string_key(pair: (benc::Element, benc::Element)) -> Option<(String, benc::Element)> {
-        let (key, value) = pair;
-        match key {
-            benc::Element::ByteString(data) => {
-                if let Ok(text) = String::from_utf8(data) {
-                    Some((text, value))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-    src.into_iter().filter_map(to_string_key).collect()
 }
 
 fn try_get_length_path_pair(e: &benc::Element) -> Option<(usize, PathBuf)> {
