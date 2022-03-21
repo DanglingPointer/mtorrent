@@ -6,3 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+#hyper = { version = "0.14.17", features = ["client"] }
+http = "0.2.6"
+httparse = "1.6.0"
+futures = "0.3.21"
+async-io = "1.6.0" #timer
+#async-std = "1.10.0" #yield
+async-net = "1.6.1"
