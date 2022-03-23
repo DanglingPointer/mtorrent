@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 #hyper = { version = "0.14.17", features = ["client"] }
-http = "0.2.6"
+#http = "0.2.6" # request, response
 url = "2.2.2"
 httparse = "1.6.0"
 futures = "0.3.21"
