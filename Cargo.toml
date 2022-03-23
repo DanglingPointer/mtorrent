@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 #hyper = { version = "0.14.17", features = ["client"] }
 http = "0.2.6"
+url = "2.2.2"
 httparse = "1.6.0"
 futures = "0.3.21"
 async-io = "1.6.0" #timer
