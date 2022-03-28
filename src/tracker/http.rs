@@ -1,4 +1,5 @@
 use crate::benc;
+use crate::tracker::utils;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str;
@@ -156,7 +157,9 @@ impl TrackerResponseContent {
     pub fn peers(&self) -> Option<Vec<SocketAddr>> {
         match self.root.get("peers") {
             Some(benc::Element::List(list)) => Some(dictionary_peers(list).collect()),
-            Some(benc::Element::ByteString(data)) => Some(binary_peers(data).collect()),
+            Some(benc::Element::ByteString(data)) => {
+                Some(utils::parse_binary_ipv4_peers(data).collect())
+            }
             _ => None,
         }
     }
@@ -183,20 +186,6 @@ fn dictionary_peers(data: &Vec<benc::Element>) -> impl Iterator<Item = SocketAdd
                 _ => None,
             }
         })
-}
-
-fn binary_peers(data: &[u8]) -> impl Iterator<Item = SocketAddr> + '_ {
-    fn to_addr_and_port(src: &[u8]) -> Result<SocketAddr, ()> {
-        let (addr_data, port_data) = src.split_at(4);
-        Ok(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::from(u32::from_be_bytes(
-                addr_data.try_into().map_err(|_| ())?,
-            ))),
-            u16::from_be_bytes(port_data.try_into().map_err(|_| ())?),
-        ))
-    }
-    data.chunks_exact(6)
-        .filter_map(|data| to_addr_and_port(data).ok())
 }
 
 #[cfg(test)]

@@ -9,8 +9,9 @@ edition = "2021"
 #hyper = { version = "0.14.17", features = ["client"] }
 #http = "0.2.6" # request, response
 url = "2.2.2"
-httparse = "1.6.0"
+#httparse = "1.6.0"
 futures = "0.3.21"
 async-io = "1.6.0" #timer
 #async-std = "1.10.0" #yield
-async-net = "1.6.1"
+#async-net = "1.6.1"
+rand = "0.8.5"
