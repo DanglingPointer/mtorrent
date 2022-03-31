@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::str::Utf8Error;
 use std::time::{Duration, Instant};
 use std::{io, str};
+use log::{debug, trace};
 
 pub struct UdpTrackerConnection {
     socket: Async<UdpSocket>,
@@ -22,6 +23,8 @@ impl UdpTrackerConnection {
             buffer
         };
 
+        debug!("Sending connect request");
+
         let connect_response =
             Self::do_request(&socket, request, |data: &[u8]| -> Option<ConnectResponse> {
                 match parse_response(data, transaction_id) {
@@ -30,6 +33,8 @@ impl UdpTrackerConnection {
                 }
             })
             .await?;
+
+        debug!("Received connect response, connection_id={}", connect_response.connection_id);
 
         Ok(UdpTrackerConnection {
             socket,
@@ -61,6 +66,8 @@ impl UdpTrackerConnection {
                 .unwrap();
             buffer
         };
+
+        debug!("Sending announce request");
 
         Self::do_request(
             &self.socket,
@@ -127,6 +134,7 @@ impl UdpTrackerConnection {
         let mut retransmit_n = 0usize;
 
         loop {
+            trace!("Sending bytes: {:?}", request);
             let mut bytes_written: usize = 0;
             while bytes_written < request.len() {
                 bytes_written = socket.send(&request[bytes_written..]).await?;
@@ -141,6 +149,7 @@ impl UdpTrackerConnection {
 
             match socket.recv(&mut recv_buf).await {
                 Ok(bytes_read) => {
+                    trace!("Received bytes: {:?}", &recv_buf[..bytes_read]);
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {
                         return Ok(result);
                     }
@@ -247,6 +256,7 @@ pub enum AnnounceEvent {
     Stopped = 3,
 }
 
+#[derive(Clone)]
 pub struct AnnounceRequest {
     pub info_hash: [u8; 20],
     pub peer_id: [u8; 20],
@@ -354,6 +364,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
+#[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: u32,
     pub leechers: u32,
