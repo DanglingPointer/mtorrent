@@ -52,7 +52,7 @@ fn test_read_example_torrent_file() {
     assert_eq!(2097152, piece_length, "piece length: {}", piece_length);
 
     let pieces = info.pieces().unwrap();
-    assert_eq!(13360/20, pieces.count());
+    assert_eq!(13360 / 20, pieces.count());
 
     let length = info.length();
     assert_eq!(None, length, "length: {:?}", length);

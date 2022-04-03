@@ -1,11 +1,11 @@
-use mtorrent::{benc, meta};
-use std::{env, fs};
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use async_io::Async;
 use igd;
 use igd::PortMappingProtocol;
 use log::{debug, error, info, Level};
 use mtorrent::tracker::udp::{AnnounceEvent, AnnounceRequest, UdpTrackerConnection};
+use mtorrent::{benc, meta};
+use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::{env, fs};
 
 fn main() {
     simple_logger::init_with_level(Level::Debug).unwrap();
@@ -70,10 +70,12 @@ fn main() {
     info!("Found gateway: {}", gateway);
 
     info!("Adding port...");
-    let external_port = gateway.add_any_port(PortMappingProtocol::UDP, local_addr, 5, "").unwrap();
+    let external_port = gateway
+        .add_any_port(PortMappingProtocol::UDP, local_addr, 5, "")
+        .unwrap();
     info!("Port {} added!", external_port);
 
-    let announce_request = AnnounceRequest{
+    let announce_request = AnnounceRequest {
         info_hash: [0u8; 20],
         peer_id: [0xae; 20],
         downloaded: 0,
@@ -96,10 +98,15 @@ fn main() {
         client_socket.connect(tracker_addr).unwrap();
         let client_socket = Async::<UdpSocket>::try_from(client_socket).unwrap();
 
-        info!("Local socket at {} successfully bound to tracker at {}", local_addr, tracker_addr);
+        info!(
+            "Local socket at {} successfully bound to tracker at {}",
+            local_addr, tracker_addr
+        );
 
         async_io::block_on(async {
-            let client = UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
+            let client = UdpTrackerConnection::from_connected_socket(client_socket)
+                .await
+                .unwrap();
 
             let mut request = announce_request.clone();
             request.info_hash.copy_from_slice(pieces_it.next().unwrap());

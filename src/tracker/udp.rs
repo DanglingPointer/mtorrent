@@ -1,10 +1,10 @@
 use crate::tracker::utils;
 use async_io::Async;
+use log::{debug, trace};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::str::Utf8Error;
 use std::time::{Duration, Instant};
 use std::{io, str};
-use log::{debug, trace};
 
 pub struct UdpTrackerConnection {
     socket: Async<UdpSocket>,
@@ -34,7 +34,10 @@ impl UdpTrackerConnection {
             })
             .await?;
 
-        debug!("Received connect response, connection_id={}", connect_response.connection_id);
+        debug!(
+            "Received connect response, connection_id={}",
+            connect_response.connection_id
+        );
 
         Ok(UdpTrackerConnection {
             socket,
