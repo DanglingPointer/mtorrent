@@ -7,8 +7,8 @@ use std::net::TcpStream;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Handshake {
-    peer_id: [u8; 20],
-    info_hash: [u8; 20],
+    pub peer_id: [u8; 20],
+    pub info_hash: [u8; 20],
 }
 
 impl Default for Handshake {
@@ -276,12 +276,7 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            let result = do_handshake_outgoing(
-                client_stream,
-                client_hs_data.clone(),
-                None,
-            )
-            .await;
+            let result = do_handshake_outgoing(client_stream, client_hs_data.clone(), None).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("info_hash doesn't match", error.to_string(),)
         };

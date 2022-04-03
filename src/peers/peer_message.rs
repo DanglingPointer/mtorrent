@@ -1,4 +1,5 @@
 use bitvec::prelude::*;
+use futures::prelude::*;
 use std::io;
 
 pub enum PeerMessage {
@@ -113,7 +114,7 @@ impl PeerMessage {
 
     pub async fn write_to<S: futures::AsyncWriteExt + Unpin>(
         &self,
-        dest: &mut S,
+        dest: &mut futures::io::BufWriter<S>,
     ) -> io::Result<()> {
         use PeerMessage::*;
 
