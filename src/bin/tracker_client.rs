@@ -82,8 +82,19 @@ fn main() {
         local_addr.port()
     });
 
+    let info_hash = {
+        let mut hash = [0u8; 20];
+        if let Some(mut it) = metainfo.pieces() {
+            if let Some(hash_array) = it.next() {
+                hash.copy_from_slice(hash_array);
+            }
+        }
+        hash
+    };
+    debug!("Info hash: {:?}", info_hash);
+
     let announce_request = AnnounceRequest {
-        info_hash: [0u8; 20],
+        info_hash,
         peer_id: [0xae; 20],
         downloaded: 0,
         left: 200,
