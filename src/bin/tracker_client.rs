@@ -7,6 +7,18 @@ use mtorrent::{benc, meta};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::{env, fs};
 
+fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
+    info!("Searching gateway...");
+    let gateway = igd::search_gateway(Default::default())?;
+    info!("Found gateway: {}", gateway);
+
+    info!("Adding port...");
+    let external_port = gateway.add_any_port(PortMappingProtocol::UDP, local_addr, 5, "")?;
+    info!("Port {} added!", external_port);
+
+    Ok(external_port)
+}
+
 fn main() {
     simple_logger::init_with_level(Level::Debug).unwrap();
 
@@ -65,15 +77,10 @@ fn main() {
         6889,
     );
 
-    info!("Searching gateway...");
-    let gateway = igd::search_gateway(Default::default()).unwrap();
-    info!("Found gateway: {}", gateway);
-
-    info!("Adding port...");
-    let external_port = gateway
-        .add_any_port(PortMappingProtocol::UDP, local_addr, 5, "")
-        .unwrap();
-    info!("Port {} added!", external_port);
+    let external_port = open_external_port(local_addr).unwrap_or_else(|e| {
+        error!("Couldn't open external port: {}", e);
+        local_addr.port()
+    });
 
     let announce_request = AnnounceRequest {
         info_hash: [0u8; 20],
