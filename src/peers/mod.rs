@@ -5,13 +5,11 @@ use async_io::Async;
 use futures::executor::LocalSpawner;
 use futures::io::BufWriter;
 use futures::prelude::*;
-use futures::select;
 use futures::task::LocalSpawnExt;
 use log::{error, info};
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io;
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::{fmt, io};
 
 mod handshake;
 pub mod peer_message;
@@ -21,6 +19,9 @@ pub enum EventToPeers {
         remote_addr: SocketAddr,
         remote_peer_id: Option<[u8; 20]>,
         info_hash: [u8; 20],
+    },
+    CreateInboundConnection {
+        socket: Async<TcpStream>,
     },
     SendMessage {
         remote_peer_id: [u8; 20],
@@ -48,67 +49,139 @@ pub enum EventFromPeers {
 
 pub struct ConnectionManager {
     local_peer_id: [u8; 20],
-    listener: Async<TcpListener>,
     executor: LocalSpawner,
     event_sender: async_channel::Sender<EventFromPeers>,
     event_receiver: async_channel::Receiver<EventToPeers>,
-    writers: RefCell<HashMap<[u8; 20], async_channel::Sender<EventToPeers>>>,
+    writers: HashMap<[u8; 20], async_channel::Sender<EventToPeers>>,
 }
 
 impl ConnectionManager {
     pub fn new(
         local_peer_id: [u8; 20],
-        listener_port: u16,
         executor: LocalSpawner,
         event_sender: async_channel::Sender<EventFromPeers>,
         event_receiver: async_channel::Receiver<EventToPeers>,
     ) -> Self {
-        let server_addr = SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, listener_port));
-        let listener = Async::<TcpListener>::bind(server_addr).unwrap();
-
         ConnectionManager {
             local_peer_id,
-            listener,
             executor,
             event_sender,
             event_receiver,
-            writers: RefCell::new(HashMap::new()),
+            writers: HashMap::new(),
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         info!("ConnectionManager starting");
-        select! {
-            _ = self.accept_connections().fuse() => info!("accept_connections() stopped"),
-            _ = self.serve_connections().fuse() => info!("serve_connections() stopped"),
-        };
+        let mut should_stop = false;
+        while !should_stop {
+            match self.event_receiver.recv().await {
+                Err(error) => {
+                    info!("peers_main stopping: {}", error);
+                    should_stop = true;
+                }
+                Ok(event) => {
+                    should_stop = matches!(&event, EventToPeers::Stop);
+                    match self.handle_event(event).await {
+                        Err(e) => error!("{}", e),
+                        _ => (),
+                    }
+                }
+            }
+        }
         info!("ConnectionManager exiting");
     }
 
-    async fn accept_connections(&self) {
-        loop {
-            match self.listener.accept().await {
-                Err(error) => {
-                    error!("accept_connections exiting - listener error: {}", error);
-                    return;
+    async fn handle_event(&mut self, event: EventToPeers) -> io::Result<()> {
+        match event {
+            EventToPeers::SendMessage {
+                remote_peer_id,
+                message,
+            } => {
+                let event_sender =
+                    self.writers
+                        .get_mut(&remote_peer_id)
+                        .ok_or(custom_error(format!(
+                            "InboundEvent::SendMessage: connection {:?} not found",
+                            &remote_peer_id
+                        )))?;
+
+                event_sender
+                    .try_send(EventToPeers::SendMessage {
+                        remote_peer_id,
+                        message,
+                    })
+                    .map_err(convert_error)?;
+            }
+            EventToPeers::CloseConnection { remote_peer_id } => {
+                info!("closing connection to {:?}", &remote_peer_id);
+
+                let event_sender =
+                    self.writers
+                        .get_mut(&remote_peer_id)
+                        .ok_or(custom_error(format!(
+                            "InboundEvent::CloseConnection: connection {:?} not found",
+                            &remote_peer_id
+                        )))?;
+
+                event_sender
+                    .try_send(EventToPeers::CloseConnection { remote_peer_id })
+                    .map_err(convert_error)?;
+
+                self.writers.remove(&remote_peer_id);
+            }
+            EventToPeers::CreateInboundConnection { socket } => {
+                let remote_info = self.create_inbound_connection(socket).await.map_err(|e| {
+                    custom_error(format!("Error creating inbound connection: {}", e))
+                })?;
+                self.event_sender
+                    .try_send(EventFromPeers::NewConnection {
+                        remote_handshake: remote_info,
+                    })
+                    .map_err(convert_error)?;
+            }
+            EventToPeers::CreateOutboundConnection {
+                remote_addr,
+                remote_peer_id,
+                info_hash,
+            } => {
+                let remote_peer_id = remote_peer_id.as_ref().map(|id| &id[..]);
+                let local_info = Handshake {
+                    peer_id: self.local_peer_id,
+                    info_hash,
+                };
+                let remote_info = self
+                    .create_outbound_connection(remote_addr, local_info, remote_peer_id)
+                    .await
+                    .map_err(|e| {
+                        custom_error(format!(
+                            "failed to create outbound connection to {}: {}",
+                            remote_addr, e
+                        ))
+                    })?;
+                self.event_sender
+                    .try_send(EventFromPeers::NewConnection {
+                        remote_handshake: remote_info,
+                    })
+                    .map_err(convert_error)?;
+            }
+            EventToPeers::Stop => {
+                for (_, event_sender) in self.writers.iter_mut() {
+                    let _ = event_sender
+                        .send(EventToPeers::CloseConnection {
+                            remote_peer_id: Default::default(),
+                        })
+                        .await;
                 }
-                Ok((socket, _remote_addr)) => match self.create_inbound_connection(socket).await {
-                    Err(error) => error!("Error creating inbound connection: {}", error),
-                    Ok(event) => {
-                        if let Err(e) = self.event_sender.try_send(event) {
-                            info!("accept_connections exiting - no event channel: {}", e);
-                            return;
-                        }
-                    }
-                },
             }
         }
+        Ok(())
     }
 
     async fn create_inbound_connection(
-        &self,
+        &mut self,
         socket: Async<TcpStream>,
-    ) -> io::Result<EventFromPeers> {
+    ) -> io::Result<Handshake> {
         let (socket, remote_info) =
             do_handshake_incoming(socket, &self.local_peer_id[..], None).await?;
         add_new_connection(
@@ -116,100 +189,29 @@ impl ConnectionManager {
             remote_info.peer_id,
             self.event_sender.clone(),
             &self.executor,
-            &mut self.writers.borrow_mut(),
+            &mut self.writers,
         )?;
-        Ok(EventFromPeers::NewConnection {
-            remote_handshake: remote_info,
-        })
+        Ok(remote_info)
     }
 
-    async fn serve_connections(&self) {
-        loop {
-            match self.event_receiver.recv().await {
-                Err(error) => {
-                    info!("peers_main stopping: {}", error);
-                    return;
-                }
-                Ok(EventToPeers::SendMessage {
-                    remote_peer_id,
-                    message,
-                }) => {
-                    if let Some(event_sender) = self.writers.borrow_mut().get_mut(&remote_peer_id) {
-                        event_sender
-                            .try_send(EventToPeers::SendMessage {
-                                remote_peer_id,
-                                message,
-                            })
-                            .unwrap();
-                    } else {
-                        error!(
-                            "InboundEvent::SendMessage: connection {:?} not found",
-                            &remote_peer_id
-                        );
-                    }
-                }
-                Ok(EventToPeers::CloseConnection { remote_peer_id }) => {
-                    info!("closing connection to {:?}", &remote_peer_id);
-                    if let Some(event_sender) = self.writers.borrow_mut().get_mut(&remote_peer_id) {
-                        event_sender
-                            .try_send(EventToPeers::CloseConnection { remote_peer_id })
-                            .unwrap();
-                        self.writers.borrow_mut().remove(&remote_peer_id);
-                    } else {
-                        error!(
-                            "InboundEvent::CloseConnection: connection {:?} not found",
-                            &remote_peer_id
-                        );
-                    }
-                }
-                Ok(EventToPeers::CreateOutboundConnection {
-                    remote_addr,
-                    remote_peer_id,
-                    info_hash,
-                }) => {
-                    let remote_peer_id = remote_peer_id.as_ref().map(|id| &id[..]);
-                    let local_info = Handshake {
-                        peer_id: self.local_peer_id,
-                        info_hash,
-                    };
-                    match create_outbound_connection(remote_addr, local_info, remote_peer_id).await
-                    {
-                        Err(error) => error!(
-                            "failed to create outbound connection to {}: {}",
-                            remote_addr, error
-                        ),
-                        Ok((socket, remote_info)) => {
-                            let remote_peer_id = remote_info.peer_id;
-                            if let Err(error) = add_new_connection(
-                                socket,
-                                remote_peer_id,
-                                self.event_sender.clone(),
-                                &self.executor,
-                                &mut self.writers.borrow_mut(),
-                            ) {
-                                error!("failed to add outbound connection: {}", error);
-                            } else {
-                                self.event_sender
-                                    .try_send(EventFromPeers::NewConnection {
-                                        remote_handshake: remote_info,
-                                    })
-                                    .unwrap();
-                            }
-                        }
-                    }
-                }
-                Ok(EventToPeers::Stop) => {
-                    for (_, event_sender) in self.writers.borrow_mut().iter_mut() {
-                        let _ = event_sender
-                            .send(EventToPeers::CloseConnection {
-                                remote_peer_id: Default::default(),
-                            })
-                            .await;
-                    }
-                    return;
-                }
-            }
-        }
+    async fn create_outbound_connection(
+        &mut self,
+        server_addr: SocketAddr,
+        local_info: Handshake,
+        server_peer_id: Option<&[u8]>,
+    ) -> io::Result<Handshake> {
+        let socket = Async::<TcpStream>::connect(server_addr).await?;
+        let (socket, remote_info) =
+            do_handshake_outgoing(socket, local_info.clone(), server_peer_id).await?;
+        let remote_peer_id = remote_info.peer_id;
+        add_new_connection(
+            socket,
+            remote_peer_id,
+            self.event_sender.clone(),
+            &self.executor,
+            &mut self.writers,
+        )?;
+        Ok(remote_info)
     }
 }
 
@@ -298,26 +300,21 @@ fn add_new_connection(
     };
     match writers.insert(remote_peer_id, local_event_sender) {
         None => {
-            executor
-                .spawn_local(reader.run())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
-            executor
-                .spawn_local(writer.run())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+            executor.spawn_local(reader.run()).map_err(convert_error)?;
+            executor.spawn_local(writer.run()).map_err(convert_error)?;
             Ok(())
         }
-        Some(_) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("connection to {:?} already exists", remote_peer_id),
-        )),
+        Some(_) => Err(custom_error(format!(
+            "connection to {:?} already exists",
+            remote_peer_id
+        ))),
     }
 }
 
-async fn create_outbound_connection(
-    server_addr: SocketAddr,
-    local_info: Handshake,
-    server_peer_id: Option<&[u8]>,
-) -> io::Result<(Async<TcpStream>, Handshake)> {
-    let socket = Async::<TcpStream>::connect(server_addr).await?;
-    do_handshake_outgoing(socket, local_info.clone(), server_peer_id).await
+fn convert_error<E: fmt::Display>(e: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, format!("{}", e))
+}
+
+fn custom_error(msg: String) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, msg)
 }
