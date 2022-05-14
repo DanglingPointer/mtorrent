@@ -33,6 +33,7 @@ pub enum EventToPeers {
     Stop,
 }
 
+#[derive(Debug)]
 pub enum EventFromPeers {
     NewConnection {
         remote_handshake: Handshake,
@@ -226,20 +227,23 @@ impl Receiver {
         loop {
             match PeerMessage::read_from(&mut self.source).await {
                 Ok(message) => {
-                    self.event_sender
-                        .try_send(EventFromPeers::MessageReceived {
-                            remote_peer_id: self.remote_peer_id,
-                            message,
-                        })
-                        .unwrap();
+                    let result = self.event_sender.try_send(EventFromPeers::MessageReceived {
+                        remote_peer_id: self.remote_peer_id,
+                        message,
+                    });
+                    if result.is_err() {
+                        return;
+                    }
                 }
                 Err(error) => {
-                    self.event_sender
+                    error!("read failed: {}", error);
+                    let _ = self
+                        .event_sender
                         .try_send(EventFromPeers::ConnectionClosed {
                             remote_peer_id: self.remote_peer_id,
                             error: Some(error),
-                        })
-                        .unwrap();
+                        });
+                    return;
                 }
             }
         }
@@ -317,4 +321,164 @@ fn convert_error<E: fmt::Display>(e: E) -> io::Error {
 
 fn custom_error(msg: String) -> io::Error {
     io::Error::new(io::ErrorKind::Other, msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_channel::{Receiver, Sender};
+    use futures::executor::LocalPool;
+    use futures::join;
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+    use std::thread::JoinHandle;
+
+    async fn accept_tcp_connection(listener_port: u16) -> Async<TcpStream> {
+        let server_addr = SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, listener_port));
+        let listener = Async::<TcpListener>::bind(server_addr).unwrap();
+
+        let (socket, _remote_addr) = listener.accept().await.unwrap();
+        socket
+    }
+
+    fn spawn_peers(
+        count: usize,
+    ) -> (
+        Vec<Sender<EventToPeers>>,
+        Vec<Receiver<EventFromPeers>>,
+        JoinHandle<()>,
+    ) {
+        let mut senders_to_peers = Vec::with_capacity(count);
+        let mut receivers_from_peers = Vec::with_capacity(count);
+
+        let mut peer_senders = Vec::with_capacity(count);
+        let mut peer_receivers = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            let (sender_to_peer, peer_receiver) = async_channel::unbounded::<EventToPeers>();
+            senders_to_peers.push(sender_to_peer);
+            peer_receivers.push(peer_receiver);
+
+            let (peer_sender, receiver_from_peer) = async_channel::unbounded::<EventFromPeers>();
+            peer_senders.push(peer_sender);
+            receivers_from_peers.push(receiver_from_peer);
+        }
+
+        let handle = std::thread::spawn(move || {
+            let mut pool = LocalPool::new();
+
+            for i in 0..count {
+                let peer = ConnectionManager::new(
+                    [i as u8; 20],
+                    pool.spawner(),
+                    peer_senders[i].clone(),
+                    peer_receivers[i].clone(),
+                );
+                pool.spawner()
+                    .spawn_local(async move {
+                        peer.run().await;
+                    })
+                    .unwrap();
+            }
+            drop(peer_senders);
+            drop(peer_receivers);
+
+            pool.run();
+        });
+
+        (senders_to_peers, receivers_from_peers, handle)
+    }
+
+    #[test]
+    fn test_connect_two_peers() {
+        let listener_port = 6880u16;
+        let server_addr = SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, listener_port));
+
+        let (senders_to_peers, receivers_from_peers, handle) = spawn_peers(2);
+
+        let peer_0_create_inbound_connection = async {
+            let accepted_socket = accept_tcp_connection(listener_port).await;
+            senders_to_peers[0]
+                .send(EventToPeers::CreateInboundConnection {
+                    socket: accepted_socket,
+                })
+                .await
+                .unwrap();
+        };
+        let peer_1_create_outbound_connection = async {
+            senders_to_peers[1]
+                .send(EventToPeers::CreateOutboundConnection {
+                    remote_addr: server_addr,
+                    remote_peer_id: None,
+                    info_hash: [42u8; 20],
+                })
+                .await
+                .unwrap();
+        };
+        let peer_0_verify_new_connection = async {
+            match receivers_from_peers[0].recv().await.unwrap() {
+                EventFromPeers::NewConnection { remote_handshake } => {
+                    assert_eq!([42u8; 20], remote_handshake.info_hash);
+                    assert_eq!([1u8; 20], remote_handshake.peer_id);
+                }
+                event => {
+                    panic!("Unexpected event from peer 0: {:?}", event);
+                }
+            }
+        };
+        let peer_1_verify_new_connection = async {
+            match receivers_from_peers[1].recv().await.unwrap() {
+                EventFromPeers::NewConnection { remote_handshake } => {
+                    assert_eq!([42u8; 20], remote_handshake.info_hash);
+                    assert_eq!([0u8; 20], remote_handshake.peer_id);
+                }
+                event => {
+                    panic!("Unexpected event from peer 1: {:?}", event);
+                }
+            }
+        };
+        async_io::block_on(async {
+            join!(
+                peer_0_create_inbound_connection,
+                peer_1_create_outbound_connection,
+                peer_0_verify_new_connection,
+                peer_1_verify_new_connection
+            )
+        });
+
+        let peer_0_send_msg = async {
+            senders_to_peers[0]
+                .send(EventToPeers::SendMessage {
+                    remote_peer_id: [1u8; 20],
+                    message: PeerMessage::Have { piece_index: 42 },
+                })
+                .await
+                .unwrap();
+        };
+        let peer_1_verify_msg = async {
+            match receivers_from_peers[1].recv().await.unwrap() {
+                EventFromPeers::MessageReceived {
+                    remote_peer_id,
+                    message: PeerMessage::Have { piece_index: 42 },
+                } => {
+                    assert_eq!([0u8; 20], remote_peer_id);
+                }
+                event => {
+                    panic!("Unexpected event from peer 1: {:?}", event);
+                }
+            }
+        };
+        async_io::block_on(async { join!(peer_0_send_msg, peer_1_verify_msg) });
+
+        let peer_0_stop = async {
+            senders_to_peers[0].send(EventToPeers::Stop).await.unwrap();
+        };
+        let peer_1_stop = async {
+            senders_to_peers[1].send(EventToPeers::Stop).await.unwrap();
+        };
+        async_io::block_on(async { join!(peer_0_stop, peer_1_stop) });
+        drop(senders_to_peers);
+        drop(receivers_from_peers);
+
+        handle.join().unwrap();
+    }
 }

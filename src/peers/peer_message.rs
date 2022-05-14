@@ -2,6 +2,7 @@ use bitvec::prelude::*;
 use futures::prelude::*;
 use std::io;
 
+#[derive(Debug)]
 pub enum PeerMessage {
     KeepAlive,
     Choke,
