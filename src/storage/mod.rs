@@ -1,6 +1,7 @@
 use std::io;
 
 mod files;
+mod pieces;
 
 #[derive(Debug)]
 pub enum Error {
