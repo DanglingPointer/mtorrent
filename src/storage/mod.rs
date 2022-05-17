@@ -3,6 +3,8 @@ use std::io;
 mod files;
 mod pieces;
 
+pub use files::FileKeeper;
+
 #[derive(Debug)]
 pub enum Error {
     IOError(String),

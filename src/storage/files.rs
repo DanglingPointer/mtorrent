@@ -1,6 +1,6 @@
 use crate::storage::Error;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 pub struct FileKeeper {
@@ -10,11 +10,18 @@ pub struct FileKeeper {
 impl FileKeeper {
     const PLACEHOLDER_FILE: &'static str = "ignore_me.txt";
 
-    pub fn new<I: Iterator<Item = (usize, PathBuf)>>(length_path_it: I) -> Result<Self, Error> {
+    pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
+        parent_dir: P,
+        length_path_it: I,
+    ) -> Result<Self, Error> {
         let mut filemap = BTreeMap::new();
         let mut offset = 0usize;
 
         for (length, path) in length_path_it {
+            let path = parent_dir.as_ref().join(path);
+            if let Some(prefix) = path.parent() {
+                fs::create_dir_all(prefix)?;
+            }
             let file = fs::OpenOptions::new()
                 .write(true)
                 .read(true)

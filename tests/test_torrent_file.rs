@@ -1,5 +1,7 @@
+use mtorrent::storage;
 use mtorrent::{benc, meta};
 use std::fs;
+use std::path::Path;
 
 #[test]
 fn test_read_example_torrent_file() {
@@ -205,4 +207,28 @@ fn test_read_example_torrent_file() {
 
         assert!(iter.next().is_none());
     }
+}
+
+#[test]
+fn test_read_metainfo_and_spawn_files() {
+    let data = fs::read("tests/example.torrent").unwrap();
+    let entity = benc::Element::from_bytes(&data).unwrap();
+    if let benc::Element::Dictionary(ref dict) = entity {
+        assert!(!dict.is_empty());
+    } else {
+        panic!("Not a dictionary");
+    }
+    let info = meta::MetaInfo::try_from(entity).unwrap();
+
+    let parent_dir = "test_output";
+    let filekeeper = storage::FileKeeper::new(parent_dir, info.files().unwrap());
+
+    for (length, path) in info.files().unwrap() {
+        let path = Path::new(parent_dir).join(path);
+        let file = fs::File::open(&path)
+            .expect(format!("{} does not exist", path.to_string_lossy()).as_str());
+        assert_eq!(length as u64, file.metadata().unwrap().len());
+    }
+    fs::remove_dir_all(parent_dir).unwrap();
+    drop(filekeeper);
 }
