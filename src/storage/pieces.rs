@@ -28,7 +28,7 @@ impl PieceKeeper {
         if self.pieces.get(piece_index).is_none() || in_piece_offset + length > self.piece_length {
             Err(Error::InvalidLocation)
         } else {
-            Ok(self.piece_length * in_piece_offset + in_piece_offset)
+            Ok(self.piece_length * piece_index + in_piece_offset)
         }
     }
 
