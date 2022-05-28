@@ -82,19 +82,10 @@ fn main() {
         local_addr.port()
     });
 
-    let info_hash = {
-        let mut hash = [0u8; 20];
-        if let Some(mut it) = metainfo.pieces() {
-            if let Some(hash_array) = it.next() {
-                hash.copy_from_slice(hash_array);
-            }
-        }
-        hash
-    };
-    debug!("Info hash: {:?}", info_hash);
+    debug!("Info hash: {:?}", metainfo.info_hash());
 
     let announce_request = AnnounceRequest {
-        info_hash,
+        info_hash: *metainfo.info_hash(),
         peer_id: [0xae; 20],
         downloaded: 0,
         left: 200,
@@ -105,8 +96,6 @@ fn main() {
         num_want: Some(5),
         port: external_port,
     };
-
-    let mut pieces_it = metainfo.pieces().unwrap();
 
     for tracker_addr in &udp_tracker_addrs {
         info!("-----------------------------------------------------------------------");
@@ -126,10 +115,7 @@ fn main() {
                 .await
                 .unwrap();
 
-            let mut request = announce_request.clone();
-            request.info_hash.copy_from_slice(pieces_it.next().unwrap());
-
-            match client.do_announce_request(request).await {
+            match client.do_announce_request(announce_request.clone()).await {
                 Ok(response) => info!("Announce response: {:?}", response),
                 Err(e) => error!("Announce error: {}", e),
             }

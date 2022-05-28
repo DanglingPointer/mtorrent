@@ -1,4 +1,5 @@
 use crate::benc;
+use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str;
@@ -6,6 +7,7 @@ use std::str;
 pub struct MetaInfo {
     root: BTreeMap<String, benc::Element>,
     info: BTreeMap<String, benc::Element>,
+    info_hash: [u8; 20],
 }
 
 impl TryFrom<benc::Element> for MetaInfo {
@@ -22,10 +24,18 @@ impl TryFrom<benc::Element> for MetaInfo {
         };
 
         match (root_dictionary, info_element) {
-            (Some(root), Some(benc::Element::Dictionary(info))) => Ok(MetaInfo {
-                root: benc::convert_dictionary(root),
-                info: benc::convert_dictionary(info),
-            }),
+            (Some(root), Some(info)) => {
+                let info_bytes = info.to_bytes();
+                if let benc::Element::Dictionary(info) = info {
+                    Ok(MetaInfo {
+                        root: benc::convert_dictionary(root),
+                        info: benc::convert_dictionary(info),
+                        info_hash: Sha1::from(&info_bytes).digest().bytes(),
+                    })
+                } else {
+                    Err(())
+                }
+            }
             _ => Err(()),
         }
     }
@@ -54,6 +64,10 @@ impl MetaInfo {
         } else {
             None
         }
+    }
+
+    pub fn info_hash(&self) -> &[u8; 20] {
+        &self.info_hash
     }
 
     pub fn piece_length(&self) -> Option<usize> {
