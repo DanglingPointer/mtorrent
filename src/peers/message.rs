@@ -1,6 +1,6 @@
 use bitvec::prelude::*;
 use futures::prelude::*;
-use std::io;
+use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum PeerMessage {
@@ -213,4 +213,175 @@ async fn read_u32_from<S: futures::AsyncReadExt + Unpin>(src: &mut S) -> io::Res
     let mut bytes = [0u8; 4];
     src.read_exact(&mut bytes).await?;
     Ok(u32::from_be_bytes(bytes))
+}
+
+// ------
+
+pub struct BlockInfo {
+    pub piece_index: usize,
+    pub in_piece_offset: usize,
+    pub block_length: usize,
+}
+
+pub enum UploaderMessage {
+    Choke,
+    Unchoke,
+    Have { piece_index: usize },
+    Bitfield(BitVec<u8, Msb0>),
+    Block(BlockInfo, Vec<u8>),
+}
+
+pub enum DownloaderMessage {
+    Interested,
+    NotInterested,
+    Request(BlockInfo),
+    Cancel(BlockInfo),
+}
+
+impl Into<PeerMessage> for UploaderMessage {
+    fn into(self) -> PeerMessage {
+        match self {
+            UploaderMessage::Choke => PeerMessage::Choke,
+            UploaderMessage::Unchoke => PeerMessage::Unchoke,
+            UploaderMessage::Have { piece_index } => PeerMessage::Have {
+                piece_index: piece_index as u32,
+            },
+            UploaderMessage::Bitfield(bitfield) => PeerMessage::Bitfield { bitfield },
+            UploaderMessage::Block(info, data) => PeerMessage::Piece {
+                index: info.piece_index as u32,
+                begin: info.in_piece_offset as u32,
+                block: data,
+            },
+        }
+    }
+}
+
+impl TryFrom<PeerMessage> for UploaderMessage {
+    type Error = PeerMessage;
+
+    fn try_from(msg: PeerMessage) -> Result<Self, Self::Error> {
+        match msg {
+            PeerMessage::Choke => Ok(UploaderMessage::Choke),
+            PeerMessage::Unchoke => Ok(UploaderMessage::Unchoke),
+            PeerMessage::Have { piece_index } => Ok(UploaderMessage::Have {
+                piece_index: piece_index as usize,
+            }),
+            PeerMessage::Bitfield { bitfield } => Ok(UploaderMessage::Bitfield(bitfield)),
+            PeerMessage::Piece {
+                index,
+                begin,
+                block,
+            } => Ok(UploaderMessage::Block(
+                BlockInfo {
+                    piece_index: index as usize,
+                    in_piece_offset: begin as usize,
+                    block_length: block.len(),
+                },
+                block,
+            )),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl fmt::Display for UploaderMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UploaderMessage::Choke => {
+                write!(f, "Choke")
+            }
+            UploaderMessage::Unchoke => {
+                write!(f, "Unchoke")
+            }
+            UploaderMessage::Have { piece_index } => {
+                write!(f, "Have[ind={}]", piece_index)
+            }
+            UploaderMessage::Bitfield(bitvec) => {
+                write!(f, "Bitfield[len={}]", bitvec.len())
+            }
+            UploaderMessage::Block(info, _) => {
+                write!(
+                    f,
+                    "Block[ind={} off={} len={}]",
+                    info.piece_index, info.in_piece_offset, info.block_length
+                )
+            }
+        }
+    }
+}
+
+impl Into<PeerMessage> for DownloaderMessage {
+    fn into(self) -> PeerMessage {
+        match self {
+            DownloaderMessage::Interested => PeerMessage::Interested,
+            DownloaderMessage::NotInterested => PeerMessage::NotInterested,
+            DownloaderMessage::Request(info) => PeerMessage::Request {
+                index: info.piece_index as u32,
+                begin: info.in_piece_offset as u32,
+                length: info.block_length as u32,
+            },
+            DownloaderMessage::Cancel(info) => PeerMessage::Cancel {
+                index: info.piece_index as u32,
+                begin: info.in_piece_offset as u32,
+                length: info.block_length as u32,
+            },
+        }
+    }
+}
+
+impl TryFrom<PeerMessage> for DownloaderMessage {
+    type Error = PeerMessage;
+
+    fn try_from(msg: PeerMessage) -> Result<Self, Self::Error> {
+        match msg {
+            PeerMessage::Interested => Ok(DownloaderMessage::Interested),
+            PeerMessage::NotInterested => Ok(DownloaderMessage::NotInterested),
+            PeerMessage::Request {
+                index,
+                begin,
+                length,
+            } => Ok(DownloaderMessage::Request(BlockInfo {
+                piece_index: index as usize,
+                in_piece_offset: begin as usize,
+                block_length: length as usize,
+            })),
+            PeerMessage::Cancel {
+                index,
+                begin,
+                length,
+            } => Ok(DownloaderMessage::Cancel(BlockInfo {
+                piece_index: index as usize,
+                in_piece_offset: begin as usize,
+                block_length: length as usize,
+            })),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl fmt::Display for DownloaderMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DownloaderMessage::Interested => {
+                write!(f, "Interested")
+            }
+            DownloaderMessage::NotInterested => {
+                write!(f, "NotInterested")
+            }
+            DownloaderMessage::Request(info) => {
+                write!(
+                    f,
+                    "Request[ind={} off={} len={}]",
+                    info.piece_index, info.in_piece_offset, info.block_length
+                )
+            }
+            DownloaderMessage::Cancel(info) => {
+                write!(
+                    f,
+                    "Cancel[ind={} off={} len={}]",
+                    info.piece_index, info.in_piece_offset, info.block_length
+                )
+            }
+        }
+    }
 }

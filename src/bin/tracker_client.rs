@@ -1,15 +1,22 @@
 use async_io::Async;
+use futures::join;
+use futures::prelude::*;
 use igd;
-use igd::PortMappingProtocol;
+use igd::{PortMappingProtocol, SearchOptions};
 use log::{debug, error, info, Level};
+use mtorrent::peers;
 use mtorrent::tracker::udp::{AnnounceEvent, AnnounceRequest, UdpTrackerConnection};
 use mtorrent::{benc, meta};
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::time::Duration;
 use std::{env, fs};
 
 fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
     info!("Searching gateway...");
-    let gateway = igd::search_gateway(Default::default())?;
+    let gateway = igd::search_gateway(SearchOptions {
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    })?;
     info!("Found gateway: {}", gateway);
 
     info!("Adding port...");
@@ -17,6 +24,39 @@ fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
     info!("Port {} added!", external_port);
 
     Ok(external_port)
+}
+
+async fn receive_from_peer(mut downlink: peers::DownloadChannel, mut uplink: peers::UploadChannel) {
+    let downlink_fut = async move {
+        while let Ok(msg) = downlink.receive_message().await {
+            info!("{} => {}", downlink.remote_ip(), msg);
+        }
+    };
+    let uplink_fut = async move {
+        while let Ok(msg) = uplink.receive_message().await {
+            info!("{} => {}", uplink.remote_ip(), msg);
+        }
+    };
+    join!(downlink_fut, uplink_fut);
+}
+
+async fn connect_to_peer(local_peer_id: &[u8; 20], info_hash: &[u8; 20], ip: SocketAddr) {
+    info!("{} connecting...", ip);
+    match peers::establish_outbound(&local_peer_id, info_hash, ip, None).await {
+        Ok((downlink, uplink, runner)) => {
+            info!("{} connected", ip);
+            let run_fut = async move {
+                if let Err(e) = runner.run().await {
+                    error!("{} runner exited: {}", ip, e);
+                }
+            };
+            let _ = join!(receive_from_peer(downlink, uplink), run_fut);
+        }
+        Err(e) => {
+            error!("{} connect failed: {}", ip, e);
+        }
+    }
+    info!("{} finished", ip);
 }
 
 fn main() {
@@ -78,15 +118,23 @@ fn main() {
     );
 
     let external_port = open_external_port(local_addr).unwrap_or_else(|e| {
-        error!("Couldn't open external port: {}", e);
+        error!("UPnP failed: {}", e);
         local_addr.port()
     });
 
     debug!("Info hash: {:?}", metainfo.info_hash());
 
+    let local_peer_id = {
+        let local_peer_id_str = "-m i k h a i l  B T-";
+        assert_eq!(20, local_peer_id_str.len());
+        let mut id = [0u8; 20];
+        id.copy_from_slice(local_peer_id_str.as_bytes());
+        id
+    };
+
     let announce_request = AnnounceRequest {
         info_hash: *metainfo.info_hash(),
-        peer_id: [0xae; 20],
+        peer_id: local_peer_id,
         downloaded: 0,
         left: 200,
         uploaded: 0,
@@ -115,11 +163,25 @@ fn main() {
                 .await
                 .unwrap();
 
-            match client.do_announce_request(announce_request.clone()).await {
-                Ok(response) => info!("Announce response: {:?}", response),
-                Err(e) => error!("Announce error: {}", e),
+            let response = match client.do_announce_request(announce_request.clone()).await {
+                Ok(response) => {
+                    info!("Announce response: {:?}", response);
+                    Some(response)
+                }
+                Err(e) => {
+                    error!("Announce error: {}", e);
+                    None
+                }
+            };
+
+            if let Some(response) = response {
+                async_io::block_on(future::join_all(
+                    response
+                        .ips
+                        .into_iter()
+                        .map(|ip| connect_to_peer(&local_peer_id, metainfo.info_hash(), ip)),
+                ));
             }
-            info!("Client stopped");
         });
     }
 }
