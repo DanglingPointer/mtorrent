@@ -51,6 +51,10 @@ pub async fn do_handshake_incoming(
     let mut socket = writer.into_inner();
     socket.read_exact(&mut remote_handshake.peer_id).await?;
 
+    debug!(
+        "Incoming handshake DONE. Peer id: {}",
+        String::from_utf8_lossy(&remote_handshake.peer_id)
+    );
     Ok((socket, remote_handshake))
 }
 
@@ -86,10 +90,6 @@ pub async fn do_handshake_outgoing(
     }
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
-    debug!(
-        "Remote peer id: {}",
-        String::from_utf8_lossy(&remote_handshake.peer_id)
-    );
     if matches!(expected_remote_peer_id, Some(id) if id != &remote_handshake.peer_id) {
         return Err(io::Error::new(
             io::ErrorKind::Other,
@@ -99,6 +99,10 @@ pub async fn do_handshake_outgoing(
 
     socket.write_all(&local_handshake.peer_id).await?;
 
+    debug!(
+        "Outgoing handshake DONE. Peer id: {}",
+        String::from_utf8_lossy(&remote_handshake.peer_id)
+    );
     Ok((socket, remote_handshake))
 }
 
