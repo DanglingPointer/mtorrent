@@ -1,9 +1,7 @@
 use std::io;
 
-mod files;
-mod pieces;
-
-pub use files::FileKeeper;
+pub mod files;
+pub mod pieces;
 
 #[derive(Debug)]
 pub enum Error {

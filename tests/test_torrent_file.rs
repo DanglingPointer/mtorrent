@@ -221,7 +221,7 @@ fn test_read_metainfo_and_spawn_files() {
     let info = meta::MetaInfo::try_from(entity).unwrap();
 
     let parent_dir = "test_output";
-    let filekeeper = storage::FileKeeper::new(parent_dir, info.files().unwrap());
+    let filekeeper = storage::files::FileKeeper::new(parent_dir, info.files().unwrap());
 
     for (length, path) in info.files().unwrap() {
         let path = Path::new(parent_dir).join(path);

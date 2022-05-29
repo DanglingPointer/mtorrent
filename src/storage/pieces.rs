@@ -1,4 +1,5 @@
 use crate::storage::Error;
+use bitvec::prelude::*;
 use std::collections::BTreeMap;
 
 pub struct PieceKeeper {
@@ -88,6 +89,30 @@ impl Accountant {
         self.total_bytes += end - start;
     }
 
+    pub fn submit_piece(&mut self, piece_index: usize, pieces: &PieceKeeper) -> bool {
+        if piece_index >= pieces.pieces.len() {
+            return false;
+        }
+        let piece_length = pieces.piece_length;
+        let offset = pieces
+            .global_offset(piece_index, 0, piece_length)
+            .expect("This should never happen");
+        self.submit_block(offset, piece_length);
+        return true;
+    }
+
+    pub fn submit_bitfield(&mut self, bitfield: &BitVec<u8, Msb0>, pieces: &PieceKeeper) -> bool {
+        if bitfield.len() != pieces.pieces.len() {
+            return false;
+        }
+        for (piece_index, is_piece_present) in bitfield.iter().enumerate() {
+            if *is_piece_present {
+                self.submit_piece(piece_index, pieces);
+            }
+        }
+        return true;
+    }
+
     pub fn max_block_length_at(&self, global_offset: usize) -> Option<usize> {
         if let Some((_start, end)) = self.blocks_start_end.range(..=global_offset).last() {
             if *end > global_offset {
@@ -108,7 +133,21 @@ impl Accountant {
         }
     }
 
-    pub fn total_submitted_bytes(&self) -> usize {
+    pub fn generate_bitfield(&self, pieces: &PieceKeeper) -> BitVec<u8, Msb0> {
+        let mut bitfield = BitVec::<u8, Msb0>::repeat(false, pieces.pieces.len());
+        let piece_length = pieces.piece_length;
+        for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
+            let global_offset = pieces
+                .global_offset(piece_index, 0, piece_length)
+                .expect("This should never happen");
+            if self.has_exact_block_at(global_offset, piece_length) {
+                is_piece_present.set(true);
+            }
+        }
+        bitfield
+    }
+
+    pub fn total_bytes(&self) -> usize {
         self.total_bytes
     }
 }
@@ -124,7 +163,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&10));
-        assert_eq!(10, a.total_submitted_bytes());
+        assert_eq!(10, a.total_bytes());
     }
 
     #[test]
@@ -135,7 +174,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&30), a.blocks_start_end.get(&10));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -146,7 +185,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&30), a.blocks_start_end.get(&10));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -157,7 +196,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&0));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -168,7 +207,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&0));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -179,7 +218,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&25), a.blocks_start_end.get(&5));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -190,7 +229,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&25), a.blocks_start_end.get(&5));
-        assert_eq!(20, a.total_submitted_bytes());
+        assert_eq!(20, a.total_bytes());
     }
 
     #[test]
@@ -202,13 +241,13 @@ mod tests {
         assert_eq!(2, a.blocks_start_end.len());
         assert_eq!(Some(&5), a.blocks_start_end.get(&0));
         assert_eq!(Some(&15), a.blocks_start_end.get(&10));
-        assert_eq!(10, a.total_submitted_bytes());
+        assert_eq!(10, a.total_bytes());
 
         a.submit_block(5, 5);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&15), a.blocks_start_end.get(&0));
-        assert_eq!(15, a.total_submitted_bytes());
+        assert_eq!(15, a.total_bytes());
     }
 
     #[test]
@@ -221,7 +260,7 @@ mod tests {
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&15), a.blocks_start_end.get(&0));
-        assert_eq!(15, a.total_submitted_bytes());
+        assert_eq!(15, a.total_bytes());
     }
 
     #[test]
