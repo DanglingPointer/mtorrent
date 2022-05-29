@@ -146,13 +146,12 @@ impl ConnectionManager {
                 remote_peer_id,
                 info_hash,
             } => {
-                let remote_peer_id = remote_peer_id.as_ref().map(|id| &id[..]);
                 let local_info = Handshake {
                     peer_id: self.local_peer_id,
                     info_hash,
                 };
                 let remote_info = self
-                    .create_outbound_connection(remote_addr, local_info, remote_peer_id)
+                    .create_outbound_connection(remote_addr, local_info, remote_peer_id.as_ref())
                     .await
                     .map_err(|e| {
                         custom_error(format!(
@@ -184,7 +183,7 @@ impl ConnectionManager {
         socket: Async<TcpStream>,
     ) -> io::Result<Handshake> {
         let (socket, remote_info) =
-            do_handshake_incoming(socket, &self.local_peer_id[..], None).await?;
+            do_handshake_incoming(socket, &self.local_peer_id, None).await?;
         add_new_connection(
             socket,
             remote_info.peer_id,
@@ -199,7 +198,7 @@ impl ConnectionManager {
         &mut self,
         server_addr: SocketAddr,
         local_info: Handshake,
-        server_peer_id: Option<&[u8]>,
+        server_peer_id: Option<&[u8; 20]>,
     ) -> io::Result<Handshake> {
         let socket = Async::<TcpStream>::connect(server_addr).await?;
         let (socket, remote_info) =

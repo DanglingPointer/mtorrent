@@ -22,8 +22,8 @@ impl Default for Handshake {
 
 pub async fn do_handshake_incoming(
     mut socket: Async<TcpStream>,
-    local_peer_id: &[u8],
-    local_info_hash: Option<&[u8]>,
+    local_peer_id: &[u8; 20],
+    local_info_hash: Option<&[u8; 20]>,
 ) -> io::Result<(Async<TcpStream>, Handshake)> {
     // Read remote handshake up until peer id,
     // then send entire local handshake (with either provided hash or remote one),
@@ -57,7 +57,7 @@ pub async fn do_handshake_incoming(
 pub async fn do_handshake_outgoing(
     socket: Async<TcpStream>,
     local_handshake: Handshake,
-    expected_remote_peer_id: Option<&[u8]>,
+    expected_remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(Async<TcpStream>, Handshake)> {
     // Send local hanshake up until peer id,
     // then wait for the entire remote handshake,
