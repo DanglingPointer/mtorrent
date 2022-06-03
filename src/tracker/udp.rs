@@ -17,9 +17,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
-            ConnectRequest
-                .encode(0, transaction_id, &mut buffer)
-                .unwrap();
+            ConnectRequest.encode(0, transaction_id, &mut buffer).unwrap();
             buffer
         };
 
@@ -34,10 +32,7 @@ impl UdpTrackerConnection {
             })
             .await?;
 
-        debug!(
-            "Received connect response, connection_id={}",
-            connect_response.connection_id
-        );
+        debug!("Received connect response, connection_id={}", connect_response.connection_id);
 
         Ok(UdpTrackerConnection {
             socket,
@@ -64,9 +59,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(AnnounceRequest::MIN_LENGTH);
-            request_data
-                .encode(self.connection_id, transaction_id, &mut buffer)
-                .unwrap();
+            request_data.encode(self.connection_id, transaction_id, &mut buffer).unwrap();
             buffer
         };
 
@@ -101,9 +94,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(ScrapeRequest::MIN_LENGTH);
-            request_data
-                .encode(self.connection_id, transaction_id, &mut buffer)
-                .unwrap();
+            request_data.encode(self.connection_id, transaction_id, &mut buffer).unwrap();
             buffer
         };
         Self::do_request(
@@ -144,9 +135,7 @@ impl UdpTrackerConnection {
             }
 
             let timeout_sec = 15 * (1 << retransmit_n);
-            socket
-                .get_ref()
-                .set_read_timeout(Some(Duration::from_secs(timeout_sec)))?;
+            socket.get_ref().set_read_timeout(Some(Duration::from_secs(timeout_sec)))?;
 
             let mut recv_buf = [0u8; 1024];
 
@@ -413,9 +402,7 @@ impl TryFrom<&[u8]> for ScrapeResponse {
                 leechers: u32_from_be_bytes(&src[8..12]),
             }
         }
-        Ok(ScrapeResponse(
-            src.chunks_exact(12).map(to_scrape_entry).collect(),
-        ))
+        Ok(ScrapeResponse(src.chunks_exact(12).map(to_scrape_entry).collect()))
     }
 }
 
@@ -456,10 +443,7 @@ mod tests {
         let cr = ConnectRequest {};
         cr.encode(0, 15, &mut request).unwrap();
 
-        assert_eq!(
-            [0x00, 0x00, 0x04, 0x17, 0x27, 0x10, 0x19, 0x80],
-            request[..8]
-        );
+        assert_eq!([0x00, 0x00, 0x04, 0x17, 0x27, 0x10, 0x19, 0x80], request[..8]);
         assert_eq!([0u8; 4], request[8..12]);
         assert_eq!([0x00, 0x00, 0x00, 0x0f], request[12..]);
     }
@@ -489,9 +473,7 @@ mod tests {
         let client_socket = Async::<UdpSocket>::try_from(client_socket).unwrap();
 
         let client_fut = async {
-            UdpTrackerConnection::from_connected_socket(client_socket)
-                .await
-                .unwrap();
+            UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
         };
 
         let server_fut = async {
@@ -501,10 +483,7 @@ mod tests {
             assert_eq!(16, bytes_read);
 
             let request = &recv_buffer[..16];
-            assert_eq!(
-                [0x00, 0x00, 0x04, 0x17, 0x27, 0x10, 0x19, 0x80],
-                request[..8]
-            );
+            assert_eq!([0x00, 0x00, 0x04, 0x17, 0x27, 0x10, 0x19, 0x80], request[..8]);
             assert_eq!([0u8; 4], request[8..12]);
 
             let response: [u8; 16] = {

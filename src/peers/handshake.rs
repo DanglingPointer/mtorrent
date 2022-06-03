@@ -28,10 +28,7 @@ pub async fn do_handshake_incoming(
     // Read remote handshake up until peer id,
     // then send entire local handshake (with either provided hash or remote one),
     // then read remote peer id.
-    debug!(
-        "Receiving incoming handshake from {}",
-        socket.get_ref().peer_addr().unwrap()
-    );
+    debug!("Receiving incoming handshake from {}", socket.get_ref().peer_addr().unwrap());
 
     let mut remote_handshake = Handshake::default();
 
@@ -66,10 +63,7 @@ pub async fn do_handshake_outgoing(
     // Send local hanshake up until peer id,
     // then wait for the entire remote handshake,
     // then send local peer id.
-    debug!(
-        "Starting outgoing hanshake with {}",
-        socket.get_ref().peer_addr().unwrap()
-    );
+    debug!("Starting outgoing hanshake with {}", socket.get_ref().peer_addr().unwrap());
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer).await?;
@@ -83,18 +77,12 @@ pub async fn do_handshake_outgoing(
 
     socket.read_exact(&mut remote_handshake.info_hash).await?;
     if local_handshake.info_hash != remote_handshake.info_hash {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "info_hash doesn't match",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "info_hash doesn't match"));
     }
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
     if matches!(expected_remote_peer_id, Some(id) if id != &remote_handshake.peer_id) {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "remote peer_id doesn't match",
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, "remote peer_id doesn't match"));
     }
 
     socket.write_all(&local_handshake.peer_id).await?;
@@ -126,10 +114,7 @@ async fn read_pstr_and_reserved<S: futures::AsyncReadExt + Unpin>(mut source: S)
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "pstr is not utf8"))?
     };
     if pstr != "BitTorrent protocol" {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Unknown protocol: '{}'", pstr),
-        ));
+        return Err(io::Error::new(io::ErrorKind::Other, format!("Unknown protocol: '{}'", pstr)));
     }
     source.read_exact(&mut [0u8; 8]).await?;
     Ok(source)

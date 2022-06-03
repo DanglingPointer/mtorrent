@@ -179,13 +179,12 @@ fn dictionary_peers(data: &Vec<benc::Element>) -> impl Iterator<Item = SocketAdd
             _ => Err(()),
         }
     }
-    data.iter()
-        .filter_map(|e: &benc::Element| -> Option<SocketAddr> {
-            match e {
-                benc::Element::Dictionary(dict) => to_addr_and_port(dict).ok(),
-                _ => None,
-            }
-        })
+    data.iter().filter_map(|e: &benc::Element| -> Option<SocketAddr> {
+        match e {
+            benc::Element::Dictionary(dict) => to_addr_and_port(dict).ok(),
+            _ => None,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -199,11 +198,7 @@ mod tests {
         let url_base = "http://example.com/announce";
 
         let mut builder = TrackerRequestBuilder::try_from(url_base).unwrap();
-        builder
-            .info_hash(hash)
-            .bytes_left(42)
-            .bytes_uploaded(3)
-            .no_peer_id();
+        builder.info_hash(hash).bytes_left(42).bytes_uploaded(3).no_peer_id();
 
         let uri = builder.build_announce();
 

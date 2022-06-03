@@ -34,10 +34,7 @@ impl PieceKeeper {
     }
 
     pub fn index_of_piece(&self, hash: &[u8; 20]) -> Result<usize, Error> {
-        self.pieces
-            .iter()
-            .position(|e| e == hash)
-            .ok_or(Error::InvalidLocation)
+        self.pieces.iter().position(|e| e == hash).ok_or(Error::InvalidLocation)
     }
 
     pub fn hash_of_piece(&self, piece_index: usize) -> Result<&[u8; 20], Error> {

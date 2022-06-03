@@ -22,11 +22,7 @@ impl FileKeeper {
             if let Some(prefix) = path.parent() {
                 fs::create_dir_all(prefix)?;
             }
-            let file = fs::OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create_new(true)
-                .open(path)?;
+            let file = fs::OpenOptions::new().write(true).read(true).create_new(true).open(path)?;
             file.set_len(length as u64)?;
             filemap.insert(offset, file);
             offset += length;
@@ -119,17 +115,13 @@ fn find_file_and_offset<F>(
     global_offset: usize,
 ) -> Result<(usize, &F, usize), Error> {
     let next_start_offset = {
-        let (offset, _) = all_files
-            .range(global_offset + 1..)
-            .next()
-            .ok_or(Error::InvalidLocation)?;
+        let (offset, _) =
+            all_files.range(global_offset + 1..).next().ok_or(Error::InvalidLocation)?;
         *offset
     };
     let (start_offset, file) = {
-        let (offset, file) = all_files
-            .range(..=global_offset)
-            .last()
-            .ok_or(Error::InvalidLocation)?;
+        let (offset, file) =
+            all_files.range(..=global_offset).last().ok_or(Error::InvalidLocation)?;
         (*offset, file)
     };
     Ok((start_offset, file, next_start_offset))
@@ -243,18 +235,9 @@ mod tests {
 
         assert_eq!(vec![2u8, 3u8, 4u8], dest);
 
-        assert_eq!(
-            &(0u8..10u8).collect::<Vec<u8>>(),
-            map.get(&0).unwrap().borrow().get_ref()
-        );
-        assert_eq!(
-            &(0u8..10u8).collect::<Vec<u8>>(),
-            map.get(&10).unwrap().borrow().get_ref()
-        );
-        assert_eq!(
-            &(0u8..10u8).collect::<Vec<u8>>(),
-            map.get(&20).unwrap().borrow().get_ref()
-        );
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&10).unwrap().borrow().get_ref());
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&20).unwrap().borrow().get_ref());
     }
 
     #[test]
@@ -269,13 +252,7 @@ mod tests {
 
         assert_eq!(vec![9u8, 10u8, 1u8], dest);
 
-        assert_eq!(
-            &(1u8..=10u8).collect::<Vec<u8>>(),
-            map.get(&0).unwrap().borrow().get_ref()
-        );
-        assert_eq!(
-            &(1u8..=10u8).collect::<Vec<u8>>(),
-            map.get(&10).unwrap().borrow().get_ref()
-        );
+        assert_eq!(&(1u8..=10u8).collect::<Vec<u8>>(), map.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(&(1u8..=10u8).collect::<Vec<u8>>(), map.get(&10).unwrap().borrow().get_ref());
     }
 }

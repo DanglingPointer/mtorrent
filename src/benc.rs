@@ -89,11 +89,7 @@ const SUFFIX_COMMON: u8 = b'e';
 fn write_element(e: &Element, dest: &mut Vec<u8>) -> std::io::Result<()> {
     match e {
         Element::Integer(number) => {
-            write!(
-                dest,
-                "{}{}{}",
-                PREFIX_INTEGER as char, number, SUFFIX_COMMON as char
-            )?;
+            write!(dest, "{}{}{}", PREFIX_INTEGER as char, number, SUFFIX_COMMON as char)?;
         }
         Element::ByteString(data) => {
             write!(dest, "{}{}", data.len(), DELIMITER_STRING as char)?;
@@ -142,9 +138,7 @@ fn split_once(src: &[u8], delimeter: u8) -> Option<(&[u8], &[u8])> {
 }
 
 fn read_integer(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
-    let rest = src
-        .strip_prefix(&[PREFIX_INTEGER])
-        .ok_or(ParseError::NoIntegerPrefix)?;
+    let rest = src.strip_prefix(&[PREFIX_INTEGER]).ok_or(ParseError::NoIntegerPrefix)?;
 
     let (number_data, rest) = split_once(rest, SUFFIX_COMMON).ok_or(ParseError::NoIntegerEnd)?;
     let number_text = str::from_utf8(number_data)?;
@@ -166,9 +160,7 @@ fn read_string(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
 }
 
 fn read_list(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
-    let mut rest = src
-        .strip_prefix(&[PREFIX_LIST])
-        .ok_or(ParseError::NoListPrefix)?;
+    let mut rest = src.strip_prefix(&[PREFIX_LIST]).ok_or(ParseError::NoListPrefix)?;
 
     let mut list = Vec::new();
     while !rest.starts_with(&[SUFFIX_COMMON]) {
@@ -180,9 +172,7 @@ fn read_list(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
 }
 
 fn read_dictionary(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
-    let mut rest = src
-        .strip_prefix(&[PREFIX_DICTIONARY])
-        .ok_or(ParseError::NoDictionaryPrefix)?;
+    let mut rest = src.strip_prefix(&[PREFIX_DICTIONARY]).ok_or(ParseError::NoDictionaryPrefix)?;
 
     let mut map = BTreeMap::new();
     while !rest.starts_with(&[SUFFIX_COMMON]) {
@@ -251,10 +241,7 @@ mod tests {
         assert!(parsed.is_ok(), "Error: {:?}", parsed.err());
 
         let (entity, rest) = parsed.unwrap();
-        assert_eq!(
-            Element::ByteString(Vec::from(b"A simple string".as_slice())),
-            entity
-        );
+        assert_eq!(Element::ByteString(Vec::from(b"A simple string".as_slice())), entity);
         assert!(rest.is_empty());
 
         assert_eq!(input, entity.to_bytes().as_slice());
@@ -268,10 +255,7 @@ mod tests {
         assert!(parsed.is_ok(), "Error: {:?}", parsed.err());
 
         let (entity, rest) = parsed.unwrap();
-        assert_eq!(
-            Element::ByteString(Vec::from("Добрый день!".as_bytes())),
-            entity
-        );
+        assert_eq!(Element::ByteString(Vec::from("Добрый день!".as_bytes())), entity);
         assert!(rest.is_empty());
 
         assert_eq!(input.as_bytes(), entity.to_bytes().as_slice());
@@ -285,10 +269,7 @@ mod tests {
         assert!(parsed.is_ok(), "Error: {:?}", parsed.err());
 
         let (entity, rest) = parsed.unwrap();
-        assert_eq!(
-            Element::ByteString(Vec::from([0xf1, 0xf2, 0xf3, 0xf4].as_slice())),
-            entity
-        );
+        assert_eq!(Element::ByteString(Vec::from([0xf1, 0xf2, 0xf3, 0xf4].as_slice())), entity);
         assert!(rest.is_empty());
 
         assert_eq!(&input, entity.to_bytes().as_slice());

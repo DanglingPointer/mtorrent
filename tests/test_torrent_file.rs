@@ -16,11 +16,7 @@ fn test_read_example_torrent_file() {
     let info = meta::MetaInfo::try_from(entity).unwrap();
 
     let announce = info.announce().unwrap();
-    assert_eq!(
-        "http://tracker.trackerfix.com:80/announce", announce,
-        "announce: {}",
-        announce
-    );
+    assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {}", announce);
 
     {
         let mut iter = info.announce_list().unwrap();

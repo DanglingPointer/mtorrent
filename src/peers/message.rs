@@ -106,10 +106,7 @@ impl PeerMessage {
                     listen_port: u16::from_be_bytes(port_bytes),
                 })
             }
-            _ => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Unknown message type: {}", id),
-            )),
+            _ => Err(io::Error::new(io::ErrorKind::Other, format!("Unknown message type: {}", id))),
         }
     }
 
@@ -226,7 +223,9 @@ pub struct BlockInfo {
 pub enum UploaderMessage {
     Choke,
     Unchoke,
-    Have { piece_index: usize },
+    Have {
+        piece_index: usize,
+    },
     Bitfield(BitVec<u8, Msb0>),
     Block(BlockInfo, Vec<u8>),
 }

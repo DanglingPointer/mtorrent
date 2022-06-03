@@ -111,9 +111,7 @@ fn main() {
     };
 
     let local_addr = SocketAddrV4::new(
-        local_ip_str
-            .parse::<Ipv4Addr>()
-            .expect("Failed to parse local ip"),
+        local_ip_str.parse::<Ipv4Addr>().expect("Failed to parse local ip"),
         6889,
     );
 
@@ -153,15 +151,10 @@ fn main() {
         client_socket.connect(tracker_addr).unwrap();
         let client_socket = Async::<UdpSocket>::try_from(client_socket).unwrap();
 
-        info!(
-            "Local socket at {} successfully bound to tracker at {}",
-            local_addr, tracker_addr
-        );
+        info!("Local socket at {} successfully bound to tracker at {}", local_addr, tracker_addr);
 
         async_io::block_on(async {
-            let client = UdpTrackerConnection::from_connected_socket(client_socket)
-                .await
-                .unwrap();
+            let client = UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
 
             let response = match client.do_announce_request(announce_request.clone()).await {
                 Ok(response) => {
