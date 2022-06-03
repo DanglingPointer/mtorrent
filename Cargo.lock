@@ -22,16 +22,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-local-bounded-channel"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f23c67bb919d866d8d210caa8d5379d97c7a4b71efc1640e5b7f22533525a03"
-dependencies = [
- "futures",
- "generic-array",
-]
-
-[[package]]
 name = "attohttpc"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -246,15 +236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generic-array"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f797e67af32588215eaaab8327027ee8e71b9dd0b2b26996aedf20c030fce309"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,7 +343,6 @@ name = "mtorrent"
 version = "0.1.0"
 dependencies = [
  "async-io",
- "async-local-bounded-channel",
  "bitvec",
  "futures",
  "igd",
@@ -569,12 +549,6 @@ name = "tinyvec_macros"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
-
-[[package]]
-name = "typenum"
-version = "1.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcf81ac59edc17cc8697ff311e8f5ef2d99fcbd9817b34cec66f90b6c3dfd987"
 
 [[package]]
 name = "unicode-bidi"
