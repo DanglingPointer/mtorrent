@@ -99,8 +99,13 @@ pub async fn establish_inbound(
     info_hash: Option<&[u8; 20]>,
     socket: Async<TcpStream>,
 ) -> io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)> {
+    let local_handshake = Handshake {
+        peer_id: *local_peer_id,
+        info_hash: *info_hash.unwrap_or(&[0u8; 20]),
+        ..Default::default()
+    };
     let (socket, remote_handshake) =
-        do_handshake_incoming(socket, &local_peer_id, info_hash).await?;
+        do_handshake_incoming(socket, &local_handshake, info_hash.is_none()).await?;
 
     let remote_ip = socket.get_ref().peer_addr()?;
     let socket_copy = Async::<TcpStream>::new(socket.get_ref().try_clone()?)?;
@@ -117,10 +122,11 @@ pub async fn establish_outbound(
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
+        ..Default::default()
     };
     let socket = Async::<TcpStream>::connect(remote_addr).await?;
     let (socket, remote_handshake) =
-        do_handshake_outgoing(socket, local_handshake, remote_peer_id).await?;
+        do_handshake_outgoing(socket, &local_handshake, remote_peer_id).await?;
 
     let remote_ip = socket.get_ref().peer_addr()?;
     let socket_copy = Async::<TcpStream>::new(socket.get_ref().try_clone()?)?;
