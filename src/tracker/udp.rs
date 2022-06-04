@@ -328,9 +328,11 @@ impl TryFrom<&[u8]> for CommonResponseHeader {
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
         if let Some(data) = src.get(..8) {
             let (action_bytes, transaction_id_bytes) = data.split_at(4);
-            Ok(CommonResponseHeader {
-                action: u32_from_be_bytes(action_bytes),
-                transaction_id: u32_from_be_bytes(transaction_id_bytes),
+            Ok(unsafe {
+                CommonResponseHeader {
+                    action: u32_from_be_bytes(action_bytes),
+                    transaction_id: u32_from_be_bytes(transaction_id_bytes),
+                }
             })
         } else {
             Err(ParseError::InvalidLength)
@@ -347,8 +349,10 @@ impl TryFrom<&[u8]> for ConnectResponse {
 
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
         if let Some(data) = src.get(..8) {
-            Ok(ConnectResponse {
-                connection_id: u64_from_be_bytes(data),
+            Ok(unsafe {
+                ConnectResponse {
+                    connection_id: u64_from_be_bytes(data),
+                }
             })
         } else {
             Err(ParseError::InvalidLength)
@@ -372,11 +376,13 @@ impl TryFrom<&[u8]> for AnnounceResponse {
             Err(ParseError::InvalidLength)
         } else {
             let (src, addrs) = src.split_at(12);
-            Ok(AnnounceResponse {
-                interval: u32_from_be_bytes(&src[..4]),
-                leechers: u32_from_be_bytes(&src[4..8]),
-                seeders: u32_from_be_bytes(&src[8..12]),
-                ips: utils::parse_binary_ipv4_peers(addrs).collect(),
+            Ok(unsafe {
+                AnnounceResponse {
+                    interval: u32_from_be_bytes(src.get_unchecked(..4)),
+                    leechers: u32_from_be_bytes(src.get_unchecked(4..8)),
+                    seeders: u32_from_be_bytes(src.get_unchecked(8..12)),
+                    ips: utils::parse_binary_ipv4_peers(addrs).collect(),
+                }
             })
         }
     }
@@ -396,10 +402,12 @@ impl TryFrom<&[u8]> for ScrapeResponse {
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
         fn to_scrape_entry(src: &[u8]) -> ScrapeResponseEntry {
             assert!(src.len() >= 12);
-            ScrapeResponseEntry {
-                seeders: u32_from_be_bytes(&src[..4]),
-                completed: u32_from_be_bytes(&src[4..8]),
-                leechers: u32_from_be_bytes(&src[8..12]),
+            unsafe {
+                ScrapeResponseEntry {
+                    seeders: u32_from_be_bytes(src.get_unchecked(..4)),
+                    completed: u32_from_be_bytes(src.get_unchecked(4..8)),
+                    leechers: u32_from_be_bytes(src.get_unchecked(8..12)),
+                }
             }
         }
         Ok(ScrapeResponse(src.chunks_exact(12).map(to_scrape_entry).collect()))
@@ -420,15 +428,15 @@ impl TryFrom<&[u8]> for ErrorResponse {
     }
 }
 
-fn u32_from_be_bytes(src: &[u8]) -> u32 {
+unsafe fn u32_from_be_bytes(src: &[u8]) -> u32 {
     let mut dest = [0u8; 4];
-    dest.copy_from_slice(&src[..4]);
+    dest.copy_from_slice(src.get_unchecked(..4));
     u32::from_be_bytes(dest)
 }
 
-fn u64_from_be_bytes(src: &[u8]) -> u64 {
+unsafe fn u64_from_be_bytes(src: &[u8]) -> u64 {
     let mut dest = [0u8; 8];
-    dest.copy_from_slice(&src[..8]);
+    dest.copy_from_slice(src.get_unchecked(..8));
     u64::from_be_bytes(dest)
 }
 
