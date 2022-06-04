@@ -1,4 +1,5 @@
 use async_io::Async;
+use bitvec::prelude::*;
 use futures::io::BufWriter;
 use futures::prelude::*;
 use log::debug;
@@ -9,6 +10,7 @@ use std::net::TcpStream;
 pub struct Handshake {
     pub peer_id: [u8; 20],
     pub info_hash: [u8; 20],
+    pub reserved: BitArray<[u8; 8], Lsb0>,
 }
 
 impl Default for Handshake {
@@ -16,33 +18,34 @@ impl Default for Handshake {
         Handshake {
             peer_id: [0u8; 20],
             info_hash: [0u8; 20],
+            reserved: BitArray::ZERO,
         }
     }
 }
 
 pub async fn do_handshake_incoming(
     mut socket: Async<TcpStream>,
-    local_peer_id: &[u8; 20],
-    local_info_hash: Option<&[u8; 20]>,
+    local_handshake: &Handshake,
+    use_remote_info_hash: bool,
 ) -> io::Result<(Async<TcpStream>, Handshake)> {
     // Read remote handshake up until peer id,
-    // then send entire local handshake (with either provided hash or remote one),
+    // then send entire local handshake (with either local info_hash or remote one),
     // then read remote peer id.
     debug!("Receiving incoming handshake from {}", socket.get_ref().peer_addr().unwrap());
 
     let mut remote_handshake = Handshake::default();
 
-    socket = read_pstr_and_reserved(socket).await?;
+    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
     socket.read_exact(&mut remote_handshake.info_hash).await?;
 
     let mut writer = BufWriter::new(socket);
-    writer = write_pstr_and_reserved(writer).await?;
-    if let Some(info_hash) = local_info_hash {
-        writer.write_all(info_hash).await?;
-    } else {
+    writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
+    if use_remote_info_hash {
         writer.write_all(&remote_handshake.info_hash).await?;
+    } else {
+        writer.write_all(&local_handshake.info_hash).await?;
     }
-    writer.write_all(local_peer_id).await?;
+    writer.write_all(&local_handshake.peer_id).await?;
     writer.flush().await?;
 
     let mut socket = writer.into_inner();
@@ -57,7 +60,7 @@ pub async fn do_handshake_incoming(
 
 pub async fn do_handshake_outgoing(
     socket: Async<TcpStream>,
-    local_handshake: Handshake,
+    local_handshake: &Handshake,
     expected_remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(Async<TcpStream>, Handshake)> {
     // Send local hanshake up until peer id,
@@ -66,14 +69,14 @@ pub async fn do_handshake_outgoing(
     debug!("Starting outgoing hanshake with {}", socket.get_ref().peer_addr().unwrap());
 
     let mut writer = BufWriter::new(socket);
-    writer = write_pstr_and_reserved(writer).await?;
+    writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
     writer.write_all(&local_handshake.info_hash).await?;
     writer.flush().await?;
 
     let mut remote_handshake = Handshake::default();
 
     let mut socket = writer.into_inner();
-    socket = read_pstr_and_reserved(socket).await?;
+    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
 
     socket.read_exact(&mut remote_handshake.info_hash).await?;
     if local_handshake.info_hash != remote_handshake.info_hash {
@@ -94,14 +97,20 @@ pub async fn do_handshake_outgoing(
     Ok((socket, remote_handshake))
 }
 
-async fn write_pstr_and_reserved<S: futures::AsyncWriteExt + Unpin>(mut sink: S) -> io::Result<S> {
+async fn write_pstr_and_reserved<S: futures::AsyncWriteExt + Unpin>(
+    mut sink: S,
+    reserved: &BitArray<[u8; 8], Lsb0>,
+) -> io::Result<S> {
     sink.write_all(&[19u8]).await?;
     sink.write_all("BitTorrent protocol".as_bytes()).await?;
-    sink.write_all(&[0u8; 8]).await?;
+    sink.write_all(&reserved.data).await?;
     Ok(sink)
 }
 
-async fn read_pstr_and_reserved<S: futures::AsyncReadExt + Unpin>(mut source: S) -> io::Result<S> {
+async fn read_pstr_and_reserved<S: futures::AsyncReadExt + Unpin>(
+    mut source: S,
+    reserved: &mut BitArray<[u8; 8], Lsb0>,
+) -> io::Result<S> {
     let pstr_len = {
         let mut pstr_len_byte = [0u8; 1];
         source.read_exact(&mut pstr_len_byte).await?;
@@ -116,7 +125,7 @@ async fn read_pstr_and_reserved<S: futures::AsyncReadExt + Unpin>(mut source: S)
     if pstr != "BitTorrent protocol" {
         return Err(io::Error::new(io::ErrorKind::Other, format!("Unknown protocol: '{}'", pstr)));
     }
-    source.read_exact(&mut [0u8; 8]).await?;
+    source.read_exact(&mut reserved.data).await?;
     Ok(source)
 }
 
@@ -153,38 +162,30 @@ mod tests {
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::from([0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01]),
         };
         let server_hs_data = Handshake {
             peer_id: [2u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
         };
 
         let client_hs_fut = async {
-            do_handshake_outgoing(
-                client_stream,
-                client_hs_data.clone(),
-                Some(&server_hs_data.peer_id),
-            )
-            .await
-            .unwrap()
-            .1
+            do_handshake_outgoing(client_stream, &client_hs_data, Some(&server_hs_data.peer_id))
+                .await
+                .unwrap()
+                .1
         };
-        let server_hs_fut = async {
-            do_handshake_incoming(
-                server_stream,
-                &server_hs_data.peer_id,
-                Some(&server_hs_data.info_hash),
-            )
-            .await
-            .unwrap()
-            .1
-        };
+        let server_hs_fut =
+            async { do_handshake_incoming(server_stream, &server_hs_data, false).await.unwrap().1 };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             async_io::block_on(async { join!(client_hs_fut, server_hs_fut) });
 
         assert_eq!(server_hs_data, received_server_hs);
         assert_eq!(client_hs_data, received_client_hs);
+        assert!(received_client_hs.reserved[44]);
+        assert!(received_client_hs.reserved[56]);
     }
 
     #[test]
@@ -194,34 +195,30 @@ mod tests {
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
         };
         let server_hs_data = Handshake {
             peer_id: [2u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::from([0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x04]),
         };
 
         let client_hs_fut = async {
-            do_handshake_outgoing(
-                client_stream,
-                client_hs_data.clone(),
-                Some(&server_hs_data.peer_id),
-            )
-            .await
-            .unwrap()
-            .1
-        };
-        let server_hs_fut = async {
-            do_handshake_incoming(server_stream, &server_hs_data.peer_id, None)
+            do_handshake_outgoing(client_stream, &client_hs_data, Some(&server_hs_data.peer_id))
                 .await
                 .unwrap()
                 .1
         };
+        let server_hs_fut =
+            async { do_handshake_incoming(server_stream, &server_hs_data, true).await.unwrap().1 };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             async_io::block_on(async { join!(client_hs_fut, server_hs_fut) });
 
         assert_eq!(server_hs_data, received_server_hs);
         assert_eq!(client_hs_data, received_client_hs);
+        assert!(received_server_hs.reserved[44]);
+        assert!(received_server_hs.reserved[58]);
     }
 
     #[test]
@@ -231,21 +228,22 @@ mod tests {
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
         };
         let server_hs_data = Handshake {
             peer_id: [2u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
         };
 
         let client_hs_fut = async {
             let result =
-                do_handshake_outgoing(client_stream, client_hs_data.clone(), Some(&[0u8; 20]))
-                    .await;
+                do_handshake_outgoing(client_stream, &client_hs_data, Some(&[0u8; 20])).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("remote peer_id doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(server_stream, &server_hs_data.peer_id, None).await;
+            let result = do_handshake_incoming(server_stream, &server_hs_data, true).await;
             assert!(result.is_err());
         };
         async_io::block_on(async { join!(client_hs_fut, server_hs_fut) });
@@ -258,26 +256,65 @@ mod tests {
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
             info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
         };
         let server_hs_data = Handshake {
             peer_id: [2u8; 20],
             info_hash: [8u8; 20],
+            reserved: BitArray::ZERO,
         };
 
         let client_hs_fut = async {
-            let result = do_handshake_outgoing(client_stream, client_hs_data.clone(), None).await;
+            let result = do_handshake_outgoing(client_stream, &client_hs_data, None).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("info_hash doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(
-                server_stream,
-                &server_hs_data.peer_id,
-                Some(&server_hs_data.info_hash),
-            )
-            .await;
+            let result = do_handshake_incoming(server_stream, &server_hs_data, false).await;
             assert!(result.is_err());
         };
         async_io::block_on(async { join!(client_hs_fut, server_hs_fut) });
+    }
+
+    #[test]
+    fn test_handshake_parse_entire_real_hanshake_message() {
+        let server_hs_msg = b"\x13\x42\x69\x74\x54\x6f\x72\x72\x65\x6e\x74\x20\x70\x72\x6f\x74\
+            \x6f\x63\x6f\x6c\x00\x00\x00\x00\x00\x10\x00\x05\x74\x4f\x27\x27\
+            \xce\x5d\x3c\x4d\x6b\xa4\xcf\x5b\xa7\xac\x08\x78\x46\x0a\x9e\xed\
+            \x2d\x42\x54\x37\x61\x35\x57\x2d\x11\xb4\x8d\x05\x19\x2c\x3e\x33\
+            \x88\x7c\x4b\xca";
+
+        let (mut server_stream, client_stream) = connect_server_and_client(6886);
+
+        let client_hs_data = Handshake {
+            peer_id: [1u8; 20],
+            info_hash:
+                *b"\x74\x4f\x27\x27\xce\x5d\x3c\x4d\x6b\xa4\xcf\x5b\xa7\xac\x08\x78\x46\x0a\x9e\xed",
+            reserved: BitArray::ZERO,
+        };
+
+        let client_hs_fut =
+            async { do_handshake_outgoing(client_stream, &client_hs_data, None).await.unwrap().1 };
+
+        let server_fut = async {
+            server_stream.write_all(&server_hs_msg[..]).await.unwrap();
+        };
+
+        let (received_server_hs, _) =
+            async_io::block_on(async { join!(client_hs_fut, server_fut) });
+
+        let received_server_hs: Handshake = received_server_hs;
+
+        assert_eq!(*b"\x00\x00\x00\x00\x00\x10\x00\x05", received_server_hs.reserved.data);
+        assert_eq!(client_hs_data.info_hash, received_server_hs.info_hash);
+
+        assert_eq!(
+            *b"\x2d\x42\x54\x37\x61\x35\x57\x2d\x11\xb4\x8d\x05\x19\x2c\x3e\x33\x88\x7c\x4b\xca",
+            received_server_hs.peer_id
+        );
+
+        assert!(received_server_hs.reserved[44]); // Extension protocol
+        assert!(received_server_hs.reserved[56]); // DHT
+        assert!(received_server_hs.reserved[58]); // Fast Extension
     }
 }
