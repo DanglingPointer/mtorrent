@@ -28,13 +28,19 @@ fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
 
 async fn receive_from_peer(mut downlink: peers::DownloadChannel, mut uplink: peers::UploadChannel) {
     let downlink_fut = async move {
-        while let Ok(msg) = downlink.receive_message().await {
-            info!("{} => {}", downlink.remote_ip(), msg);
+        loop {
+            if downlink.receive_message().await.is_err() {
+                error!("{} downlink error", downlink.remote_ip());
+                return;
+            }
         }
     };
     let uplink_fut = async move {
-        while let Ok(msg) = uplink.receive_message().await {
-            info!("{} => {}", uplink.remote_ip(), msg);
+        loop {
+            if uplink.receive_message().await.is_err() {
+                error!("{} uplink error", uplink.remote_ip());
+                return;
+            }
         }
     };
     join!(downlink_fut, uplink_fut);
@@ -123,7 +129,7 @@ fn main() {
     debug!("Info hash: {:?}", metainfo.info_hash());
 
     let local_peer_id = {
-        let local_peer_id_str = "-m i k h a i l  B T-";
+        let local_peer_id_str = "~DanglingPointer BT~";
         assert_eq!(20, local_peer_id_str.len());
         let mut id = [0u8; 20];
         id.copy_from_slice(local_peer_id_str.as_bytes());
