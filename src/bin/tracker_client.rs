@@ -66,6 +66,21 @@ async fn connect_to_peer(local_peer_id: &[u8; 20], info_hash: &[u8; 20], ip: Soc
     info!("{} finished", ip);
 }
 
+fn generate_local_peer_id() -> [u8; 20] {
+    let mut ret = [0u8; 20];
+    let maj = str::parse::<u8>(env!("CARGO_PKG_VERSION_MAJOR")).unwrap();
+    let min = str::parse::<u8>(env!("CARGO_PKG_VERSION_MINOR")).unwrap();
+    let pat = str::parse::<u8>(env!("CARGO_PKG_VERSION_PATCH")).unwrap();
+
+    let s = format!("-mt0{}{}{}-", maj, min, pat);
+    ret[..8].copy_from_slice(s.as_bytes());
+
+    for b in &mut ret[8..] {
+        *b = rand::random::<u8>() % (127 - 32) + 32;
+    }
+    ret
+}
+
 fn main() {
     simple_logger::init_with_level(Level::Debug).unwrap();
 
@@ -129,13 +144,8 @@ fn main() {
 
     debug!("Info hash: {:?}", metainfo.info_hash());
 
-    let local_peer_id = {
-        let local_peer_id_str = "~DanglingPointer BT~";
-        assert_eq!(20, local_peer_id_str.len());
-        let mut id = [0u8; 20];
-        id.copy_from_slice(local_peer_id_str.as_bytes());
-        id
-    };
+    let local_peer_id = generate_local_peer_id();
+    info!("Local peer id: '{}'", String::from_utf8_lossy(&local_peer_id));
 
     let announce_request = AnnounceRequest {
         info_hash: *metainfo.info_hash(),
