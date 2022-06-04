@@ -3,7 +3,7 @@ use futures::prelude::*;
 use std::{fmt, io};
 
 #[derive(Debug)]
-pub enum PeerMessage {
+pub(super) enum PeerMessage {
     KeepAlive,
     Choke,
     Unchoke,
@@ -36,7 +36,7 @@ pub enum PeerMessage {
 }
 
 impl PeerMessage {
-    pub async fn read_from<S: futures::AsyncReadExt + Unpin>(
+    pub(super) async fn read_from<S: futures::AsyncReadExt + Unpin>(
         src: &mut S,
     ) -> io::Result<PeerMessage> {
         use PeerMessage::*;
@@ -110,7 +110,7 @@ impl PeerMessage {
         }
     }
 
-    pub async fn write_to<S: futures::AsyncWriteExt + Unpin>(
+    pub(super) async fn write_to<S: futures::AsyncWriteExt + Unpin>(
         &self,
         dest: &mut futures::io::BufWriter<S>,
     ) -> io::Result<()> {

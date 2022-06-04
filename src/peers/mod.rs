@@ -1,10 +1,6 @@
-mod channels;
+pub mod channels;
 mod handshake;
 mod message;
 
+pub use channels::{ChannelError, ConnectionRunner, DownloadChannel, UploadChannel};
 pub use message::{BlockInfo, DownloaderMessage, UploaderMessage};
-
-pub use channels::{
-    establish_inbound, establish_outbound, ChannelError, ConnectionRunner, DownloadChannel,
-    UploadChannel,
-};

@@ -341,7 +341,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     thread_local! {
-        pub static TIME_BUDGET: Cell<Duration> = Cell::new(Duration::default());
+        pub(super) static TIME_BUDGET: Cell<Duration> = Cell::new(Duration::default());
     }
 
     struct ErrorStream;
