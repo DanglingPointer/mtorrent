@@ -25,7 +25,7 @@ impl Default for Handshake {
     }
 }
 
-pub async fn do_handshake_incoming(
+pub(super) async fn do_handshake_incoming(
     mut socket: Async<TcpStream>,
     local_handshake: &Handshake,
     use_remote_info_hash: bool,
@@ -60,7 +60,7 @@ pub async fn do_handshake_incoming(
     Ok((socket, remote_handshake))
 }
 
-pub async fn do_handshake_outgoing(
+pub(super) async fn do_handshake_outgoing(
     socket: Async<TcpStream>,
     local_handshake: &Handshake,
     expected_remote_peer_id: Option<&[u8; 20]>,
