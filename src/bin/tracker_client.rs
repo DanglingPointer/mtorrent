@@ -5,7 +5,6 @@ use igd;
 use igd::{PortMappingProtocol, SearchOptions};
 use log::{debug, error, info, Level};
 use mtorrent::peers;
-use mtorrent::peers::channels;
 use mtorrent::tracker::udp::{AnnounceEvent, AnnounceRequest, UdpTrackerConnection};
 use mtorrent::{benc, meta};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
@@ -49,7 +48,7 @@ async fn receive_from_peer(mut downlink: peers::DownloadChannel, mut uplink: pee
 
 async fn connect_to_peer(local_peer_id: &[u8; 20], info_hash: &[u8; 20], ip: SocketAddr) {
     info!("{} connecting...", ip);
-    match channels::establish_outbound(&local_peer_id, info_hash, ip, None).await {
+    match peers::channels_from_outgoing(&local_peer_id, info_hash, ip, None).await {
         Ok((downlink, uplink, runner)) => {
             info!("{} connected", ip);
             let run_fut = async move {

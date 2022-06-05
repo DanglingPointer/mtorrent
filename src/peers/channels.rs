@@ -22,6 +22,11 @@ pub struct Channel<Rx, Tx> {
     info: Rc<PeerInfo>,
 }
 
+pub trait PeerChannel {
+    type RxMessage;
+    type TxMessage;
+}
+
 impl<Rx, Tx> Channel<Rx, Tx> {
     pub async fn receive_message(&mut self) -> Result<Rx, ChannelError> {
         self.inbound.next().await.ok_or(ChannelError::ConnectionClosed)
@@ -53,6 +58,28 @@ impl<Rx, Tx> Channel<Rx, Tx> {
     pub fn remote_info(&self) -> &Handshake {
         &self.info.handshake_info
     }
+
+    #[cfg(test)]
+    pub(super) fn new(
+        inbound: mpsc::Receiver<Rx>,
+        outbound: mpsc::Sender<Option<Tx>>,
+        remote_ip: SocketAddr,
+    ) -> Self {
+        let info = Rc::new(PeerInfo {
+            handshake_info: Default::default(),
+            remote_addr: remote_ip,
+        });
+        Channel {
+            inbound,
+            outbound,
+            info,
+        }
+    }
+}
+
+impl<Rx, Tx> PeerChannel for Channel<Rx, Tx> {
+    type RxMessage = Rx;
+    type TxMessage = Tx;
 }
 
 pub type DownloadChannel = Channel<UploaderMessage, DownloaderMessage>;
@@ -94,7 +121,7 @@ where
 
 pub type ConnectionRunner = Runner<Async<TcpStream>, Async<TcpStream>>;
 
-pub async fn establish_inbound(
+pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     socket: Async<TcpStream>,
@@ -113,7 +140,7 @@ pub async fn establish_inbound(
     Ok(setup_channels(socket, socket_copy, remote_ip, remote_handshake))
 }
 
-pub async fn establish_outbound(
+pub async fn channels_from_outgoing(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     remote_addr: SocketAddr,
