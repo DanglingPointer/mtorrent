@@ -99,7 +99,7 @@ impl Accountant {
     }
 
     pub fn submit_bitfield(&mut self, bitfield: &BitVec<u8, Msb0>, pieces: &PieceKeeper) -> bool {
-        if bitfield.len() != pieces.pieces.len() {
+        if bitfield.len() < pieces.pieces.len() {
             return false;
         }
         for (piece_index, is_piece_present) in bitfield.iter().enumerate() {
