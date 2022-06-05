@@ -168,10 +168,15 @@ fn read_block_from<F: RandomAccessReadWrite>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
-    impl RandomAccessReadWrite for RefCell<Cursor<Vec<u8>>> {
+    type FakeFile = std::cell::RefCell<Cursor<Vec<u8>>>;
+
+    fn fake_file_from(content: Vec<u8>) -> FakeFile {
+        std::cell::RefCell::new(Cursor::new(content))
+    }
+
+    impl RandomAccessReadWrite for FakeFile {
         fn read_at_offset(&self, dest: &mut [u8], offset: u64) -> io::Result<usize> {
             self.borrow_mut().seek(SeekFrom::Start(offset))?;
             self.borrow_mut().read(dest)
@@ -185,11 +190,11 @@ mod tests {
 
     #[test]
     fn test_write_piece_within_one_file() {
-        let mut map = BTreeMap::<usize, RefCell<Cursor<Vec<u8>>>>::new();
-        map.insert(0, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(10, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(20, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(30, RefCell::new(Cursor::new(Vec::<u8>::new())));
+        let mut map = BTreeMap::<usize, FakeFile>::new();
+        map.insert(0, fake_file_from(vec![0u8; 10]));
+        map.insert(10, fake_file_from(vec![0u8; 10]));
+        map.insert(20, fake_file_from(vec![0u8; 10]));
+        map.insert(30, fake_file_from(Vec::<u8>::new()));
 
         write_block_to(&mut map, 16, vec![1u8, 2u8, 3u8, 4u8].as_ref()).unwrap();
 
@@ -203,11 +208,11 @@ mod tests {
 
     #[test]
     fn test_write_piece_on_file_boundary() {
-        let mut map = BTreeMap::<usize, RefCell<Cursor<Vec<u8>>>>::new();
-        map.insert(0, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(10, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(20, RefCell::new(Cursor::new(vec![0u8; 10])));
-        map.insert(30, RefCell::new(Cursor::new(Vec::<u8>::new())));
+        let mut map = BTreeMap::<usize, FakeFile>::new();
+        map.insert(0, fake_file_from(vec![0u8; 10]));
+        map.insert(10, fake_file_from(vec![0u8; 10]));
+        map.insert(20, fake_file_from(vec![0u8; 10]));
+        map.insert(30, fake_file_from(Vec::<u8>::new()));
 
         write_block_to(&mut map, 17, vec![1u8, 2u8, 3u8, 4u8, 5u8].as_ref()).unwrap();
 
@@ -224,11 +229,11 @@ mod tests {
 
     #[test]
     fn test_read_piece_within_one_file() {
-        let mut map = BTreeMap::<usize, RefCell<Cursor<Vec<u8>>>>::new();
-        map.insert(0, RefCell::new(Cursor::new((0u8..10u8).collect())));
-        map.insert(10, RefCell::new(Cursor::new((0u8..10u8).collect())));
-        map.insert(20, RefCell::new(Cursor::new((0u8..10u8).collect())));
-        map.insert(30, RefCell::new(Cursor::new(Vec::<u8>::new())));
+        let mut map = BTreeMap::<usize, FakeFile>::new();
+        map.insert(0, fake_file_from((0u8..10u8).collect()));
+        map.insert(10, fake_file_from((0u8..10u8).collect()));
+        map.insert(20, fake_file_from((0u8..10u8).collect()));
+        map.insert(30, fake_file_from(Vec::<u8>::new()));
 
         let mut dest = vec![0u8; 3];
         read_block_from(&mut map, 12, &mut dest).unwrap();
@@ -242,10 +247,10 @@ mod tests {
 
     #[test]
     fn test_read_piece_on_file_boundary() {
-        let mut map = BTreeMap::<usize, RefCell<Cursor<Vec<u8>>>>::new();
-        map.insert(0, RefCell::new(Cursor::new((1u8..=10u8).collect())));
-        map.insert(10, RefCell::new(Cursor::new((1u8..=10u8).collect())));
-        map.insert(20, RefCell::new(Cursor::new(Vec::<u8>::new())));
+        let mut map = BTreeMap::<usize, FakeFile>::new();
+        map.insert(0, fake_file_from((1u8..=10u8).collect()));
+        map.insert(10, fake_file_from((1u8..=10u8).collect()));
+        map.insert(20, fake_file_from(Vec::<u8>::new()));
 
         let mut dest = vec![0u8; 3];
         read_block_from(&mut map, 8, &mut dest).unwrap();
