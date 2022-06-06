@@ -304,7 +304,7 @@ impl<S: futures::AsyncWriteExt + Unpin> EgressStream<S> {
                 process_msg(msg, &mut self.tx_outbound, &mut self.sink, &self.remote_ip).await?;
             }
             ping_msg = delayed(PeerMessage::KeepAlive, ping_period).fuse() => {
-                debug!("{} <= KeepAlive", self.remote_ip);
+                debug!("{} <= {:?}", self.remote_ip, &ping_msg);
                 ping_msg.write_to(&mut self.sink).await?;
             }
         };
