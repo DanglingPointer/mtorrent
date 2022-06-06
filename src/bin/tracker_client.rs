@@ -185,12 +185,13 @@ fn main() {
             };
 
             if let Some(response) = response {
-                async_io::block_on(future::join_all(
+                future::join_all(
                     response
                         .ips
                         .into_iter()
                         .map(|ip| connect_to_peer(&local_peer_id, metainfo.info_hash(), ip)),
-                ));
+                )
+                .await;
             }
         });
     }
