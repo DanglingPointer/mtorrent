@@ -166,22 +166,20 @@ impl TrackerResponseContent {
 }
 
 fn dictionary_peers(data: &Vec<benc::Element>) -> impl Iterator<Item = SocketAddr> + '_ {
-    fn to_addr_and_port(dict: &BTreeMap<benc::Element, benc::Element>) -> Result<SocketAddr, ()> {
-        let ip = dict.get(&benc::Element::from("ip")).ok_or(())?;
-        let port = dict.get(&benc::Element::from("port")).ok_or(())?;
+    fn to_addr_and_port(dict: &BTreeMap<benc::Element, benc::Element>) -> Option<SocketAddr> {
+        let ip = dict.get(&benc::Element::from("ip"))?;
+        let port = dict.get(&benc::Element::from("port"))?;
         match (ip, port) {
-            (benc::Element::ByteString(ip), benc::Element::Integer(port)) => Ok(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::from(u32::from_be_bytes(
-                    ip.as_slice().try_into().map_err(|_| ())?,
-                ))),
-                u16::try_from(*port).map_err(|_| ())?,
+            (benc::Element::ByteString(ip), benc::Element::Integer(port)) => Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::from(u32::from_be_bytes(ip.as_slice().try_into().ok()?))),
+                u16::try_from(*port).ok()?,
             )),
-            _ => Err(()),
+            _ => None,
         }
     }
     data.iter().filter_map(|e: &benc::Element| -> Option<SocketAddr> {
         match e {
-            benc::Element::Dictionary(dict) => to_addr_and_port(dict).ok(),
+            benc::Element::Dictionary(dict) => to_addr_and_port(dict),
             _ => None,
         }
     })
