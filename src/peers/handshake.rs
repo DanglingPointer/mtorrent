@@ -33,7 +33,8 @@ pub(super) async fn do_handshake_incoming(
     // Read remote handshake up until peer id,
     // then send entire local handshake (with either local info_hash or remote one),
     // then read remote peer id.
-    debug!("Receiving incoming handshake from {}", socket.get_ref().peer_addr().unwrap());
+    let remote_ip = socket.get_ref().peer_addr()?;
+    debug!("Receiving incoming handshake from {}", remote_ip);
 
     let mut remote_handshake = Handshake::default();
 
@@ -54,7 +55,8 @@ pub(super) async fn do_handshake_incoming(
     socket.read_exact(&mut remote_handshake.peer_id).await?;
 
     debug!(
-        "Incoming handshake DONE. Peer id: {}",
+        "Incoming handshake with {} DONE. Peer id: {}",
+        remote_ip,
         String::from_utf8_lossy(&remote_handshake.peer_id)
     );
     Ok((socket, remote_handshake))
@@ -68,7 +70,8 @@ pub(super) async fn do_handshake_outgoing(
     // Send local hanshake up until peer id,
     // then wait for the entire remote handshake,
     // then send local peer id.
-    debug!("Starting outgoing hanshake with {}", socket.get_ref().peer_addr().unwrap());
+    let remote_ip = socket.get_ref().peer_addr()?;
+    debug!("Starting outgoing hanshake with {}", remote_ip);
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
@@ -93,7 +96,8 @@ pub(super) async fn do_handshake_outgoing(
     socket.write_all(&local_handshake.peer_id).await?;
 
     debug!(
-        "Outgoing handshake DONE. Peer id: {}",
+        "Outgoing handshake with {} DONE. Peer id: {}",
+        remote_ip,
         String::from_utf8_lossy(&remote_handshake.peer_id)
     );
     Ok((socket, remote_handshake))
