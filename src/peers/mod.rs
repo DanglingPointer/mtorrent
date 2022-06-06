@@ -1,5 +1,6 @@
 mod channels;
 mod handshake;
+mod listener;
 mod message;
 mod monitors;
 
@@ -8,5 +9,6 @@ pub use channels::{
     DownloadChannel, UploadChannel,
 };
 pub use handshake::Handshake;
+pub use listener::{listener_on_addr, ListenMonitor, ListenerRunner};
 pub use message::{BlockInfo, DownloaderMessage, UploaderMessage};
 pub use monitors::{DownloadMonitor, UploadMonitor};
