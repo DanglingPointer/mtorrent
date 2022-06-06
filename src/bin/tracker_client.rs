@@ -88,7 +88,7 @@ fn main() {
         let metainfo_file_name = if let Some(arg) = env::args().nth(1) {
             arg
         } else {
-            "/home/mikhailv/Movies/torrents/example.torrent".to_string()
+            "tests/example.torrent".to_string()
         };
 
         let source_content = fs::read(metainfo_file_name).unwrap();
