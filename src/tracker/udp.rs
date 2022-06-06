@@ -1,5 +1,7 @@
 use crate::tracker::utils;
-use async_io::Async;
+use async_io::{Async, Timer};
+use futures::prelude::*;
+use futures::select;
 use log::{debug, trace};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::str::Utf8Error;
@@ -135,27 +137,24 @@ impl UdpTrackerConnection {
             }
 
             let timeout_sec = 15 * (1 << retransmit_n);
-            socket.get_ref().set_read_timeout(Some(Duration::from_secs(timeout_sec)))?;
 
             let mut recv_buf = [0u8; 1024];
 
-            match socket.recv(&mut recv_buf).await {
-                Ok(bytes_read) => {
+            let timeout_fut = async { Timer::after(Duration::from_secs(timeout_sec)).await };
+            select! {
+                read_res = socket.recv(&mut recv_buf).fuse() => {
+                    let bytes_read = read_res?;
                     trace!("Received bytes: {:?}", &recv_buf[..bytes_read]);
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {
                         return Ok(result);
                     }
                 }
-                Err(error) => {
+                _ = timeout_fut.fuse() => {
                     if retransmit_n == 8 {
-                        return Err(error);
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
-                    match error.kind() {
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
-                            retransmit_n += 1;
-                        }
-                        _ => return Err(error),
-                    }
+                    retransmit_n += 1;
+                    debug!("Retrying request, retransmit_n={}", retransmit_n);
                 }
             };
         }
