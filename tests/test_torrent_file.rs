@@ -1,5 +1,6 @@
+use mtorrent::benc;
 use mtorrent::storage;
-use mtorrent::{benc, meta};
+use mtorrent::storage::meta;
 use std::fs;
 use std::path::Path;
 

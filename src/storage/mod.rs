@@ -1,6 +1,7 @@
 use std::io;
 
 pub mod files;
+pub mod meta;
 pub mod pieces;
 
 #[derive(Debug)]
