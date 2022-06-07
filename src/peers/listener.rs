@@ -41,7 +41,7 @@ impl ListenMonitor {
     }
 }
 
-pub async fn listener_on_addr<A: Into<SocketAddr>>(
+pub fn listener_on_addr<A: Into<SocketAddr>>(
     addr: A,
 ) -> io::Result<(ListenMonitor, ListenerRunner)> {
     let listener = Async::<TcpListener>::bind(addr)?;

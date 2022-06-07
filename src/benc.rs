@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::num::ParseIntError;
-use std::str;
+use std::{io, str};
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
 pub enum Element {
@@ -60,6 +60,12 @@ impl From<ParseIntError> for ParseError {
 impl From<str::Utf8Error> for ParseError {
     fn from(e: str::Utf8Error) -> Self {
         ParseError::ExternalError(format!("{}", e))
+    }
+}
+
+impl From<ParseError> for io::Error {
+    fn from(e: ParseError) -> Self {
+        io::Error::new(io::ErrorKind::Other, format!("{:?}", e))
     }
 }
 
