@@ -1,3 +1,4 @@
+use crate::storage::meta::MetaInfo;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = SocketAddr> + '_ {
@@ -9,4 +10,22 @@ pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = Socke
         ))
     }
     data.chunks_exact(6).filter_map(to_addr_and_port)
+}
+
+pub fn get_udp_tracker_addrs(metainfo: &MetaInfo) -> Vec<String> {
+    let mut udp_trackers = Vec::<String>::new();
+    if let Some(announce_list) = metainfo.announce_list() {
+        for list in announce_list {
+            for addr in list {
+                if let Some(addr) = addr.strip_prefix("udp://") {
+                    if let Some(stripped_addr) = addr.strip_suffix("/announce") {
+                        udp_trackers.push(stripped_addr.to_string());
+                    } else {
+                        udp_trackers.push(addr.to_string());
+                    }
+                }
+            }
+        }
+    }
+    udp_trackers
 }
