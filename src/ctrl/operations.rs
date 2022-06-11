@@ -212,11 +212,23 @@ impl<'h> OperationController {
                     OperationOutput::Void
                 };
                 let download_mon = Box::new(DownloadMonitor::from(download_ch));
-                let upload_mon = Box::new(UploadMonitor::from(upload_ch));
+                let mut upload_mon = Box::new(UploadMonitor::from(upload_ch));
+                let upload_ops = {
+                    if self.local_records.accounted_bytes() > 0 {
+                        let bitfield = self.local_records.generate_bitfield();
+                        let send_bitfield_fut = async move {
+                            upload_mon.handle_outgoing(UploaderMessage::Bitfield(bitfield)).await;
+                            OperationOutput::UploadToPeer(upload_mon)
+                        };
+                        vec![send_bitfield_fut.boxed_local()]
+                    } else {
+                        self.process_upload_monitor(upload_mon)
+                    }
+                };
                 vec![
                     vec![runner_fut.boxed_local()],
                     self.process_download_monitor(download_mon),
-                    self.process_upload_monitor(upload_mon),
+                    upload_ops,
                 ]
                 .into_iter()
                 .flatten()
