@@ -1,31 +1,19 @@
-use crate::peers::{
-    ConnectionRunner, DownloadChannel, DownloadMonitor, ListenMonitor, UploadChannel, UploadMonitor,
-};
-use crate::tracker::http::TrackerResponseContent;
-use crate::tracker::udp::AnnounceResponse;
 use futures::future::{select_all, LocalBoxFuture};
-use std::{io, mem};
-
-pub enum OperationOutput {
-    DownloadFromPeer(Box<DownloadMonitor>),
-    UploadToPeer(Box<UploadMonitor>),
-    PeerConnectivity(Box<io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)>>),
-    PeerListen(Box<ListenMonitor>),
-    UdpAnnounce(Box<io::Result<AnnounceResponse>>),
-    HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
-    Void,
-}
-
-pub type Operation<'o> = LocalBoxFuture<'o, OperationOutput>;
+use std::mem;
 
 pub trait Handler<'h> {
-    fn first_operations(&mut self) -> Vec<Operation<'h>>;
-    fn next_operations(&mut self, last_operation_result: OperationOutput) -> Vec<Operation<'h>>;
+    type OperationResult;
+
+    fn first_operations(&mut self) -> Vec<LocalBoxFuture<'h, Self::OperationResult>>;
+    fn next_operations(
+        &mut self,
+        last_operation_result: Self::OperationResult,
+    ) -> Vec<LocalBoxFuture<'h, Self::OperationResult>>;
 }
 
 pub struct Dispatcher<'d, H: Handler<'d>> {
     handler: H,
-    ops: Vec<Operation<'d>>,
+    ops: Vec<LocalBoxFuture<'d, H::OperationResult>>,
 }
 
 impl<'d, H: Handler<'d>> Dispatcher<'d, H> {
@@ -39,9 +27,9 @@ impl<'d, H: Handler<'d>> Dispatcher<'d, H> {
             return false;
         }
         let current_ops = mem::take(&mut self.ops);
-        let (finished_output, _finished_index, mut pending_ops) =
+        let (finished_result, _finished_index, mut pending_ops) =
             select_all(current_ops.into_iter()).await;
-        let mut next_ops = self.handler.next_operations(finished_output);
+        let mut next_ops = self.handler.next_operations(finished_result);
         self.ops.append(&mut next_ops);
         self.ops.append(&mut pending_ops);
         return true;

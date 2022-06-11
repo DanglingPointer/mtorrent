@@ -1,10 +1,12 @@
-use crate::dispatch::{Handler, Operation, OperationOutput};
+use crate::dispatch::Handler;
 use crate::peers::*;
 use crate::storage::meta::MetaInfo;
 use crate::storage::pieces::{Accountant, PieceKeeper};
+use crate::tracker::http::TrackerResponseContent;
 use crate::tracker::udp::{AnnounceEvent, AnnounceRequest, AnnounceResponse, UdpTrackerConnection};
 use crate::tracker::utils::get_udp_tracker_addrs;
 use async_io::Async;
+use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use log::{error, info, warn};
 use std::collections::HashSet;
@@ -44,7 +46,21 @@ impl OperationController {
     }
 }
 
+pub enum OperationOutput {
+    DownloadFromPeer(Box<DownloadMonitor>),
+    UploadToPeer(Box<UploadMonitor>),
+    PeerConnectivity(Box<io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)>>),
+    PeerListen(Box<ListenMonitor>),
+    UdpAnnounce(Box<io::Result<AnnounceResponse>>),
+    HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
+    Void,
+}
+
+type Operation<'o> = LocalBoxFuture<'o, OperationOutput>;
+
 impl<'h> Handler<'h> for OperationController {
+    type OperationResult = OperationOutput;
+
     fn first_operations(&mut self) -> Vec<Operation<'h>> {
         vec![
             self.create_udp_announce_ops(AnnounceEvent::Started),
