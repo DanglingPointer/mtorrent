@@ -1,13 +1,12 @@
-use igd::PortMappingProtocol;
 use log::{debug, error, info, Level};
 use mtorrent::benc;
 use mtorrent::ctrl::OperationController;
 use mtorrent::dispatch::Dispatcher;
+use mtorrent::port_opener::PortOpener;
 use mtorrent::storage::meta::MetaInfo;
 use mtorrent::tracker::utils;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::time::Duration;
 use std::{env, fs, io, num::ParseIntError};
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<MetaInfo> {
@@ -27,18 +26,6 @@ fn get_local_ip() -> io::Result<Ipv4Addr> {
     ipv4_string
         .parse::<Ipv4Addr>()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
-}
-
-fn open_external_port(
-    proto: igd::PortMappingProtocol,
-    local_addr: SocketAddrV4,
-) -> Result<SocketAddrV4, igd::Error> {
-    let gateway = igd::search_gateway(igd::SearchOptions {
-        timeout: Some(Duration::from_secs(5)),
-        ..Default::default()
-    })?;
-    let public_ip = gateway.get_any_address(proto, local_addr, 5, "")?;
-    Ok(public_ip)
 }
 
 fn generate_local_peer_id() -> Result<[u8; 20], ParseIntError> {
@@ -75,11 +62,12 @@ fn main() -> io::Result<()> {
     let local_internal_ip = SocketAddrV4::new(get_local_ip()?, 6889);
     info!("Local internal ip address: {}", local_internal_ip);
 
-    let local_external_ip = match open_external_port(PortMappingProtocol::TCP, local_internal_ip) {
-        Ok(addr) => {
+    let port_opener_result = PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP);
+    let local_external_ip = match &port_opener_result {
+        Ok(port_opener) => {
             debug!("UPnP succeeded");
-            info!("Local external ip address: {}", addr);
-            addr
+            info!("Local external ip address: {}", port_opener.external_ip());
+            port_opener.external_ip()
         }
         Err(e) => {
             error!("UPnP failed: {}", e);
