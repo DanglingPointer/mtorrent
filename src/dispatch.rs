@@ -30,8 +30,8 @@ impl<'d, H: Handler<'d>> Dispatcher<'d, H> {
         let (finished_result, _finished_index, mut pending_ops) =
             select_all(current_ops.into_iter()).await;
         let mut next_ops = self.handler.next_operations(finished_result);
-        self.ops.append(&mut next_ops);
         self.ops.append(&mut pending_ops);
+        self.ops.append(&mut next_ops);
         return true;
     }
 }
