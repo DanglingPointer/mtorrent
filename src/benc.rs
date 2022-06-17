@@ -330,8 +330,8 @@ mod tests {
             let start = b"li42e";
             let end = [b'4', b':', 0xf1, 0xf2, 0xf3, 0xf4, b'e'];
             let mut buf = Vec::<u8>::new();
-            buf.write(start).unwrap();
-            buf.write(&end).unwrap();
+            buf.write_all(start).unwrap();
+            buf.write_all(&end).unwrap();
             buf
         };
 

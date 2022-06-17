@@ -196,7 +196,7 @@ mod tests {
         map.insert(20, fake_file_from(vec![0u8; 10]));
         map.insert(30, fake_file_from(Vec::<u8>::new()));
 
-        write_block_to(&mut map, 16, vec![1u8, 2u8, 3u8, 4u8].as_ref()).unwrap();
+        write_block_to(&map, 16, vec![1u8, 2u8, 3u8, 4u8].as_ref()).unwrap();
 
         assert_eq!(&vec![0u8; 10], map.get(&0).unwrap().borrow().get_ref());
         assert_eq!(
@@ -214,7 +214,7 @@ mod tests {
         map.insert(20, fake_file_from(vec![0u8; 10]));
         map.insert(30, fake_file_from(Vec::<u8>::new()));
 
-        write_block_to(&mut map, 17, vec![1u8, 2u8, 3u8, 4u8, 5u8].as_ref()).unwrap();
+        write_block_to(&map, 17, vec![1u8, 2u8, 3u8, 4u8, 5u8].as_ref()).unwrap();
 
         assert_eq!(&vec![0u8; 10], map.get(&0).unwrap().borrow().get_ref());
         assert_eq!(
@@ -236,7 +236,7 @@ mod tests {
         map.insert(30, fake_file_from(Vec::<u8>::new()));
 
         let mut dest = vec![0u8; 3];
-        read_block_from(&mut map, 12, &mut dest).unwrap();
+        read_block_from(&map, 12, &mut dest).unwrap();
 
         assert_eq!(vec![2u8, 3u8, 4u8], dest);
 
@@ -253,7 +253,7 @@ mod tests {
         map.insert(20, fake_file_from(Vec::<u8>::new()));
 
         let mut dest = vec![0u8; 3];
-        read_block_from(&mut map, 8, &mut dest).unwrap();
+        read_block_from(&map, 8, &mut dest).unwrap();
 
         assert_eq!(vec![9u8, 10u8, 1u8], dest);
 
