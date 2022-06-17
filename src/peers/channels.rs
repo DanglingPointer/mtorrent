@@ -634,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
     fn test_send_keepalive_every_30s() {
         let (_download, _upload, runner) = setup_channels(
             PendingStream {},
