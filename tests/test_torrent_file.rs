@@ -223,7 +223,7 @@ fn test_read_metainfo_and_spawn_files() {
     for (length, path) in info.files().unwrap() {
         let path = Path::new(parent_dir).join(path);
         let file = fs::File::open(&path)
-            .expect(format!("{} does not exist", path.to_string_lossy()).as_str());
+            .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
         assert_eq!(length as u64, file.metadata().unwrap().len());
     }
     fs::remove_dir_all(parent_dir).unwrap();

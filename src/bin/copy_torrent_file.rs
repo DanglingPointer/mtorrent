@@ -4,7 +4,7 @@ use std::{env, fs};
 fn print_entity(entity: &benc::Element) {
     match entity {
         benc::Element::ByteString(data) => {
-            let text = String::from_utf8_lossy(&data);
+            let text = String::from_utf8_lossy(data);
             print!(" {} ", text)
         }
         benc::Element::Integer(number) => print!(" {} ", number),

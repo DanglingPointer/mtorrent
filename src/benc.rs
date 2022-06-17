@@ -99,7 +99,7 @@ fn write_element(e: &Element, dest: &mut Vec<u8>) -> std::io::Result<()> {
         }
         Element::ByteString(data) => {
             write!(dest, "{}{}", data.len(), DELIMITER_STRING as char)?;
-            dest.write(data)?;
+            dest.write_all(data)?;
         }
         Element::List(list) => {
             dest.push(PREFIX_LIST);

@@ -19,8 +19,10 @@ fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<MetaInfo> {
 fn get_local_ip() -> io::Result<Ipv4Addr> {
     let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
     let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
-        .split_once(" ")
-        .ok_or(io::Error::new(io::ErrorKind::Other, "Unexpected output from 'hostname -I'"))?
+        .split_once(' ')
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "Unexpected output from 'hostname -I'")
+        })?
         .0
         .to_string();
     ipv4_string
@@ -75,10 +77,7 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let local_peer_id = match generate_local_peer_id() {
-        Ok(id) => id,
-        Err(_) => [0xaeu8; 20],
-    };
+    let local_peer_id = generate_local_peer_id().unwrap_or([0xaeu8; 20]);
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
     let ctrl =

@@ -99,7 +99,7 @@ impl Accountant {
             .global_offset(piece_index, 0, piece_length)
             .expect("This should never happen");
         self.submit_block(offset, piece_length);
-        return true;
+        true
     }
 
     pub fn submit_bitfield(&mut self, bitfield: &BitVec<u8, Msb0>) -> bool {
@@ -111,7 +111,7 @@ impl Accountant {
                 self.submit_piece(piece_index);
             }
         }
-        return true;
+        true
     }
 
     pub fn max_block_length_at(&self, global_offset: usize) -> Option<usize> {

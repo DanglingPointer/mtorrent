@@ -213,7 +213,7 @@ where
     let tx_channel = UploadChannel {
         inbound: remote_downloader_msg_out,
         outbound: local_uploader_msg_in,
-        info: info.clone(),
+        info,
     };
 
     (rx_channel, tx_channel, Runner { receiver, sender })
@@ -289,18 +289,19 @@ impl<S: futures::AsyncWriteExt + Unpin> EgressStream<S> {
             let first = msg.expect("First msg must be non-None");
             debug!("{} <= {}", dest, first);
             first.into().write_to(sink).await?;
-            let second = source.next().await.ok_or(io::Error::from(io::ErrorKind::Other))?;
+            let second =
+                source.next().await.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
             assert!(second.is_none(), "Second msg must be None");
             Ok(())
         }
 
         select! {
             rx_msg = self.rx_outbound.next().fuse() => {
-                let msg = rx_msg.ok_or(io::Error::from(io::ErrorKind::Other))?;
+                let msg = rx_msg.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
                 process_msg(msg, &mut self.rx_outbound, &mut self.sink, &self.remote_ip).await?;
             }
             tx_msg = self.tx_outbound.next().fuse() => {
-                let msg = tx_msg.ok_or(io::Error::from(io::ErrorKind::Other))?;
+                let msg = tx_msg.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
                 process_msg(msg, &mut self.tx_outbound, &mut self.sink, &self.remote_ip).await?;
             }
             ping_msg = delayed(PeerMessage::KeepAlive, ping_period).fuse() => {

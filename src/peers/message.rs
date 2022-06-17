@@ -237,9 +237,9 @@ pub enum DownloaderMessage {
     Cancel(BlockInfo),
 }
 
-impl Into<PeerMessage> for UploaderMessage {
-    fn into(self) -> PeerMessage {
-        match self {
+impl From<UploaderMessage> for PeerMessage {
+    fn from(msg: UploaderMessage) -> Self {
+        match msg {
             UploaderMessage::Choke => PeerMessage::Choke,
             UploaderMessage::Unchoke => PeerMessage::Unchoke,
             UploaderMessage::Have { piece_index } => PeerMessage::Have {
@@ -309,9 +309,9 @@ impl fmt::Display for UploaderMessage {
     }
 }
 
-impl Into<PeerMessage> for DownloaderMessage {
-    fn into(self) -> PeerMessage {
-        match self {
+impl From<DownloaderMessage> for PeerMessage {
+    fn from(msg: DownloaderMessage) -> Self {
+        match msg {
             DownloaderMessage::Interested => PeerMessage::Interested,
             DownloaderMessage::NotInterested => PeerMessage::NotInterested,
             DownloaderMessage::Request(info) => PeerMessage::Request {

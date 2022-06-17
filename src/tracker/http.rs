@@ -165,7 +165,7 @@ impl TrackerResponseContent {
     }
 }
 
-fn dictionary_peers(data: &Vec<benc::Element>) -> impl Iterator<Item = SocketAddr> + '_ {
+fn dictionary_peers(data: &[benc::Element]) -> impl Iterator<Item = SocketAddr> + '_ {
     fn to_addr_and_port(dict: &BTreeMap<benc::Element, benc::Element>) -> Option<SocketAddr> {
         let ip = dict.get(&benc::Element::from("ip"))?;
         let port = dict.get(&benc::Element::from("port"))?;

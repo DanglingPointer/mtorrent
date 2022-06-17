@@ -20,7 +20,7 @@ pub struct OperationController {
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    piecekeeper: Rc<PieceKeeper>,
+    _piecekeeper: Rc<PieceKeeper>,
     local_records: Accountant,
     known_peers: HashSet<SocketAddr>,
 }
@@ -39,7 +39,7 @@ impl OperationController {
             internal_local_ip,
             external_local_ip,
             local_peer_id,
-            piecekeeper,
+            _piecekeeper: piecekeeper,
             local_records,
             known_peers: HashSet::new(),
         })
@@ -126,7 +126,7 @@ impl<'h> OperationController {
             .into_iter()
             .enumerate()
             .map(|(index, tracker_addr)| {
-                let mut addr = self.internal_local_ip.clone();
+                let mut addr = self.internal_local_ip;
                 addr.set_port(addr.port() + index as u16);
                 create_op(addr, tracker_addr, announce_request.clone())
             })
