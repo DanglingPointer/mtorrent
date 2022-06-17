@@ -7,7 +7,7 @@ use mtorrent::storage::meta::MetaInfo;
 use mtorrent::tracker::utils;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::{env, fs, io, num::ParseIntError};
+use std::{env, fs, io};
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<MetaInfo> {
     let file_content = fs::read(metainfo_filepath)?;
@@ -30,11 +30,11 @@ fn get_local_ip() -> io::Result<Ipv4Addr> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
 }
 
-fn generate_local_peer_id() -> Result<[u8; 20], ParseIntError> {
+fn generate_local_peer_id() -> [u8; 20] {
     let mut ret = [0u8; 20];
-    let maj = str::parse::<u8>(env!("CARGO_PKG_VERSION_MAJOR"))?;
-    let min = str::parse::<u8>(env!("CARGO_PKG_VERSION_MINOR"))?;
-    let pat = str::parse::<u8>(env!("CARGO_PKG_VERSION_PATCH"))?;
+    let maj = str::parse::<u8>(env!("CARGO_PKG_VERSION_MAJOR")).unwrap_or(b'x');
+    let min = str::parse::<u8>(env!("CARGO_PKG_VERSION_MINOR")).unwrap_or(b'x');
+    let pat = str::parse::<u8>(env!("CARGO_PKG_VERSION_PATCH")).unwrap_or(b'x');
 
     let s = format!("-mt0{}{}{}-", maj, min, pat);
     ret[..8].copy_from_slice(s.as_bytes());
@@ -42,7 +42,7 @@ fn generate_local_peer_id() -> Result<[u8; 20], ParseIntError> {
     for b in &mut ret[8..] {
         *b = rand::random::<u8>() % (127 - 32) + 32;
     }
-    Ok(ret)
+    ret
 }
 
 fn main() -> io::Result<()> {
@@ -77,7 +77,7 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let local_peer_id = generate_local_peer_id().unwrap_or([0xaeu8; 20]);
+    let local_peer_id = generate_local_peer_id();
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
     let ctrl =
