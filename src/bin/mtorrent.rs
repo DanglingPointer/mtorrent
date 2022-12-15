@@ -3,10 +3,11 @@ use mtorrent::benc;
 use mtorrent::ctrl::OperationController;
 use mtorrent::dispatch::Dispatcher;
 use mtorrent::port_opener::PortOpener;
+use mtorrent::storage::files;
 use mtorrent::storage::meta::MetaInfo;
 use mtorrent::tracker::utils;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<MetaInfo> {
@@ -64,6 +65,31 @@ fn main() -> io::Result<()> {
     let local_internal_ip = SocketAddrV4::new(get_local_ip()?, 6889);
     info!("Local internal ip address: {}", local_internal_ip);
 
+    let output_dir = if let Some(arg) = env::args().nth(2) {
+        arg
+    } else {
+        "test_output".to_string()
+    };
+    fs::remove_dir_all(&output_dir)?;
+    let filekeeper = if let Some(files) = metainfo.files() {
+        files::FileKeeper::new(output_dir, files)?
+    } else {
+        let name = match metainfo.name() {
+            Some(s) => s.to_string(),
+            None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
+        };
+        files::FileKeeper::new(
+            output_dir,
+            [(
+                metainfo.length().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "No 'length' in metainfo file")
+                })?,
+                PathBuf::from(name),
+            )]
+            .into_iter(),
+        )?
+    };
+
     let port_opener_result = PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP);
     let local_external_ip = match &port_opener_result {
         Ok(port_opener) => {
@@ -80,9 +106,14 @@ fn main() -> io::Result<()> {
     let local_peer_id = generate_local_peer_id();
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
-    let ctrl =
-        OperationController::new(metainfo, local_internal_ip, local_external_ip, local_peer_id)
-            .unwrap();
+    let ctrl = OperationController::new(
+        metainfo,
+        filekeeper,
+        local_internal_ip,
+        local_external_ip,
+        local_peer_id,
+    )
+    .unwrap();
 
     async_io::block_on(async move {
         let mut dispatcher = Dispatcher::new(ctrl);

@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, io};
 
+#[derive(Debug)]
 pub enum ChannelError {
     Timeout,
     ConnectionClosed,
@@ -60,7 +61,7 @@ impl<Rx, Tx> Channel<Rx, Tx> {
     }
 
     #[cfg(test)]
-    pub(super) fn new(
+    pub fn new(
         inbound: mpsc::Receiver<Rx>,
         outbound: mpsc::Sender<Option<Tx>>,
         remote_ip: SocketAddr,

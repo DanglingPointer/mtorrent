@@ -214,6 +214,7 @@ async fn read_u32_from<S: futures::AsyncReadExt + Unpin>(src: &mut S) -> io::Res
 
 // ------
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct BlockInfo {
     pub piece_index: usize,
     pub in_piece_offset: usize,
@@ -235,6 +236,16 @@ pub enum DownloaderMessage {
     NotInterested,
     Request(BlockInfo),
     Cancel(BlockInfo),
+}
+
+impl fmt::Display for BlockInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[ind={} off={} len={}]",
+            self.piece_index, self.in_piece_offset, self.block_length
+        )
+    }
 }
 
 impl From<UploaderMessage> for PeerMessage {
