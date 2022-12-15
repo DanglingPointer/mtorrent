@@ -30,7 +30,7 @@ impl TryFrom<benc::Element> for MetaInfo {
                     Ok(MetaInfo {
                         root: benc::convert_dictionary(root),
                         info: benc::convert_dictionary(info),
-                        info_hash: Sha1::from(&info_bytes).digest().bytes(),
+                        info_hash: Sha1::from(info_bytes).digest().bytes(),
                     })
                 } else {
                     Err(())
