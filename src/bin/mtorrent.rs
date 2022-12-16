@@ -70,7 +70,7 @@ fn main() -> io::Result<()> {
     } else {
         "test_output".to_string()
     };
-    fs::remove_dir_all(&output_dir)?;
+    let _ = fs::remove_dir_all(&output_dir);
     let filekeeper = if let Some(files) = metainfo.files() {
         files::FileKeeper::new(output_dir, files)?
     } else {
