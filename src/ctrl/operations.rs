@@ -283,8 +283,7 @@ impl<'h> OperationController {
             }
             Ok(mut monitor) => {
                 // TODO: update state
-                let received_blocks = monitor.take_received_blocks();
-                for (info, data) in received_blocks.into_iter() {
+                for (info, data) in monitor.received_blocks() {
                     if let Ok(global_offset) = self.piecekeeper.global_offset(
                         info.piece_index,
                         info.in_piece_offset,
@@ -322,28 +321,24 @@ impl<'h> OperationController {
             }
             Ok(mut monitor) => {
                 // TODO: update state
-                let received_requests = monitor.take_received_requests();
+                let received_requests = monitor
+                    .received_requests()
+                    .map(|block_info| format!("{}", block_info))
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 if !received_requests.is_empty() {
-                    info!(
-                        "{} Received requests: {}",
-                        &monitor.remote_ip(),
-                        received_requests
-                            .into_iter()
-                            .map(|info: BlockInfo| -> String { format!("{}", info) })
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    );
+                    info!("{} Received requests: {}", &monitor.remote_ip(), received_requests);
                 }
-                let received_cancellations = monitor.take_received_cancellations();
+                let received_cancellations = monitor
+                    .received_cancellations()
+                    .map(|block_info| format!("{}", block_info))
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 if !received_cancellations.is_empty() {
                     info!(
                         "{} Received cancellations: {}",
                         &monitor.remote_ip(),
                         received_cancellations
-                            .into_iter()
-                            .map(|info: BlockInfo| -> String { format!("{}", info) })
-                            .collect::<Vec<String>>()
-                            .join(", ")
                     );
                 }
                 // TODO: schedule write? Or:

@@ -3,7 +3,7 @@ use crate::peers::{
 };
 use crate::storage::pieces::{Accountant, PieceKeeper};
 use log::{error, info};
-use std::mem;
+use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -13,7 +13,7 @@ pub struct DownloadChannelMonitor {
     interested: bool,
     choked: bool,
     availability: Accountant,
-    received_blocks: Vec<(BlockInfo, Vec<u8>)>,
+    received_blocks: Cell<Vec<(BlockInfo, Vec<u8>)>>,
 }
 
 impl DownloadChannelMonitor {
@@ -23,7 +23,7 @@ impl DownloadChannelMonitor {
             interested: false,
             choked: true,
             availability: Accountant::new(pieces),
-            received_blocks: Vec::new(),
+            received_blocks: Cell::new(Vec::new()),
         }
     }
 
@@ -60,7 +60,7 @@ impl DownloadChannelMonitor {
                     error!("{} invalid Bitfield received", self.remote_ip());
                 }
             }
-            UploaderMessage::Block(info, data) => self.received_blocks.push((info, data)),
+            UploaderMessage::Block(info, data) => self.received_blocks.get_mut().push((info, data)),
         }
         Ok(())
     }
@@ -77,8 +77,8 @@ impl DownloadChannelMonitor {
         self.choked
     }
 
-    pub fn take_received_blocks(&mut self) -> Vec<(BlockInfo, Vec<u8>)> {
-        mem::take(&mut self.received_blocks)
+    pub fn received_blocks(&self) -> impl Iterator<Item = (BlockInfo, Vec<u8>)> {
+        self.received_blocks.take().into_iter()
     }
 }
 
@@ -86,8 +86,8 @@ pub struct UploadChannelMonitor {
     channel: UploadChannel,
     choking: bool,
     interest: bool,
-    received_requests: Vec<BlockInfo>,
-    received_cancels: Vec<BlockInfo>,
+    received_requests: Cell<Vec<BlockInfo>>,
+    received_cancels: Cell<Vec<BlockInfo>>,
 }
 
 impl UploadChannelMonitor {
@@ -96,8 +96,8 @@ impl UploadChannelMonitor {
             channel,
             choking: true,
             interest: false,
-            received_requests: Vec::new(),
-            received_cancels: Vec::new(),
+            received_requests: Cell::new(Vec::new()),
+            received_cancels: Cell::new(Vec::new()),
         }
     }
 
@@ -124,8 +124,8 @@ impl UploadChannelMonitor {
         match msg {
             DownloaderMessage::Interested => self.interest = true,
             DownloaderMessage::NotInterested => self.interest = false,
-            DownloaderMessage::Request(info) => self.received_requests.push(info),
-            DownloaderMessage::Cancel(info) => self.received_cancels.push(info),
+            DownloaderMessage::Request(info) => self.received_requests.get_mut().push(info),
+            DownloaderMessage::Cancel(info) => self.received_cancels.get_mut().push(info),
         }
         Ok(())
     }
@@ -138,12 +138,12 @@ impl UploadChannelMonitor {
         self.interest
     }
 
-    pub fn take_received_requests(&mut self) -> Vec<BlockInfo> {
-        mem::take(&mut self.received_requests)
+    pub fn received_requests(&self) -> impl Iterator<Item = BlockInfo> {
+        self.received_requests.take().into_iter()
     }
 
-    pub fn take_received_cancellations(&mut self) -> Vec<BlockInfo> {
-        mem::take(&mut self.received_cancels)
+    pub fn received_cancellations(&mut self) -> impl Iterator<Item = BlockInfo> {
+        self.received_cancels.take().into_iter()
     }
 }
 
@@ -197,7 +197,7 @@ mod tests {
         assert!(!monitor.am_interested());
         assert!(monitor.peer_choking());
         assert_eq!(remote_ip, *monitor.remote_ip());
-        assert!(monitor.received_blocks.is_empty());
+        assert!(monitor.received_blocks.get_mut().is_empty());
 
         let block = BlockInfo {
             piece_index: 0,
@@ -233,7 +233,7 @@ mod tests {
             assert!(monitor.availability.has_exact_block_at(0, piece_length));
 
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
-            let mut received_blocks = monitor.take_received_blocks();
+            let mut received_blocks: Vec<_> = monitor.received_blocks().collect();
             assert_eq!(1, received_blocks.len());
 
             let (info, data) = received_blocks.pop().unwrap();
@@ -258,8 +258,8 @@ mod tests {
         assert!(monitor.am_choking());
         assert!(!monitor.peer_interested());
         assert_eq!(remote_ip, *monitor.remote_ip());
-        assert!(monitor.received_requests.is_empty());
-        assert!(monitor.received_cancels.is_empty());
+        assert!(monitor.received_requests.get_mut().is_empty());
+        assert!(monitor.received_cancels.get_mut().is_empty());
 
         let block = BlockInfo {
             piece_index: 0,
@@ -292,10 +292,10 @@ mod tests {
             assert!(monitor.am_choking());
 
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
-            assert_eq!(vec![block], monitor.take_received_requests());
+            assert_eq!(vec![block], monitor.received_requests().collect::<Vec<_>>());
 
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
-            assert_eq!(vec![block], monitor.take_received_cancellations());
+            assert_eq!(vec![block], monitor.received_cancellations().collect::<Vec<_>>());
 
             let err = monitor.send_outgoing(UploaderMessage::Unchoke).await.unwrap_err();
             assert!(matches!(err, ChannelError::ConnectionClosed));
