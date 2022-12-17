@@ -31,14 +31,19 @@ impl DownloadChannelMonitor {
         self.channel.remote_ip()
     }
 
-    pub async fn send_outgoing(&mut self, msg: DownloaderMessage) -> Result<(), ChannelError> {
-        let interested = matches!(msg, DownloaderMessage::Interested);
-        let not_interested = matches!(msg, DownloaderMessage::NotInterested);
-        self.channel.send_message(msg).await?;
-        if interested {
-            self.interested = true;
-        } else if not_interested {
-            self.interested = false;
+    pub async fn send_outgoing<I>(&mut self, msgs: I) -> Result<(), ChannelError>
+    where
+        I: Iterator<Item = DownloaderMessage>,
+    {
+        for msg in msgs {
+            let interested = matches!(msg, DownloaderMessage::Interested);
+            let not_interested = matches!(msg, DownloaderMessage::NotInterested);
+            self.channel.send_message(msg).await?;
+            if interested {
+                self.interested = true;
+            } else if not_interested {
+                self.interested = false;
+            }
         }
         Ok(())
     }
@@ -105,14 +110,19 @@ impl UploadChannelMonitor {
         self.channel.remote_ip()
     }
 
-    pub async fn send_outgoing(&mut self, msg: UploaderMessage) -> Result<(), ChannelError> {
-        let choking = matches!(msg, UploaderMessage::Choke);
-        let unchoking = matches!(msg, UploaderMessage::Unchoke);
-        self.channel.send_message(msg).await?;
-        if choking {
-            self.choking = true;
-        } else if unchoking {
-            self.choking = false;
+    pub async fn send_outgoing<I>(&mut self, msgs: I) -> Result<(), ChannelError>
+    where
+        I: Iterator<Item = UploaderMessage>,
+    {
+        for msg in msgs {
+            let choking = matches!(msg, UploaderMessage::Choke);
+            let unchoking = matches!(msg, UploaderMessage::Unchoke);
+            self.channel.send_message(msg).await?;
+            if choking {
+                self.choking = true;
+            } else if unchoking {
+                self.choking = false;
+            }
         }
         Ok(())
     }
@@ -153,6 +163,7 @@ mod tests {
     use futures::channel::mpsc;
     use futures::join;
     use futures::prelude::*;
+    use std::iter::{once, repeat_with};
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     fn create_download_monitor(
@@ -214,6 +225,10 @@ mod tests {
             local_msgs.next().await.unwrap();
             remote_msgs.send(UploaderMessage::Have { piece_index: 0 }).await.unwrap();
             remote_msgs.send(UploaderMessage::Block(block, vec![42u8; 20])).await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
         };
 
         let test_fut = async move {
@@ -223,10 +238,10 @@ mod tests {
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
             assert!(monitor.peer_choking());
 
-            monitor.send_outgoing(DownloaderMessage::Interested).await.unwrap();
+            monitor.send_outgoing(once(DownloaderMessage::Interested)).await.unwrap();
             assert!(monitor.am_interested());
 
-            monitor.send_outgoing(DownloaderMessage::NotInterested).await.unwrap();
+            monitor.send_outgoing(once(DownloaderMessage::NotInterested)).await.unwrap();
             assert!(!monitor.am_interested());
 
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
@@ -240,7 +255,17 @@ mod tests {
             assert_eq!(block, info);
             assert_eq!(vec![42u8; 20], data);
 
-            let err = monitor.send_outgoing(DownloaderMessage::Interested).await.unwrap_err();
+            let block_info = BlockInfo {
+                piece_index: 0,
+                in_piece_offset: 0,
+                block_length: 0,
+            };
+            monitor
+                .send_outgoing(repeat_with(|| DownloaderMessage::Request(block_info)).take(2))
+                .await
+                .unwrap();
+
+            let err = monitor.send_outgoing(once(DownloaderMessage::Interested)).await.unwrap_err();
             assert!(matches!(err, ChannelError::ConnectionClosed));
             assert!(!monitor.am_interested());
 
@@ -276,6 +301,10 @@ mod tests {
             local_msgs.next().await.unwrap();
             remote_msgs.send(DownloaderMessage::Request(block)).await.unwrap();
             remote_msgs.send(DownloaderMessage::Cancel(block)).await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
+            local_msgs.next().await.unwrap();
         };
 
         let test_fut = async move {
@@ -285,10 +314,10 @@ mod tests {
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
             assert!(!monitor.peer_interested());
 
-            monitor.send_outgoing(UploaderMessage::Unchoke).await.unwrap();
+            monitor.send_outgoing(once(UploaderMessage::Unchoke)).await.unwrap();
             assert!(!monitor.am_choking());
 
-            monitor.send_outgoing(UploaderMessage::Choke).await.unwrap();
+            monitor.send_outgoing(once(UploaderMessage::Choke)).await.unwrap();
             assert!(monitor.am_choking());
 
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
@@ -297,7 +326,12 @@ mod tests {
             monitor.receive_incoming(Duration::from_secs(1)).await.unwrap();
             assert_eq!(vec![block], monitor.received_cancellations().collect::<Vec<_>>());
 
-            let err = monitor.send_outgoing(UploaderMessage::Unchoke).await.unwrap_err();
+            monitor
+                .send_outgoing(repeat_with(|| UploaderMessage::Have { piece_index: 0 }).take(2))
+                .await
+                .unwrap();
+
+            let err = monitor.send_outgoing(once(UploaderMessage::Unchoke)).await.unwrap_err();
             assert!(matches!(err, ChannelError::ConnectionClosed));
             assert!(monitor.am_choking());
 

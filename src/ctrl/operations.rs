@@ -12,10 +12,10 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use log::{error, info, warn};
 use std::collections::HashSet;
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::rc::Rc;
 use std::time::Duration;
+use std::{io, iter};
 
 pub struct OperationController {
     metainfo: MetaInfo,
@@ -241,7 +241,7 @@ impl<'h> OperationController {
                         let send_bitfield_fut = async move {
                             let remote_ip = *upload_mon.remote_ip();
                             match upload_mon
-                                .send_outgoing(UploaderMessage::Bitfield(bitfield))
+                                .send_outgoing(iter::once(UploaderMessage::Bitfield(bitfield)))
                                 .await
                             {
                                 Ok(()) => OperationOutput::UploadToPeer(Ok(upload_mon)),
