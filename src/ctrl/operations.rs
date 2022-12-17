@@ -1,4 +1,4 @@
-use crate::ctrl::monitors::{DownloadChannelMonitor, UploadChannelMonitor};
+use crate::ctrl::channel_monitors::{DownloadChannelMonitor, UploadChannelMonitor};
 use crate::dispatch::Handler;
 use crate::peers::*;
 use crate::storage::files::FileKeeper;
