@@ -43,11 +43,8 @@ impl PieceTracker {
 
     pub fn add_bitfield_record(&mut self, peer: SocketAddr, bitfield: &BitVec<u8, Msb0>) {
         for (piece_index, is_available) in bitfield.iter().enumerate() {
-            if !*is_available {
-                continue;
-            }
-            if !self.add_single_record(peer, piece_index) {
-                break;
+            if *is_available {
+                self.add_single_record(peer, piece_index);
             }
         }
     }
@@ -255,5 +252,18 @@ mod tests {
         let mut keys = pa.owner_count_to_piece_indices.keys().cloned();
         assert_eq!(0, keys.next().unwrap());
         assert!(keys.next().is_none());
+    }
+
+    #[test]
+    fn test_process_entire_bitfield_ignoring_forgotten_pieces() {
+        let mut pa = PieceTracker::new(4);
+        pa.forget_piece(0);
+
+        pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
+        assert!(pa.get_piece_owners(0).is_none());
+        assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(1).unwrap().collect());
+        assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(2).unwrap().collect());
+        assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(3).unwrap().collect());
+        assert_eq!(HashSet::from([1, 2, 3]), pa.get_rarest_pieces().collect());
     }
 }
