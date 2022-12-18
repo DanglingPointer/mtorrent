@@ -395,3 +395,30 @@ impl fmt::Display for DownloaderMessage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bitfield_is_parsed_correctly() {
+        let bits = b"\x82";
+        let msg = UploaderMessage::Bitfield(BitVec::from_slice(bits));
+
+        let bitfield = if let UploaderMessage::Bitfield(bitfield) = msg {
+            bitfield
+        } else {
+            panic!()
+        };
+
+        assert!(bitfield[0]);
+        assert!(!bitfield[1]);
+        assert!(!bitfield[2]);
+        assert!(!bitfield[3]);
+
+        assert!(!bitfield[4]);
+        assert!(!bitfield[5]);
+        assert!(bitfield[6]);
+        assert!(!bitfield[7]);
+    }
+}
