@@ -1,57 +1,17 @@
-use crate::storage::Error;
+use crate::data::PieceInfo;
 use bitvec::prelude::*;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-pub struct PieceKeeper {
-    pieces: Vec<[u8; 20]>,
-    piece_length: usize,
-}
-
-impl PieceKeeper {
-    pub fn new<'a, I: Iterator<Item = &'a [u8]>>(piece_it: I, piece_length: usize) -> Self {
-        fn to_20_byte_array(slice: &[u8]) -> [u8; 20] {
-            let mut ret = [0u8; 20];
-            ret.copy_from_slice(slice);
-            ret
-        }
-        PieceKeeper {
-            pieces: piece_it.map(to_20_byte_array).collect(),
-            piece_length,
-        }
-    }
-
-    pub fn global_offset(
-        &self,
-        piece_index: usize,
-        in_piece_offset: usize,
-        length: usize,
-    ) -> Result<usize, Error> {
-        if self.pieces.get(piece_index).is_none() || in_piece_offset + length > self.piece_length {
-            Err(Error::InvalidLocation)
-        } else {
-            Ok(self.piece_length * piece_index + in_piece_offset)
-        }
-    }
-
-    pub fn index_of_piece(&self, hash: &[u8; 20]) -> Result<usize, Error> {
-        self.pieces.iter().position(|e| e == hash).ok_or(Error::InvalidLocation)
-    }
-
-    pub fn hash_of_piece(&self, piece_index: usize) -> Result<&[u8; 20], Error> {
-        self.pieces.get(piece_index).ok_or(Error::InvalidLocation)
-    }
-}
-
-pub struct Accountant {
-    pieces: Rc<PieceKeeper>,
+pub struct BlockAccountant {
+    pieces: Rc<PieceInfo>,
     blocks_start_end: BTreeMap<usize, usize>,
     total_bytes: usize,
 }
 
-impl Accountant {
-    pub fn new(pieces: Rc<PieceKeeper>) -> Self {
-        Accountant {
+impl BlockAccountant {
+    pub fn new(pieces: Rc<PieceInfo>) -> Self {
+        BlockAccountant {
             pieces,
             blocks_start_end: BTreeMap::new(),
             total_bytes: 0,
@@ -90,10 +50,10 @@ impl Accountant {
     }
 
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
-        if piece_index >= self.pieces.pieces.len() {
+        if piece_index >= self.pieces.piece_count() {
             return false;
         }
-        let piece_length = self.pieces.piece_length;
+        let piece_length = self.pieces.piece_len();
         let offset = self
             .pieces
             .global_offset(piece_index, 0, piece_length)
@@ -103,7 +63,7 @@ impl Accountant {
     }
 
     pub fn submit_bitfield(&mut self, bitfield: &BitVec<u8, Msb0>) -> bool {
-        if bitfield.len() < self.pieces.pieces.len() {
+        if bitfield.len() < self.pieces.piece_count() {
             return false;
         }
         for (piece_index, is_piece_present) in bitfield.iter().enumerate() {
@@ -135,8 +95,8 @@ impl Accountant {
     }
 
     pub fn generate_bitfield(&self) -> BitVec<u8, Msb0> {
-        let mut bitfield = BitVec::<u8, Msb0>::repeat(false, self.pieces.pieces.len());
-        let piece_length = self.pieces.piece_length;
+        let mut bitfield = BitVec::<u8, Msb0>::repeat(false, self.pieces.piece_count());
+        let piece_length = self.pieces.piece_len();
         for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
             let global_offset = self
                 .pieces
@@ -154,7 +114,7 @@ impl Accountant {
     }
 
     pub fn missing_bytes(&self) -> usize {
-        self.pieces.pieces.len() * self.pieces.piece_length - self.total_bytes
+        self.pieces.piece_count() * self.pieces.piece_len() - self.total_bytes
     }
 }
 
@@ -165,8 +125,8 @@ mod tests {
 
     #[test]
     fn test_accountant_submit_one_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
@@ -176,8 +136,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_into_preceding_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(20, 10);
 
@@ -188,8 +148,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_overlapping_into_preceding_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(15, 15);
 
@@ -200,8 +160,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_into_following_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(0, 10);
 
@@ -212,8 +172,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_overlapping_into_following_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(0, 15);
 
@@ -224,8 +184,8 @@ mod tests {
 
     #[test]
     fn test_accountant_replace_overlapping_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(5, 20);
 
@@ -236,8 +196,8 @@ mod tests {
 
     #[test]
     fn test_accountant_ignore_overlapping_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(5, 20);
         a.submit_block(10, 10);
 
@@ -248,8 +208,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_with_following_and_preceding_blocks() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 5);
         a.submit_block(0, 5);
 
@@ -267,8 +227,8 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_with_overlapping_following_and_preceding_blocks() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 5);
         a.submit_block(0, 5);
 
@@ -281,8 +241,8 @@ mod tests {
 
     #[test]
     fn test_accountant_block_length_with_one_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
 
         assert_eq!(None, a.max_block_length_at(9));
@@ -294,8 +254,8 @@ mod tests {
 
     #[test]
     fn test_accountant_block_length_with_two_blocks() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
         a.submit_block(30, 10);
 
@@ -311,8 +271,8 @@ mod tests {
 
     #[test]
     fn test_accountant_has_exact_block_with_one_block() {
-        let p = Rc::new(PieceKeeper::new(iter::empty(), 3));
-        let mut a = Accountant::new(p);
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
         a.submit_block(10, 10);
 
         for len in 0..=10 {

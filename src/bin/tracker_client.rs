@@ -4,10 +4,10 @@ use futures::prelude::*;
 
 use igd::{PortMappingProtocol, SearchOptions};
 use log::{debug, error, info, Level};
-use mtorrent::benc;
-use mtorrent::peers;
-use mtorrent::storage::meta;
+use mtorrent::pwp;
 use mtorrent::tracker::udp::{AnnounceEvent, AnnounceRequest, UdpTrackerConnection};
+use mtorrent::utils::benc;
+use mtorrent::utils::meta;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::Duration;
 use std::{env, fs};
@@ -27,7 +27,7 @@ fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
     Ok(external_port)
 }
 
-async fn receive_from_peer(mut downlink: peers::DownloadChannel, mut uplink: peers::UploadChannel) {
+async fn receive_from_peer(mut downlink: pwp::DownloadChannel, mut uplink: pwp::UploadChannel) {
     let downlink_fut = async move {
         loop {
             if downlink.receive_message().await.is_err() {
@@ -49,7 +49,7 @@ async fn receive_from_peer(mut downlink: peers::DownloadChannel, mut uplink: pee
 
 async fn connect_to_peer(local_peer_id: &[u8; 20], info_hash: &[u8; 20], ip: SocketAddr) {
     info!("{} connecting...", ip);
-    match peers::channels_from_outgoing(local_peer_id, info_hash, ip, None).await {
+    match pwp::channels_from_outgoing(local_peer_id, info_hash, ip, None).await {
         Ok((downlink, uplink, runner)) => {
             info!("{} connected", ip);
             let run_fut = async move {
@@ -94,7 +94,7 @@ fn main() {
         let source_content = fs::read(metainfo_file_name).unwrap();
         let root_entity = benc::Element::from_bytes(&source_content).unwrap();
 
-        meta::MetaInfo::try_from(root_entity).unwrap()
+        meta::Metainfo::try_from(root_entity).unwrap()
     };
 
     let udp_tracker_addrs = {

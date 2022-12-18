@@ -1,7 +1,7 @@
-use crate::peers::{
+use crate::data::{BlockAccountant, PieceInfo};
+use crate::pwp::{
     BlockInfo, ChannelError, DownloadChannel, DownloaderMessage, UploadChannel, UploaderMessage,
 };
-use crate::storage::pieces::{Accountant, PieceKeeper};
 use log::{error, info};
 use std::cell::Cell;
 use std::net::SocketAddr;
@@ -12,17 +12,17 @@ pub struct DownloadChannelMonitor {
     channel: DownloadChannel,
     interested: bool,
     choked: bool,
-    availability: Accountant,
+    availability: BlockAccountant,
     received_blocks: Cell<Vec<(BlockInfo, Vec<u8>)>>,
 }
 
 impl DownloadChannelMonitor {
-    pub fn new(channel: DownloadChannel, pieces: Rc<PieceKeeper>) -> Self {
+    pub fn new(channel: DownloadChannel, pieces: Rc<PieceInfo>) -> Self {
         Self {
             channel,
             interested: false,
             choked: true,
-            availability: Accountant::new(pieces),
+            availability: BlockAccountant::new(pieces),
             received_blocks: Cell::new(Vec::new()),
         }
     }
@@ -70,7 +70,7 @@ impl DownloadChannelMonitor {
         Ok(())
     }
 
-    pub fn remote_availability(&self) -> &Accountant {
+    pub fn remote_availability(&self) -> &BlockAccountant {
         &self.availability
     }
 
@@ -168,7 +168,7 @@ mod tests {
 
     fn create_download_monitor(
         remote_ip: SocketAddr,
-        pieces: Rc<PieceKeeper>,
+        pieces: Rc<PieceInfo>,
     ) -> (
         DownloadChannelMonitor,
         mpsc::Receiver<Option<DownloaderMessage>>,
@@ -201,8 +201,7 @@ mod tests {
     fn test_download_monitor_updates_state_correctly() {
         let remote_ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
         let piece_length = 128;
-        let pieces =
-            Rc::new(PieceKeeper::new(vec![[0u8; 20].as_slice()].into_iter(), piece_length));
+        let pieces = Rc::new(PieceInfo::new(vec![[0u8; 20].as_slice()].into_iter(), piece_length));
         let (mut monitor, mut local_msgs, mut remote_msgs) =
             create_download_monitor(remote_ip, pieces);
         assert!(!monitor.am_interested());

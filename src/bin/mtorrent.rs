@@ -1,19 +1,19 @@
 use log::{debug, error, info, Level};
-use mtorrent::benc;
 use mtorrent::ctrl::OperationController;
-use mtorrent::dispatch::Dispatcher;
-use mtorrent::port_opener::PortOpener;
-use mtorrent::storage::files;
-use mtorrent::storage::meta::MetaInfo;
+use mtorrent::data::Storage;
 use mtorrent::tracker::utils;
+use mtorrent::utils::benc;
+use mtorrent::utils::dispatch::Dispatcher;
+use mtorrent::utils::meta::Metainfo;
+use mtorrent::utils::upnp;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
-fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<MetaInfo> {
+fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Metainfo> {
     let file_content = fs::read(metainfo_filepath)?;
     let root_entity = benc::Element::from_bytes(&file_content)?;
-    MetaInfo::try_from(root_entity)
+    Metainfo::try_from(root_entity)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))
 }
 
@@ -72,13 +72,13 @@ fn main() -> io::Result<()> {
     };
     let _ = fs::remove_dir_all(&output_dir);
     let filekeeper = if let Some(files) = metainfo.files() {
-        files::FileKeeper::new(output_dir, files)?
+        Storage::new(output_dir, files)?
     } else {
         let name = match metainfo.name() {
             Some(s) => s.to_string(),
             None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
         };
-        files::FileKeeper::new(
+        Storage::new(
             output_dir,
             [(
                 metainfo.length().ok_or_else(|| {
@@ -90,7 +90,8 @@ fn main() -> io::Result<()> {
         )?
     };
 
-    let port_opener_result = PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP);
+    let port_opener_result =
+        upnp::PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP);
     let local_external_ip = match &port_opener_result {
         Ok(port_opener) => {
             debug!("UPnP succeeded");

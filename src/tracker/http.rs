@@ -1,5 +1,5 @@
-use crate::benc;
 use crate::tracker::utils;
+use crate::utils::benc;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str;

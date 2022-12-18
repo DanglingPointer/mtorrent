@@ -1,14 +1,13 @@
-#![allow(dead_code)] // temp
 use bitvec::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 
-pub struct PieceAvailability {
+pub struct PieceTracker {
     piece_index_to_owners: HashMap<usize, HashSet<SocketAddr>>,
     owner_count_to_piece_indices: BTreeMap<usize, HashSet<usize>>,
 }
 
-impl PieceAvailability {
+impl PieceTracker {
     pub fn new(piece_count: usize) -> Self {
         let indices = (0..piece_count).collect::<HashSet<usize>>();
         Self {
@@ -108,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_add_records_and_get_owners() {
-        let mut pa = PieceAvailability::new(4);
+        let mut pa = PieceTracker::new(4);
         assert!(pa.get_piece_owners(4).is_none());
         assert_eq!(0, pa.get_piece_owners(0).unwrap().count());
         assert_eq!(0, pa.get_piece_owners(1).unwrap().count());
@@ -159,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_add_records_and_get_rarest() {
-        let mut pa = PieceAvailability::new(4);
+        let mut pa = PieceTracker::new(4);
         assert!(pa.get_rarest_pieces().next().is_none());
 
         pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
@@ -194,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_add_records_and_forget_piece() {
-        let mut pa = PieceAvailability::new(4);
+        let mut pa = PieceTracker::new(4);
         pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
         pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
         pa.add_bitfield_record(ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
@@ -211,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_add_records_and_forget_peer() {
-        let mut pa = PieceAvailability::new(4);
+        let mut pa = PieceTracker::new(4);
         pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
         pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
         pa.add_bitfield_record(ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
@@ -237,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_dont_leak_empty_owner_count_entries() {
-        let mut pa = PieceAvailability::new(4);
+        let mut pa = PieceTracker::new(4);
         assert_eq!(1, pa.owner_count_to_piece_indices.len());
 
         pa.add_single_record(ip(6000), 0);

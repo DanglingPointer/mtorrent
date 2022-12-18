@@ -1,6 +1,6 @@
-use mtorrent::benc;
-use mtorrent::storage;
-use mtorrent::storage::meta;
+use mtorrent::data;
+use mtorrent::utils::benc;
+use mtorrent::utils::meta;
 use std::fs;
 use std::path::Path;
 
@@ -14,7 +14,7 @@ fn test_read_example_torrent_file() {
         panic!("Not a dictionary");
     }
 
-    let info = meta::MetaInfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::try_from(entity).unwrap();
 
     let announce = info.announce().unwrap();
     assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {}", announce);
@@ -215,10 +215,10 @@ fn test_read_metainfo_and_spawn_files() {
     } else {
         panic!("Not a dictionary");
     }
-    let info = meta::MetaInfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::try_from(entity).unwrap();
 
     let parent_dir = "test_output";
-    let filekeeper = storage::files::FileKeeper::new(parent_dir, info.files().unwrap());
+    let filekeeper = data::Storage::new(parent_dir, info.files().unwrap());
 
     for (length, path) in info.files().unwrap() {
         let path = Path::new(parent_dir).join(path);

@@ -1,4 +1,4 @@
-use mtorrent::benc;
+use mtorrent::utils::benc;
 use std::{env, fs};
 
 fn print_entity(entity: &benc::Element) {

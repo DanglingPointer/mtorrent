@@ -1,8 +1,14 @@
 use std::io;
 
-pub mod files;
-pub mod meta;
-pub mod pieces;
+mod block_accountant;
+mod piece_info;
+mod piece_tracker;
+mod storage;
+
+pub use block_accountant::BlockAccountant;
+pub use piece_info::PieceInfo;
+pub use piece_tracker::PieceTracker;
+pub use storage::Storage;
 
 #[derive(Debug)]
 pub enum Error {

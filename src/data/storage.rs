@@ -1,13 +1,13 @@
-use crate::storage::Error;
+use crate::data::Error;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-pub struct FileKeeper {
+pub struct Storage {
     files: BTreeMap<usize, fs::File>,
 }
 
-impl FileKeeper {
+impl Storage {
     const PLACEHOLDER_FILE: &'static str = "ignore_me.txt";
 
     pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
@@ -27,9 +27,9 @@ impl FileKeeper {
             filemap.insert(offset, file);
             offset += length;
         }
-        filemap.insert(offset, fs::File::create(FileKeeper::PLACEHOLDER_FILE)?);
+        filemap.insert(offset, fs::File::create(Storage::PLACEHOLDER_FILE)?);
 
-        Ok(FileKeeper { files: filemap })
+        Ok(Storage { files: filemap })
     }
 
     pub fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
@@ -44,9 +44,9 @@ impl FileKeeper {
     }
 }
 
-impl Drop for FileKeeper {
+impl Drop for Storage {
     fn drop(&mut self) {
-        let _ = fs::remove_file(FileKeeper::PLACEHOLDER_FILE);
+        let _ = fs::remove_file(Storage::PLACEHOLDER_FILE);
     }
 }
 

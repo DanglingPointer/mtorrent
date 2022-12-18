@@ -1,16 +1,16 @@
-use crate::benc;
+use crate::utils::benc;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str;
 
-pub struct MetaInfo {
+pub struct Metainfo {
     root: BTreeMap<String, benc::Element>,
     info: BTreeMap<String, benc::Element>,
     info_hash: [u8; 20],
 }
 
-impl TryFrom<benc::Element> for MetaInfo {
+impl TryFrom<benc::Element> for Metainfo {
     type Error = ();
 
     fn try_from(e: benc::Element) -> Result<Self, Self::Error> {
@@ -27,7 +27,7 @@ impl TryFrom<benc::Element> for MetaInfo {
             (Some(root), Some(info)) => {
                 let info_bytes = info.to_bytes();
                 if let benc::Element::Dictionary(info) = info {
-                    Ok(MetaInfo {
+                    Ok(Metainfo {
                         root: benc::convert_dictionary(root),
                         info: benc::convert_dictionary(info),
                         info_hash: Sha1::from(info_bytes).digest().bytes(),
@@ -41,7 +41,7 @@ impl TryFrom<benc::Element> for MetaInfo {
     }
 }
 
-impl MetaInfo {
+impl Metainfo {
     pub fn announce(&self) -> Option<&str> {
         if let Some(benc::Element::ByteString(data)) = self.root.get("announce") {
             str::from_utf8(data).ok()

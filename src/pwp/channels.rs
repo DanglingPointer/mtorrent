@@ -1,5 +1,5 @@
-use crate::peers::handshake::*;
-use crate::peers::message::*;
+use crate::pwp::handshake::*;
+use crate::pwp::message::*;
 use async_io::Async;
 use futures::channel::mpsc;
 use futures::io::BufWriter;

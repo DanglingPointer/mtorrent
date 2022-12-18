@@ -1,12 +1,12 @@
 use crate::ctrl::channel_monitors::{DownloadChannelMonitor, UploadChannelMonitor};
-use crate::dispatch::Handler;
-use crate::peers::*;
-use crate::storage::files::FileKeeper;
-use crate::storage::meta::MetaInfo;
-use crate::storage::pieces::{Accountant, PieceKeeper};
+use crate::data::Storage;
+use crate::data::{BlockAccountant, PieceInfo};
+use crate::pwp::*;
 use crate::tracker::http::TrackerResponseContent;
 use crate::tracker::udp::{AnnounceEvent, AnnounceRequest, AnnounceResponse, UdpTrackerConnection};
 use crate::tracker::utils::get_udp_tracker_addrs;
+use crate::utils::dispatch::Handler;
+use crate::utils::meta::Metainfo;
 use async_io::Async;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
@@ -18,26 +18,26 @@ use std::time::Duration;
 use std::{io, iter};
 
 pub struct OperationController {
-    metainfo: MetaInfo,
+    metainfo: Metainfo,
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    piecekeeper: Rc<PieceKeeper>,
-    filekeeper: FileKeeper,
-    local_records: Accountant,
+    piecekeeper: Rc<PieceInfo>,
+    filekeeper: Storage,
+    local_records: BlockAccountant,
     known_peers: HashSet<SocketAddr>,
 }
 
 impl OperationController {
     pub fn new(
-        metainfo: MetaInfo,
-        filekeeper: FileKeeper,
+        metainfo: Metainfo,
+        filekeeper: Storage,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
     ) -> Option<Self> {
-        let piecekeeper = Rc::new(PieceKeeper::new(metainfo.pieces()?, metainfo.piece_length()?));
-        let local_records = Accountant::new(piecekeeper.clone());
+        let piecekeeper = Rc::new(PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
+        let local_records = BlockAccountant::new(piecekeeper.clone());
         Some(Self {
             metainfo,
             internal_local_ip,
