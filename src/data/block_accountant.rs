@@ -1,5 +1,5 @@
 use crate::data::PieceInfo;
-use bitvec::prelude::*;
+use crate::pwp::Bitfield;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -62,7 +62,7 @@ impl BlockAccountant {
         true
     }
 
-    pub fn submit_bitfield(&mut self, bitfield: &BitVec<u8, Msb0>) -> bool {
+    pub fn submit_bitfield(&mut self, bitfield: &Bitfield) -> bool {
         if bitfield.len() < self.pieces.piece_count() {
             return false;
         }
@@ -94,8 +94,8 @@ impl BlockAccountant {
         }
     }
 
-    pub fn generate_bitfield(&self) -> BitVec<u8, Msb0> {
-        let mut bitfield = BitVec::<u8, Msb0>::repeat(false, self.pieces.piece_count());
+    pub fn generate_bitfield(&self) -> Bitfield {
+        let mut bitfield = Bitfield::repeat(false, self.pieces.piece_count());
         let piece_length = self.pieces.piece_len();
         for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
             let global_offset = self

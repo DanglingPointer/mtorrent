@@ -2,6 +2,8 @@ use bitvec::prelude::*;
 use futures::prelude::*;
 use std::{fmt, io};
 
+pub type Bitfield = BitVec<u8, Msb0>;
+
 #[derive(Debug)]
 pub(super) enum PeerMessage {
     KeepAlive,
@@ -13,7 +15,7 @@ pub(super) enum PeerMessage {
         piece_index: u32,
     },
     Bitfield {
-        bitfield: BitVec<u8, Msb0>,
+        bitfield: Bitfield,
     },
     Request {
         index: u32,
@@ -227,7 +229,7 @@ pub enum UploaderMessage {
     Have {
         piece_index: usize,
     },
-    Bitfield(BitVec<u8, Msb0>),
+    Bitfield(Bitfield),
     Block(BlockInfo, Vec<u8>),
 }
 

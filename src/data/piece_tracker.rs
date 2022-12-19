@@ -1,4 +1,4 @@
-use bitvec::prelude::*;
+use crate::pwp::Bitfield;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 
@@ -41,7 +41,7 @@ impl PieceTracker {
         }
     }
 
-    pub fn add_bitfield_record(&mut self, peer: SocketAddr, bitfield: &BitVec<u8, Msb0>) {
+    pub fn add_bitfield_record(&mut self, peer: SocketAddr, bitfield: &Bitfield) {
         for (piece_index, is_available) in bitfield.iter().enumerate() {
             if *is_available {
                 self.add_single_record(peer, piece_index);
@@ -96,6 +96,7 @@ impl PieceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitvec::prelude::*;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     fn ip(port: u16) -> SocketAddr {
