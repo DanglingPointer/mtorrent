@@ -94,6 +94,15 @@ impl BlockAccountant {
         }
     }
 
+    pub fn has_piece(&self, piece_index: usize) -> bool {
+        let piece_len = self.pieces.piece_len();
+        if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_len) {
+            self.has_exact_block_at(global_offset, piece_len)
+        } else {
+            false
+        }
+    }
+
     pub fn generate_bitfield(&self) -> Bitfield {
         let mut bitfield = Bitfield::repeat(false, self.pieces.piece_count());
         let piece_length = self.pieces.piece_len();
