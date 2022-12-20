@@ -13,10 +13,10 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::rc::Rc;
 use std::time::Duration;
+use std::{io, mem};
 
 pub struct OperationController {
     metainfo: Metainfo,
@@ -24,7 +24,7 @@ pub struct OperationController {
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
     pieces: Rc<PieceInfo>,
-    filekeeper: Storage,
+    filekeeper: Rc<Storage>,
     local_records: BlockAccountant,
     piece_availability: PieceTracker,
     known_peers: HashSet<SocketAddr>,
@@ -48,7 +48,7 @@ impl OperationController {
             external_local_ip,
             local_peer_id,
             pieces: piecekeeper,
-            filekeeper,
+            filekeeper: Rc::new(filekeeper),
             local_records,
             piece_availability: piece_tracker,
             known_peers: HashSet::new(),
@@ -343,7 +343,30 @@ impl<'h> OperationController {
 
         // TODO: run engine
 
-        let pending_msgs = peer_status.take_pending_uploader_msgs();
+        fn fill_block_with_data(
+            mut msg: UploaderMessage,
+            pieces: &PieceInfo,
+            files: &Storage,
+        ) -> UploaderMessage {
+            if let UploaderMessage::Block(info, data) = &mut msg {
+                let global_offset = pieces
+                    .global_offset(info.piece_index, info.in_piece_offset, info.block_length)
+                    .expect("Logical error, this should never happen");
+                debug_assert!(data.is_empty());
+                let _ = mem::replace(
+                    data,
+                    files
+                        .read_block(global_offset, info.block_length)
+                        .expect("Failed to read from file"),
+                );
+            }
+            msg
+        }
+        let piece_info = self.pieces.clone();
+        let storage = self.filekeeper.clone();
+        let pending_msgs = peer_status
+            .take_pending_uploader_msgs()
+            .map(move |msg| fill_block_with_data(msg, &piece_info, &storage));
         Some(vec![upload_monitor_fut(monitor, pending_msgs)])
     }
 }
@@ -439,7 +462,7 @@ where
         if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
             return OperationOutput::UploadToPeer(Err(remote_ip));
         }
-        match monitor.receive_incoming(Duration::from_secs(1)).await {
+        match monitor.receive_incoming(Duration::from_millis(100)).await {
             Err(ChannelError::ConnectionClosed) => OperationOutput::UploadToPeer(Err(remote_ip)),
             _ => OperationOutput::UploadToPeer(Ok(monitor)),
         }

@@ -142,6 +142,7 @@ impl PeerStatus {
     }
 
     pub fn take_pending_uploader_msgs(&mut self) -> impl Iterator<Item = UploaderMessage> {
+        // TODO: limit the total number of bytes scheduled for upload, retain the rest
         mem::take(&mut self.pending_tx_upload).into_iter()
     }
 
