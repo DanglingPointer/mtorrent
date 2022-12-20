@@ -383,6 +383,7 @@ fn outgoing_connect_fut(
     remote_ip: SocketAddr,
 ) -> Operation<'static> {
     async move {
+        info!("Trying to establish an outgoing connection to {remote_ip}");
         match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
             Ok(channels) => {
                 info!("Successfully established an outgoing connection to {remote_ip}");
