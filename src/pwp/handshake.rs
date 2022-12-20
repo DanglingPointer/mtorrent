@@ -71,7 +71,7 @@ pub(super) async fn do_handshake_outgoing(
     // then wait for the entire remote handshake,
     // then send local peer id.
     let remote_ip = socket.get_ref().peer_addr()?;
-    debug!("Starting outgoing hanshake with {}", remote_ip);
+    debug!("Starting outgoing handshake with {}", remote_ip);
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
