@@ -216,13 +216,14 @@ async fn read_u32_from<S: futures::AsyncReadExt + Unpin>(src: &mut S) -> io::Res
 
 // ------
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BlockInfo {
     pub piece_index: usize,
     pub in_piece_offset: usize,
     pub block_length: usize,
 }
 
+#[derive(Eq, PartialEq)]
 pub enum UploaderMessage {
     Choke,
     Unchoke,
@@ -233,6 +234,7 @@ pub enum UploaderMessage {
     Block(BlockInfo, Vec<u8>),
 }
 
+#[derive(Eq, PartialEq)]
 pub enum DownloaderMessage {
     Interested,
     NotInterested,

@@ -1,5 +1,5 @@
-use crate::data::PieceInfo;
-use crate::pwp::Bitfield;
+use crate::data::{Error, PieceInfo};
+use crate::pwp::{Bitfield, BlockInfo};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -18,7 +18,19 @@ impl BlockAccountant {
         }
     }
 
-    pub fn submit_block(&mut self, global_offset: usize, length: usize) {
+    pub fn submit_block(&mut self, block_info: &BlockInfo) -> Result<usize, Error> {
+        let result = self.pieces.global_offset(
+            block_info.piece_index,
+            block_info.in_piece_offset,
+            block_info.block_length,
+        );
+        if let Ok(global_offset) = result {
+            self.submit_block_internal(global_offset, block_info.block_length);
+        }
+        result
+    }
+
+    fn submit_block_internal(&mut self, global_offset: usize, length: usize) {
         let start = global_offset;
         let mut end = global_offset + length;
 
@@ -58,7 +70,7 @@ impl BlockAccountant {
             .pieces
             .global_offset(piece_index, 0, piece_length)
             .expect("This should never happen");
-        self.submit_block(offset, piece_length);
+        self.submit_block_internal(offset, piece_length);
         true
     }
 
@@ -136,7 +148,7 @@ mod tests {
     fn test_accountant_submit_one_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
+        a.submit_block_internal(10, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&10));
@@ -147,8 +159,8 @@ mod tests {
     fn test_accountant_merge_into_preceding_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(20, 10);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(20, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&30), a.blocks_start_end.get(&10));
@@ -159,8 +171,8 @@ mod tests {
     fn test_accountant_merge_overlapping_into_preceding_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(15, 15);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(15, 15);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&30), a.blocks_start_end.get(&10));
@@ -171,8 +183,8 @@ mod tests {
     fn test_accountant_merge_into_following_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(0, 10);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(0, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&0));
@@ -183,8 +195,8 @@ mod tests {
     fn test_accountant_merge_overlapping_into_following_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(0, 15);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(0, 15);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&20), a.blocks_start_end.get(&0));
@@ -195,8 +207,8 @@ mod tests {
     fn test_accountant_replace_overlapping_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(5, 20);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(5, 20);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&25), a.blocks_start_end.get(&5));
@@ -207,8 +219,8 @@ mod tests {
     fn test_accountant_ignore_overlapping_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(5, 20);
-        a.submit_block(10, 10);
+        a.submit_block_internal(5, 20);
+        a.submit_block_internal(10, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&25), a.blocks_start_end.get(&5));
@@ -219,15 +231,15 @@ mod tests {
     fn test_accountant_merge_with_following_and_preceding_blocks() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 5);
-        a.submit_block(0, 5);
+        a.submit_block_internal(10, 5);
+        a.submit_block_internal(0, 5);
 
         assert_eq!(2, a.blocks_start_end.len());
         assert_eq!(Some(&5), a.blocks_start_end.get(&0));
         assert_eq!(Some(&15), a.blocks_start_end.get(&10));
         assert_eq!(10, a.accounted_bytes());
 
-        a.submit_block(5, 5);
+        a.submit_block_internal(5, 5);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&15), a.blocks_start_end.get(&0));
@@ -238,10 +250,10 @@ mod tests {
     fn test_accountant_merge_with_overlapping_following_and_preceding_blocks() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 5);
-        a.submit_block(0, 5);
+        a.submit_block_internal(10, 5);
+        a.submit_block_internal(0, 5);
 
-        a.submit_block(2, 10);
+        a.submit_block_internal(2, 10);
 
         assert_eq!(1, a.blocks_start_end.len());
         assert_eq!(Some(&15), a.blocks_start_end.get(&0));
@@ -252,7 +264,7 @@ mod tests {
     fn test_accountant_block_length_with_one_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
+        a.submit_block_internal(10, 10);
 
         assert_eq!(None, a.max_block_length_at(9));
         assert_eq!(Some(10), a.max_block_length_at(10));
@@ -265,8 +277,8 @@ mod tests {
     fn test_accountant_block_length_with_two_blocks() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
-        a.submit_block(30, 10);
+        a.submit_block_internal(10, 10);
+        a.submit_block_internal(30, 10);
 
         assert_eq!(Some(1), a.max_block_length_at(19));
         for pos in 20..30 {
@@ -282,7 +294,7 @@ mod tests {
     fn test_accountant_has_exact_block_with_one_block() {
         let p = Rc::new(PieceInfo::new(iter::empty(), 3));
         let mut a = BlockAccountant::new(p);
-        a.submit_block(10, 10);
+        a.submit_block_internal(10, 10);
 
         for len in 0..=10 {
             assert!(!a.has_exact_block_at(9, len), "len={}", len);

@@ -1,6 +1,7 @@
 use crate::ctrl::channel_monitors::{DownloadChannelMonitor, UploadChannelMonitor};
-use crate::data::Storage;
+use crate::ctrl::peer_status::PeerStatus;
 use crate::data::{BlockAccountant, PieceInfo};
+use crate::data::{PieceTracker, Storage};
 use crate::pwp::*;
 use crate::tracker::http::TrackerResponseContent;
 use crate::tracker::udp::{AnnounceEvent, AnnounceRequest, AnnounceResponse, UdpTrackerConnection};
@@ -11,21 +12,23 @@ use async_io::Async;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use log::{error, info, warn};
-use std::collections::HashSet;
-use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::rc::Rc;
 use std::time::Duration;
-use std::{io, iter};
 
 pub struct OperationController {
     metainfo: Metainfo,
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    piecekeeper: Rc<PieceInfo>,
+    pieces: Rc<PieceInfo>,
     filekeeper: Storage,
     local_records: BlockAccountant,
+    piece_availability: PieceTracker,
     known_peers: HashSet<SocketAddr>,
+    peer_statuses: HashMap<SocketAddr, PeerStatus>,
 }
 
 impl OperationController {
@@ -38,15 +41,18 @@ impl OperationController {
     ) -> Option<Self> {
         let piecekeeper = Rc::new(PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
         let local_records = BlockAccountant::new(piecekeeper.clone());
+        let piece_tracker = PieceTracker::new(piecekeeper.piece_count());
         Some(Self {
             metainfo,
             internal_local_ip,
             external_local_ip,
             local_peer_id,
-            piecekeeper,
+            pieces: piecekeeper,
             filekeeper,
             local_records,
+            piece_availability: piece_tracker,
             known_peers: HashSet::new(),
+            peer_statuses: HashMap::new(),
         })
     }
 }
@@ -54,7 +60,7 @@ impl OperationController {
 pub enum OperationOutput {
     DownloadFromPeer(Result<Box<DownloadChannelMonitor>, SocketAddr>),
     UploadToPeer(Result<Box<UploadChannelMonitor>, SocketAddr>),
-    PeerConnectivity(Box<io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)>>),
+    PeerConnectivity(Result<Box<(DownloadChannel, UploadChannel, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<AnnounceResponse>>),
     HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
@@ -67,7 +73,7 @@ impl<'h> Handler<'h> for OperationController {
     type OperationResult = OperationOutput;
 
     fn first_operations(&mut self) -> Vec<Operation<'h>> {
-        vec![
+        [
             self.create_udp_announce_ops(AnnounceEvent::Started),
             self.create_listener_ops(),
         ]
@@ -76,19 +82,22 @@ impl<'h> Handler<'h> for OperationController {
         .collect()
     }
 
-    fn next_operations(&mut self, last_operation_result: OperationOutput) -> Vec<Operation<'h>> {
+    fn next_operations(
+        &mut self,
+        last_operation_result: OperationOutput,
+    ) -> Option<Vec<Operation<'h>>> {
         match last_operation_result {
             OperationOutput::UdpAnnounce(response) => self.process_udp_announce_result(response),
             OperationOutput::DownloadFromPeer(monitor) => self.process_download_monitor(monitor),
             OperationOutput::UploadToPeer(monitor) => self.process_upload_monitor(monitor),
             OperationOutput::PeerConnectivity(result) => self.process_connect_result(result),
-            OperationOutput::PeerListen(monitor) => self.process_listener_result(monitor),
+            OperationOutput::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
             OperationOutput::HttpAnnounce(_) => {
                 todo!()
             }
             OperationOutput::Void => {
                 // TODO: timer, periodic announce?
-                Vec::new()
+                None
             }
         }
     }
@@ -137,35 +146,34 @@ impl<'h> OperationController {
             })
             .collect()
     }
+
+    #[allow(clippy::boxed_local)]
     fn process_udp_announce_result(
         &mut self,
-        result: Box<io::Result<AnnounceResponse>>,
-    ) -> Vec<Operation<'h>> {
-        match result.as_ref() {
-            Ok(response) => {
-                info!("Received announce response: {:?}", response);
-                response
-                    .ips
-                    .iter()
-                    .flat_map(|ip| {
-                        let new_peer = self.known_peers.insert(*ip);
-                        if new_peer {
-                            self.create_connect_ops(*ip)
-                        } else {
-                            Vec::new()
-                        }
-                    })
-                    .collect()
-            }
-            Err(e) => {
+        outcome: Box<io::Result<AnnounceResponse>>,
+    ) -> Option<Vec<Operation<'h>>> {
+        let response = outcome
+            .map_err(|e| {
                 info!("Announce error: {}", e);
-                Vec::new()
-            }
-        }
+                e
+            })
+            .ok()?;
+        info!("Received announce response: {:?}", response);
+        Some(
+            response
+                .ips
+                .into_iter()
+                .filter_map(|ip| {
+                    self.known_peers.insert(ip).then_some(outgoing_connect_fut(
+                        self.local_peer_id,
+                        *self.metainfo.info_hash(),
+                        ip,
+                    ))
+                })
+                .collect(),
+        )
     }
-}
 
-impl<'h> OperationController {
     fn create_listener_ops(&mut self) -> Vec<Operation<'h>> {
         match listener_on_addr(self.internal_local_ip) {
             Ok((monitor, receiver)) => {
@@ -177,12 +185,10 @@ impl<'h> OperationController {
                     }
                     OperationOutput::Void
                 };
-                let mut monitor = Box::new(monitor);
-                let monitor_fut = async move {
-                    monitor.handle_incoming().await;
-                    OperationOutput::PeerListen(monitor)
-                };
-                vec![runner_fut.boxed_local(), monitor_fut.boxed_local()]
+                vec![
+                    runner_fut.boxed_local(),
+                    listen_monitor_fut(Box::new(monitor)),
+                ]
             }
             Err(e) => {
                 error!("Failed to create TCP listener: {}", e);
@@ -190,169 +196,239 @@ impl<'h> OperationController {
             }
         }
     }
+
     fn process_listener_result(&mut self, mut monitor: Box<ListenMonitor>) -> Vec<Operation<'h>> {
         if let Some(stream) = monitor.take_pending_stream() {
-            let local_peer_id = self.local_peer_id;
-            let info_hash = *self.metainfo.info_hash();
-            let connect_fut = async move {
-                let result = channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await;
-                OperationOutput::PeerConnectivity(Box::new(result))
-            };
-            let listen_fut = async move {
-                monitor.handle_incoming().await;
-                OperationOutput::PeerListen(monitor)
-            };
-            vec![connect_fut.boxed_local(), listen_fut.boxed_local()]
+            let mut ops = vec![listen_monitor_fut(monitor)];
+            if let Ok(remote_ip) = stream.get_ref().peer_addr() {
+                self.known_peers.insert(remote_ip);
+                ops.push(incoming_connect_fut(
+                    self.local_peer_id,
+                    *self.metainfo.info_hash(),
+                    stream,
+                    remote_ip,
+                ));
+            }
+            ops
         } else {
             // error
             self.create_listener_ops()
         }
     }
-}
 
-impl<'h> OperationController {
-    fn create_connect_ops(&mut self, remote_ip: SocketAddr) -> Vec<Operation<'h>> {
-        let local_peer_id = self.local_peer_id;
-        let info_hash = *self.metainfo.info_hash();
-        let connect_fut = async move {
-            let result = channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await;
-            OperationOutput::PeerConnectivity(Box::new(result))
-        };
-        vec![connect_fut.boxed_local()]
-    }
     fn process_connect_result(
         &mut self,
-        result: Box<io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)>>,
-    ) -> Vec<Operation<'h>> {
-        match *result {
-            Ok((download_ch, upload_ch, runner)) => {
-                let runner_fut = async move {
-                    if let Err(e) = runner.run().await {
-                        warn!("Peer runner exited: {}", e);
-                    }
-                    OperationOutput::Void
-                };
-                let download_mon =
-                    Box::new(DownloadChannelMonitor::new(download_ch, self.piecekeeper.clone()));
-                let mut upload_mon = Box::new(UploadChannelMonitor::new(upload_ch));
-                let upload_ops = {
-                    if self.local_records.accounted_bytes() > 0 {
-                        let bitfield = self.local_records.generate_bitfield();
-                        let send_bitfield_fut = async move {
-                            let remote_ip = *upload_mon.remote_ip();
-                            match upload_mon
-                                .send_outgoing(iter::once(UploaderMessage::Bitfield(bitfield)))
-                                .await
-                            {
-                                Ok(()) => OperationOutput::UploadToPeer(Ok(upload_mon)),
-                                Err(_) => OperationOutput::UploadToPeer(Err(remote_ip)),
-                            }
-                        };
-                        vec![send_bitfield_fut.boxed_local()]
-                    } else {
-                        self.process_upload_monitor(Ok(upload_mon))
-                    }
-                };
-                vec![
-                    vec![runner_fut.boxed_local()],
-                    self.process_download_monitor(Ok(download_mon)),
-                    upload_ops,
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
-            }
-            Err(e) => {
-                error!("Failed to connect to peer: {}", e);
-                Vec::new()
-            }
-        }
-    }
-}
+        outcome: Result<Box<(DownloadChannel, UploadChannel, ConnectionRunner)>, SocketAddr>,
+    ) -> Option<Vec<Operation<'h>>> {
+        let (download_ch, upload_ch, runner) = *outcome.ok()?;
+        let remote_ip = *download_ch.remote_ip();
 
-impl<'h> OperationController {
+        let download_mon = Box::new(DownloadChannelMonitor::new(download_ch));
+        let upload_mon = Box::new(UploadChannelMonitor::new(upload_ch));
+
+        let mut peer_status = PeerStatus::new(self.pieces.clone());
+        if self.local_records.accounted_bytes() > 0 {
+            let bitfield = self.local_records.generate_bitfield();
+            peer_status.enqueue_uploader_msg(UploaderMessage::Bitfield(bitfield));
+        }
+        self.peer_statuses.insert(remote_ip, peer_status);
+
+        let connection_ops = vec![connection_runner_fut(runner)];
+        let download_ops = self.process_download_monitor(Ok(download_mon)).unwrap_or_default();
+        let upload_ops = self.process_upload_monitor(Ok(upload_mon)).unwrap_or_default();
+        Some([connection_ops, download_ops, upload_ops].into_iter().flatten().collect())
+    }
+
     fn process_download_monitor(
         &mut self,
         outcome: Result<Box<DownloadChannelMonitor>, SocketAddr>,
-    ) -> Vec<Operation<'h>> {
-        match outcome {
-            Err(remote_ip) => {
+    ) -> Option<Vec<Operation<'h>>> {
+        let mut monitor = outcome
+            .map_err(|remote_ip| {
                 error!("DownloadMonitor error, disconnected {}", &remote_ip);
                 self.known_peers.remove(&remote_ip);
-                Vec::new()
-            }
-            Ok(mut monitor) => {
-                // TODO: update state
-                for (info, data) in monitor.received_blocks() {
-                    if let Ok(global_offset) = self.piecekeeper.global_offset(
-                        info.piece_index,
-                        info.in_piece_offset,
-                        info.block_length,
-                    ) {
-                        self.local_records.submit_block(global_offset, info.block_length);
-                        self.filekeeper
-                            .write_block(global_offset, data)
-                            .expect("Failed to write to file");
+                self.peer_statuses.remove(&remote_ip);
+                remote_ip
+            })
+            .ok()?;
+
+        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
+        let state_update = monitor.last_update();
+
+        // update peer status
+        peer_status.update_download_state(
+            monitor.am_interested(),
+            monitor.peer_choking(),
+            &state_update,
+        );
+
+        // write and announce received blocks
+        for (info, data) in state_update.received_blocks {
+            if let Ok(global_offset) = self.local_records.submit_block(&info) {
+                self.filekeeper
+                    .write_block(global_offset, data)
+                    .expect("Failed to write to file");
+
+                if self.local_records.has_piece(info.piece_index) {
+                    for peer_status in self.peer_statuses.values_mut() {
+                        peer_status.enqueue_uploader_msg(UploaderMessage::Have {
+                            piece_index: info.piece_index,
+                        });
                     }
                 }
-                // TODO: schedule write? Or:
-                let read_fut = async move {
-                    let remote_ip = *monitor.remote_ip();
-                    match monitor.receive_incoming(Duration::from_secs(1)).await {
-                        Err(ChannelError::ConnectionClosed) => {
-                            OperationOutput::DownloadFromPeer(Err(remote_ip))
-                        }
-                        _ => OperationOutput::DownloadFromPeer(Ok(monitor)),
-                    }
-                };
-                vec![read_fut.boxed_local()]
             }
         }
+
+        // update piece tracker
+        for bitfield in state_update.received_bitfields {
+            self.piece_availability.add_bitfield_record(*monitor.remote_ip(), &bitfield);
+        }
+        for piece_index in state_update.received_haves {
+            self.piece_availability.add_single_record(*monitor.remote_ip(), piece_index);
+        }
+
+        // TODO: run engine
+
+        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
+        let pending_msgs = peer_status.take_pending_downloader_msgs();
+
+        let send_then_recv_fut = async move {
+            let remote_ip = *monitor.remote_ip();
+            let send_result = monitor.send_outgoing(pending_msgs).await;
+            if let Err(_e) = send_result {
+                return OperationOutput::DownloadFromPeer(Err(remote_ip));
+            }
+            match monitor.receive_incoming(Duration::from_secs(1)).await {
+                Err(ChannelError::ConnectionClosed) => {
+                    OperationOutput::DownloadFromPeer(Err(remote_ip))
+                }
+                _ => OperationOutput::DownloadFromPeer(Ok(monitor)),
+            }
+        };
+        Some(vec![send_then_recv_fut.boxed_local()])
     }
+
     fn process_upload_monitor(
         &mut self,
         outcome: Result<Box<UploadChannelMonitor>, SocketAddr>,
-    ) -> Vec<Operation<'h>> {
-        match outcome {
-            Err(remote_ip) => {
+    ) -> Option<Vec<Operation<'h>>> {
+        let mut monitor = outcome
+            .map_err(|remote_ip| {
                 error!("UploadMonitor error, disconnected {}", &remote_ip);
                 self.known_peers.remove(&remote_ip);
-                Vec::new()
+                self.peer_statuses.remove(&remote_ip);
+                remote_ip
+            })
+            .ok()?;
+
+        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
+        let state_update = monitor.last_update();
+
+        // update peer status
+        peer_status.update_upload_state(
+            monitor.peer_interested(),
+            monitor.am_choking(),
+            &state_update,
+        );
+
+        // temp: print received requests
+        let received_requests = state_update
+            .received_requests
+            .iter()
+            .map(|block_info| format!("{}", block_info))
+            .collect::<Vec<String>>()
+            .join(", ");
+        if !received_requests.is_empty() {
+            info!("{} Received requests: {}", &monitor.remote_ip(), received_requests);
+        }
+
+        // temp: print received cancellations
+        let received_cancels = state_update
+            .received_cancels
+            .iter()
+            .map(|block_info| format!("{}", block_info))
+            .collect::<Vec<String>>()
+            .join(", ");
+        if !received_cancels.is_empty() {
+            info!("{} Received cancellations: {}", &monitor.remote_ip(), received_cancels);
+        }
+
+        // TODO: run engine
+
+        let pending_msgs = peer_status.take_pending_uploader_msgs();
+
+        let send_then_recv_fut = async move {
+            let remote_ip = *monitor.remote_ip();
+            let send_result = monitor.send_outgoing(pending_msgs).await;
+            if let Err(_e) = send_result {
+                return OperationOutput::UploadToPeer(Err(remote_ip));
             }
-            Ok(mut monitor) => {
-                // TODO: update state
-                let received_requests = monitor
-                    .received_requests()
-                    .map(|block_info| format!("{}", block_info))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                if !received_requests.is_empty() {
-                    info!("{} Received requests: {}", &monitor.remote_ip(), received_requests);
+            match monitor.receive_incoming(Duration::from_secs(1)).await {
+                Err(ChannelError::ConnectionClosed) => {
+                    OperationOutput::UploadToPeer(Err(remote_ip))
                 }
-                let received_cancellations = monitor
-                    .received_cancellations()
-                    .map(|block_info| format!("{}", block_info))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                if !received_cancellations.is_empty() {
-                    info!(
-                        "{} Received cancellations: {}",
-                        &monitor.remote_ip(),
-                        received_cancellations
-                    );
-                }
-                // TODO: schedule write? Or:
-                let read_fut = async move {
-                    let remote_ip = *monitor.remote_ip();
-                    match monitor.receive_incoming(Duration::from_secs(1)).await {
-                        Err(ChannelError::ConnectionClosed) => {
-                            OperationOutput::UploadToPeer(Err(remote_ip))
-                        }
-                        _ => OperationOutput::UploadToPeer(Ok(monitor)),
-                    }
-                };
-                vec![read_fut.boxed_local()]
+                _ => OperationOutput::UploadToPeer(Ok(monitor)),
+            }
+        };
+        Some(vec![send_then_recv_fut.boxed_local()])
+    }
+}
+
+fn listen_monitor_fut(mut monitor: Box<ListenMonitor>) -> Operation<'static> {
+    async move {
+        monitor.handle_incoming().await;
+        OperationOutput::PeerListen(monitor)
+    }
+    .boxed_local()
+}
+
+fn incoming_connect_fut(
+    local_peer_id: [u8; 20],
+    info_hash: [u8; 20],
+    stream: Async<TcpStream>,
+    remote_ip: SocketAddr,
+) -> Operation<'static> {
+    async move {
+        match channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await {
+            Ok(channels) => {
+                info!("Successfully established an incoming connection to {remote_ip}");
+                OperationOutput::PeerConnectivity(Ok(Box::new(channels)))
+            }
+            Err(e) => {
+                error!("Failed to establish an incoming connection to {remote_ip}: {e}");
+                OperationOutput::PeerConnectivity(Err(remote_ip))
             }
         }
     }
+    .boxed_local()
+}
+
+fn outgoing_connect_fut(
+    local_peer_id: [u8; 20],
+    info_hash: [u8; 20],
+    remote_ip: SocketAddr,
+) -> Operation<'static> {
+    async move {
+        match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
+            Ok(channels) => {
+                info!("Successfully established an outgoing connection to {remote_ip}");
+                OperationOutput::PeerConnectivity(Ok(Box::new(channels)))
+            }
+            Err(e) => {
+                error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
+                OperationOutput::PeerConnectivity(Err(remote_ip))
+            }
+        }
+    }
+    .boxed_local()
+}
+
+fn connection_runner_fut(runner: ConnectionRunner) -> Operation<'static> {
+    async move {
+        if let Err(e) = runner.run().await {
+            warn!("Peer runner exited: {}", e);
+        }
+        OperationOutput::Void
+    }
+    .boxed_local()
 }

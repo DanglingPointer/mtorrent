@@ -8,7 +8,7 @@ pub trait Handler<'h> {
     fn next_operations(
         &mut self,
         last_operation_result: Self::OperationResult,
-    ) -> Vec<LocalBoxFuture<'h, Self::OperationResult>>;
+    ) -> Option<Vec<LocalBoxFuture<'h, Self::OperationResult>>>;
 }
 
 pub struct Dispatcher<'d, H: Handler<'d>> {
@@ -29,9 +29,10 @@ impl<'d, H: Handler<'d>> Dispatcher<'d, H> {
         let current_ops = mem::take(&mut self.ops);
         let (finished_result, _finished_index, mut pending_ops) =
             select_all(current_ops.into_iter()).await;
-        let mut next_ops = self.handler.next_operations(finished_result);
         self.ops.append(&mut pending_ops);
-        self.ops.append(&mut next_ops);
+        if let Some(mut next_ops) = self.handler.next_operations(finished_result) {
+            self.ops.append(&mut next_ops);
+        }
         true
     }
 }
