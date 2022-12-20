@@ -243,7 +243,7 @@ impl<'h> OperationController {
         &mut self,
         outcome: Result<Box<DownloadChannelMonitor>, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let mut monitor = outcome
+        let monitor = outcome
             .map_err(|remote_ip| {
                 error!("DownloadMonitor error, disconnected {}", &remote_ip);
                 self.known_peers.remove(&remote_ip);
@@ -293,28 +293,14 @@ impl<'h> OperationController {
 
         let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
         let pending_msgs = peer_status.take_pending_downloader_msgs();
-
-        let send_then_recv_fut = async move {
-            let remote_ip = *monitor.remote_ip();
-            let send_result = monitor.send_outgoing(pending_msgs).await;
-            if let Err(_e) = send_result {
-                return OperationOutput::DownloadFromPeer(Err(remote_ip));
-            }
-            match monitor.receive_incoming(Duration::from_secs(1)).await {
-                Err(ChannelError::ConnectionClosed) => {
-                    OperationOutput::DownloadFromPeer(Err(remote_ip))
-                }
-                _ => OperationOutput::DownloadFromPeer(Ok(monitor)),
-            }
-        };
-        Some(vec![send_then_recv_fut.boxed_local()])
+        Some(vec![download_monitor_fut(monitor, pending_msgs)])
     }
 
     fn process_upload_monitor(
         &mut self,
         outcome: Result<Box<UploadChannelMonitor>, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let mut monitor = outcome
+        let monitor = outcome
             .map_err(|remote_ip| {
                 error!("UploadMonitor error, disconnected {}", &remote_ip);
                 self.known_peers.remove(&remote_ip);
@@ -358,21 +344,7 @@ impl<'h> OperationController {
         // TODO: run engine
 
         let pending_msgs = peer_status.take_pending_uploader_msgs();
-
-        let send_then_recv_fut = async move {
-            let remote_ip = *monitor.remote_ip();
-            let send_result = monitor.send_outgoing(pending_msgs).await;
-            if let Err(_e) = send_result {
-                return OperationOutput::UploadToPeer(Err(remote_ip));
-            }
-            match monitor.receive_incoming(Duration::from_secs(1)).await {
-                Err(ChannelError::ConnectionClosed) => {
-                    OperationOutput::UploadToPeer(Err(remote_ip))
-                }
-                _ => OperationOutput::UploadToPeer(Ok(monitor)),
-            }
-        };
-        Some(vec![send_then_recv_fut.boxed_local()])
+        Some(vec![upload_monitor_fut(monitor, pending_msgs)])
     }
 }
 
@@ -431,6 +403,45 @@ fn connection_runner_fut(runner: ConnectionRunner) -> Operation<'static> {
             warn!("Peer runner exited: {}", e);
         }
         OperationOutput::Void
+    }
+    .boxed_local()
+}
+
+fn download_monitor_fut<I>(
+    mut monitor: Box<DownloadChannelMonitor>,
+    tx_msgs: I,
+) -> Operation<'static>
+where
+    I: Iterator<Item = DownloaderMessage> + 'static,
+{
+    async move {
+        let remote_ip = *monitor.remote_ip();
+        if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
+            return OperationOutput::DownloadFromPeer(Err(remote_ip));
+        }
+        match monitor.receive_incoming(Duration::from_secs(1)).await {
+            Err(ChannelError::ConnectionClosed) => {
+                OperationOutput::DownloadFromPeer(Err(remote_ip))
+            }
+            _ => OperationOutput::DownloadFromPeer(Ok(monitor)),
+        }
+    }
+    .boxed_local()
+}
+
+fn upload_monitor_fut<I>(mut monitor: Box<UploadChannelMonitor>, tx_msgs: I) -> Operation<'static>
+where
+    I: Iterator<Item = UploaderMessage> + 'static,
+{
+    async move {
+        let remote_ip = *monitor.remote_ip();
+        if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
+            return OperationOutput::UploadToPeer(Err(remote_ip));
+        }
+        match monitor.receive_incoming(Duration::from_secs(1)).await {
+            Err(ChannelError::ConnectionClosed) => OperationOutput::UploadToPeer(Err(remote_ip)),
+            _ => OperationOutput::UploadToPeer(Ok(monitor)),
+        }
     }
     .boxed_local()
 }
