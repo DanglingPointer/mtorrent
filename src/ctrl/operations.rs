@@ -276,6 +276,8 @@ impl<'h> OperationController {
                         });
                     }
                 }
+            } else {
+                error!("Received block ignored: {info}");
             }
         }
 
@@ -335,7 +337,7 @@ impl<'h> OperationController {
         let received_requests = state_update
             .received_requests
             .iter()
-            .map(|block_info| format!("{}", block_info))
+            .map(|block_info| format!("[{}]", block_info))
             .collect::<Vec<String>>()
             .join(", ");
         if !received_requests.is_empty() {
@@ -346,7 +348,7 @@ impl<'h> OperationController {
         let received_cancels = state_update
             .received_cancels
             .iter()
-            .map(|block_info| format!("{}", block_info))
+            .map(|block_info| format!("[{}]", block_info))
             .collect::<Vec<String>>()
             .join(", ");
         if !received_cancels.is_empty() {

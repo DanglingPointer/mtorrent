@@ -244,11 +244,7 @@ pub enum DownloaderMessage {
 
 impl fmt::Display for BlockInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[ind={} off={} len={}]",
-            self.piece_index, self.in_piece_offset, self.block_length
-        )
+        write!(f, "ind={} off={} len={}", self.piece_index, self.in_piece_offset, self.block_length)
     }
 }
 
@@ -314,11 +310,7 @@ impl fmt::Display for UploaderMessage {
                 write!(f, "Bitfield[len={}]", bitvec.len())
             }
             UploaderMessage::Block(info, _) => {
-                write!(
-                    f,
-                    "Block[ind={} off={} len={}]",
-                    info.piece_index, info.in_piece_offset, info.block_length
-                )
+                write!(f, "Block[{info}]")
             }
         }
     }
@@ -383,18 +375,10 @@ impl fmt::Display for DownloaderMessage {
                 write!(f, "NotInterested")
             }
             DownloaderMessage::Request(info) => {
-                write!(
-                    f,
-                    "Request[ind={} off={} len={}]",
-                    info.piece_index, info.in_piece_offset, info.block_length
-                )
+                write!(f, "Request[{info}]")
             }
             DownloaderMessage::Cancel(info) => {
-                write!(
-                    f,
-                    "Cancel[ind={} off={} len={}]",
-                    info.piece_index, info.in_piece_offset, info.block_length
-                )
+                write!(f, "Cancel[{info}]")
             }
         }
     }
