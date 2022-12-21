@@ -216,7 +216,7 @@ async fn read_u32_from<S: futures::AsyncReadExt + Unpin>(src: &mut S) -> io::Res
 
 // ------
 
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BlockInfo {
     pub piece_index: usize,
     pub in_piece_offset: usize,

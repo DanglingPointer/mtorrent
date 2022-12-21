@@ -2,6 +2,7 @@
 use crate::ctrl::channel_monitors::{DownloadChannelStateUpdate, UploadChannelStateUpdate};
 use crate::data::{BlockAccountant, PieceInfo};
 use crate::pwp::{BlockInfo, DownloaderMessage, UploaderMessage};
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::{cmp, mem};
 
@@ -16,6 +17,7 @@ pub struct PeerStatus {
 
     pending_tx_upload: Vec<UploaderMessage>,
     pending_tx_download: Vec<DownloaderMessage>,
+    requested_blocks: HashSet<BlockInfo>,
 }
 
 impl PeerStatus {
@@ -30,6 +32,7 @@ impl PeerStatus {
             bytes_received: 0,
             pending_tx_upload: Vec::new(),
             pending_tx_download: Vec::new(),
+            requested_blocks: HashSet::new(),
         }
     }
 
@@ -69,6 +72,7 @@ impl PeerStatus {
         }
         for (block_info, _) in &state.received_blocks {
             let _ = self.accountant.submit_block(block_info);
+            self.requested_blocks.remove(block_info);
         }
     }
 
@@ -133,7 +137,8 @@ impl PeerStatus {
                     &mut self.pending_tx_download,
                     |m| matches!(m, DownloaderMessage::Cancel(canceled_block) if canceled_block == requested_block),
                 );
-                !contained_cancel
+                let already_requested = self.requested_blocks.contains(requested_block);
+                !contained_cancel && !already_requested
             }
             DownloaderMessage::Cancel(canceled_block) => {
                 let contained_request = remove_if(
@@ -170,6 +175,17 @@ impl PeerStatus {
     }
 
     pub fn take_pending_downloader_msgs(&mut self) -> impl Iterator<Item = DownloaderMessage> {
+        for msg in &self.pending_tx_download {
+            match msg {
+                DownloaderMessage::Request(block) => {
+                    self.requested_blocks.insert(block.clone());
+                }
+                DownloaderMessage::Cancel(block) => {
+                    self.requested_blocks.remove(block);
+                }
+                _ => (),
+            }
+        }
         mem::take(&mut self.pending_tx_download).into_iter()
     }
 }
@@ -490,6 +506,66 @@ mod tests {
         for block in &all_blocks[11..12] {
             assert!(matches!(msgs.next(), Some(UploaderMessage::Block(info, _)) if &info == block));
         }
+        assert!(msgs.next().is_none());
+    }
+
+    fn test_peer_status_filters_requests_for_requested_but_not_yet_received_blocks() {
+        let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+
+        // given
+        let block = BlockInfo {
+            piece_index: 123,
+            in_piece_offset: 16384,
+            block_length: 1024,
+        };
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+        drop(ps.take_pending_downloader_msgs());
+
+        // when
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+
+        // then
+        let mut msgs = ps.take_pending_downloader_msgs();
+        assert!(msgs.next().is_none());
+
+        // when
+        let download_update = DownloadChannelStateUpdate {
+            received_blocks: vec![(block.clone(), Vec::new())],
+            ..Default::default()
+        };
+        ps.update_download_state(true, false, &download_update);
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+
+        // then
+        let mut msgs = ps.take_pending_downloader_msgs();
+        assert!(matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == block));
+        assert!(msgs.next().is_none());
+    }
+
+    #[test]
+    fn test_peer_status_doesnt_filter_duplicate_request_if_initial_one_was_canceled() {
+        let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+
+        // given
+        let block = BlockInfo {
+            piece_index: 123,
+            in_piece_offset: 16384,
+            block_length: 1024,
+        };
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+        drop(ps.take_pending_downloader_msgs());
+
+        ps.enqueue_downloader_msg(DownloaderMessage::Cancel(block.clone()));
+        let mut msgs = ps.take_pending_downloader_msgs();
+        assert!(matches!(msgs.next(), Some(DownloaderMessage::Cancel(info)) if info == block));
+        assert!(msgs.next().is_none());
+
+        // when
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+
+        // then
+        let mut msgs = ps.take_pending_downloader_msgs();
+        assert!(matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == block));
         assert!(msgs.next().is_none());
     }
 }
