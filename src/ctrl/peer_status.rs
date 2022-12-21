@@ -360,14 +360,8 @@ mod tests {
     }
 
     #[test]
-    fn test_peer_status_filters_duplicate_messages() {
+    fn test_peer_status_doesnt_filter_different_messages_of_same_type() {
         let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
-
-        ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 124 });
-        ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 124 });
-        let mut msgs = ps.take_pending_uploader_msgs();
-        assert!(matches!(msgs.next(), Some(UploaderMessage::Have { piece_index: 124 })));
-        assert!(msgs.next().is_none());
 
         ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 120 });
         ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 121 });
@@ -381,12 +375,6 @@ mod tests {
             in_piece_offset: 16384,
             block_length: 1024,
         };
-        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
-        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
-        let mut msgs = ps.take_pending_downloader_msgs();
-        assert!(matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == block));
-        assert!(msgs.next().is_none());
-
         let another_block = BlockInfo {
             piece_index: 100,
             in_piece_offset: 0,
@@ -399,6 +387,28 @@ mod tests {
         assert!(
             matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == another_block)
         );
+        assert!(msgs.next().is_none());
+    }
+
+    #[test]
+    fn test_peer_status_filters_duplicate_messages() {
+        let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+
+        ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 124 });
+        ps.enqueue_uploader_msg(UploaderMessage::Have { piece_index: 124 });
+        let mut msgs = ps.take_pending_uploader_msgs();
+        assert!(matches!(msgs.next(), Some(UploaderMessage::Have { piece_index: 124 })));
+        assert!(msgs.next().is_none());
+
+        let block = BlockInfo {
+            piece_index: 123,
+            in_piece_offset: 16384,
+            block_length: 1024,
+        };
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+        ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
+        let mut msgs = ps.take_pending_downloader_msgs();
+        assert!(matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == block));
         assert!(msgs.next().is_none());
     }
 }
