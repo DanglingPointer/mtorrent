@@ -42,6 +42,13 @@ impl PeerStatus {
         self.peer_interested = peer_interested;
         self.am_choking = am_choking;
         self.bytes_sent += state.bytes_uploaded;
+
+        for block in &state.received_cancels {
+            remove_if(
+                &mut self.pending_tx_upload,
+                |msg| matches!(msg, UploaderMessage::Block(info, _) if info == block),
+            );
+        }
     }
 
     pub fn update_download_state(
@@ -142,8 +149,24 @@ impl PeerStatus {
     }
 
     pub fn take_pending_uploader_msgs(&mut self) -> impl Iterator<Item = UploaderMessage> {
-        // TODO: limit the total number of bytes scheduled for upload, retain the rest
-        mem::take(&mut self.pending_tx_upload).into_iter()
+        const MAX_UPLOAD_SIZE: usize = MAX_BLOCK_SIZE * 10;
+        let mut total_upload_size = 0usize;
+        let first_postponed = self.pending_tx_upload.iter().enumerate().find_map(|(index, msg)| {
+            if let UploaderMessage::Block(info, _) = msg {
+                total_upload_size += info.block_length;
+            }
+            if total_upload_size > MAX_UPLOAD_SIZE {
+                Some(index)
+            } else {
+                None
+            }
+        });
+        if let Some(from) = first_postponed {
+            let postponed_tx_upload = self.pending_tx_upload.split_off(from);
+            mem::replace(&mut self.pending_tx_upload, postponed_tx_upload).into_iter()
+        } else {
+            mem::take(&mut self.pending_tx_upload).into_iter()
+        }
     }
 
     pub fn take_pending_downloader_msgs(&mut self) -> impl Iterator<Item = DownloaderMessage> {
@@ -409,6 +432,64 @@ mod tests {
         ps.enqueue_downloader_msg(DownloaderMessage::Request(block.clone()));
         let mut msgs = ps.take_pending_downloader_msgs();
         assert!(matches!(msgs.next(), Some(DownloaderMessage::Request(info)) if info == block));
+        assert!(msgs.next().is_none());
+    }
+
+    #[test]
+    fn test_peer_status_limits_upload_to_at_most_10_max_block_size() {
+        let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+
+        // given
+        ps.enqueue_uploader_msg(UploaderMessage::Unchoke);
+        let all_blocks: Vec<_> = divide_piece_into_blocks(100, MAX_BLOCK_SIZE * 12).collect();
+        for block in &all_blocks {
+            ps.enqueue_uploader_msg(UploaderMessage::Block(block.clone(), Vec::new()));
+        }
+
+        // when
+        let mut msgs = ps.take_pending_uploader_msgs();
+
+        // then
+        assert!(matches!(msgs.next(), Some(UploaderMessage::Unchoke)));
+        for block in &all_blocks[0..10] {
+            assert!(matches!(msgs.next(), Some(UploaderMessage::Block(info, _)) if &info == block));
+        }
+        assert!(msgs.next().is_none());
+
+        // when
+        let mut msgs = ps.take_pending_uploader_msgs();
+
+        // then
+        for block in &all_blocks[10..12] {
+            assert!(matches!(msgs.next(), Some(UploaderMessage::Block(info, _)) if &info == block));
+        }
+        assert!(msgs.next().is_none());
+    }
+
+    #[test]
+    fn test_peer_status_limits_upload_and_drops_canceled_blocks() {
+        let mut ps = PeerStatus::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+
+        // given
+        ps.enqueue_uploader_msg(UploaderMessage::Unchoke);
+        let all_blocks: Vec<_> = divide_piece_into_blocks(100, MAX_BLOCK_SIZE * 12).collect();
+        for block in &all_blocks {
+            ps.enqueue_uploader_msg(UploaderMessage::Block(block.clone(), Vec::new()));
+        }
+        drop(ps.take_pending_uploader_msgs());
+
+        // when
+        let upload_update = UploadChannelStateUpdate {
+            received_cancels: vec![all_blocks[10].clone()],
+            ..Default::default()
+        };
+        ps.update_upload_state(true, false, &upload_update);
+        let mut msgs = ps.take_pending_uploader_msgs();
+
+        // then
+        for block in &all_blocks[11..12] {
+            assert!(matches!(msgs.next(), Some(UploaderMessage::Block(info, _)) if &info == block));
+        }
         assert!(msgs.next().is_none());
     }
 }

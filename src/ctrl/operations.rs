@@ -466,11 +466,16 @@ impl OperationController {
             if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
                 return OperationOutput::UploadToPeer(Err(remote_ip));
             }
-            match monitor.receive_incoming(Duration::from_millis(100)).await {
-                Err(ChannelError::ConnectionClosed) => {
-                    OperationOutput::UploadToPeer(Err(remote_ip))
+            loop {
+                match monitor.receive_incoming(Duration::from_millis(500)).await {
+                    Err(ChannelError::ConnectionClosed) => {
+                        return OperationOutput::UploadToPeer(Err(remote_ip));
+                    }
+                    Err(ChannelError::Timeout) => {
+                        return OperationOutput::UploadToPeer(Ok(monitor));
+                    }
+                    _ => (),
                 }
-                _ => OperationOutput::UploadToPeer(Ok(monitor)),
             }
         }
         .boxed_local()
