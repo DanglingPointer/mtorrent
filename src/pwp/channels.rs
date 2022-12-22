@@ -4,7 +4,7 @@ use async_io::Async;
 use futures::channel::mpsc;
 use futures::io::BufWriter;
 use futures::prelude::*;
-use futures::select;
+use futures::{select, select_biased};
 use log::debug;
 use std::net::{SocketAddr, TcpStream};
 use std::rc::Rc;
@@ -296,7 +296,7 @@ impl<S: futures::AsyncWriteExt + Unpin> EgressStream<S> {
             Ok(())
         }
 
-        select! {
+        select_biased! {
             rx_msg = self.rx_outbound.next().fuse() => {
                 let msg = rx_msg.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
                 process_msg(msg, &mut self.rx_outbound, &mut self.sink, &self.remote_ip).await?;
@@ -632,6 +632,75 @@ mod tests {
 
         async_io::block_on(async { join!(send_msg_fut, run_fut) });
         drop(upload);
+    }
+
+    #[test]
+    fn test_writing_downloader_messages_takes_priority_over_uploader_messages() {
+        let (mut download, mut upload, runner) = setup_channels(
+            PendingStream {},
+            FakeSocket::default(),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+        );
+
+        let runner = Rc::new(RefCell::new(runner));
+        let runner_copy = runner.clone();
+
+        let send_uploader_msg_fut = async move {
+            upload
+                .send_message(UploaderMessage::Block(
+                    BlockInfo {
+                        piece_index: 0,
+                        in_piece_offset: 0,
+                        block_length: 16384,
+                    },
+                    vec![0u8; 1024],
+                ))
+                .await
+                .unwrap();
+        };
+        let send_downloader_msg_fut = async move {
+            download.send_message(DownloaderMessage::Interested).await.unwrap();
+        };
+        let runner_fut = async move {
+            loop {
+                runner_copy.borrow_mut().sender.write_one_message().await.unwrap();
+            }
+        };
+        let mut pool = LocalPool::new();
+
+        // given
+        pool.spawner().spawn_local(send_downloader_msg_fut).unwrap();
+        pool.spawner().spawn_local(send_uploader_msg_fut).unwrap();
+        pool.run_until_stalled();
+
+        // when
+        pool.spawner().spawn_local(runner_fut).unwrap();
+        pool.run_until_stalled();
+        drop(pool);
+
+        // then
+        let mut transmitted_data = runner.borrow().sender.sink.get_ref().clone();
+        async_io::block_on(async move {
+            transmitted_data.seek(SeekFrom::Start(0)).await.unwrap();
+
+            let first_msg = PeerMessage::read_from(&mut transmitted_data).await.unwrap();
+            assert!(matches!(first_msg, PeerMessage::Interested), "{:?}", first_msg);
+
+            let second_msg = PeerMessage::read_from(&mut transmitted_data).await.unwrap();
+            if let PeerMessage::Piece {
+                index,
+                begin,
+                block,
+            } = second_msg
+            {
+                assert_eq!(0, index);
+                assert_eq!(0, begin);
+                assert_eq!(vec![0u8; 1024], block);
+            } else {
+                panic!("{:?}", second_msg);
+            }
+        });
     }
 
     #[test]
