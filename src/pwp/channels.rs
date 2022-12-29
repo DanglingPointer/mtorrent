@@ -17,74 +17,64 @@ pub enum ChannelError {
     ConnectionClosed,
 }
 
-pub struct Channel<Rx, Tx> {
-    inbound: mpsc::Receiver<Rx>,
-    outbound: mpsc::Sender<Option<Tx>>,
-    info: Rc<PeerInfo>,
+pub struct PeerChannel<Q> {
+    peer_info: Rc<PeerInfo>,
+    inner: Q,
 }
 
-pub trait PeerChannel {
-    type RxMessage;
-    type TxMessage;
-}
-
-impl<Rx, Tx> Channel<Rx, Tx> {
-    pub async fn receive_message(&mut self) -> Result<Rx, ChannelError> {
-        self.inbound.next().await.ok_or(ChannelError::ConnectionClosed)
+impl<Q> PeerChannel<Q> {
+    pub fn remote_ip(&self) -> &SocketAddr {
+        &self.peer_info.remote_addr
     }
-    pub async fn receive_message_timed(&mut self, timeout: Duration) -> Result<Rx, ChannelError> {
-        select! {
+    pub fn remote_info(&self) -> &Handshake {
+        &self.peer_info.handshake_info
+    }
+}
+
+type RxChannel<Msg> = PeerChannel<mpsc::Receiver<Msg>>;
+type TxChannel<Msg> = PeerChannel<mpsc::Sender<Option<Msg>>>;
+
+impl<Msg> RxChannel<Msg> {
+    pub async fn receive_message(&mut self) -> Result<Msg, ChannelError> {
+        self.inner.next().await.ok_or(ChannelError::ConnectionClosed)
+    }
+
+    pub async fn receive_message_timed(&mut self, timeout: Duration) -> Result<Msg, ChannelError> {
+        select_biased! {
             msg = self.receive_message().fuse() => msg,
             error = delayed(ChannelError::Timeout, timeout).fuse() => Err(error),
         }
     }
-    pub async fn send_message(&mut self, msg: Tx) -> Result<(), ChannelError> {
-        self.outbound.send(Some(msg)).await?;
-        self.outbound.send(None).await?;
+}
+
+impl<Msg> TxChannel<Msg> {
+    pub async fn send_message(&mut self, msg: Msg) -> Result<(), ChannelError> {
+        self.inner.send(Some(msg)).await?;
+        self.inner.send(None).await?;
         Ok(())
     }
+
     pub async fn send_message_timed(
         &mut self,
-        msg: Tx,
+        msg: Msg,
         timeout: Duration,
     ) -> Result<(), ChannelError> {
-        select! {
+        select_biased! {
             res = self.send_message(msg).fuse() => res,
             expired = delayed(ChannelError::Timeout, timeout).fuse() => Err(expired)
         }
     }
-    pub fn remote_ip(&self) -> &SocketAddr {
-        &self.info.remote_addr
-    }
-    pub fn remote_info(&self) -> &Handshake {
-        &self.info.handshake_info
-    }
-
-    #[cfg(test)]
-    pub fn new(
-        inbound: mpsc::Receiver<Rx>,
-        outbound: mpsc::Sender<Option<Tx>>,
-        remote_ip: SocketAddr,
-    ) -> Self {
-        let info = Rc::new(PeerInfo {
-            handshake_info: Default::default(),
-            remote_addr: remote_ip,
-        });
-        Channel {
-            inbound,
-            outbound,
-            info,
-        }
-    }
 }
 
-impl<Rx, Tx> PeerChannel for Channel<Rx, Tx> {
-    type RxMessage = Rx;
-    type TxMessage = Tx;
-}
+pub type DownloadTxChannel = TxChannel<DownloaderMessage>;
+pub type DownloadRxChannel = RxChannel<UploaderMessage>;
+pub struct DownloadChannels(pub DownloadTxChannel, pub DownloadRxChannel);
 
-pub type DownloadChannel = Channel<UploaderMessage, DownloaderMessage>;
-pub type UploadChannel = Channel<DownloaderMessage, UploaderMessage>;
+pub type UploadTxChannel = TxChannel<UploaderMessage>;
+pub type UploadRxChannel = RxChannel<DownloaderMessage>;
+pub struct UploadChannels(pub UploadTxChannel, pub UploadRxChannel);
+
+// ------
 
 pub struct Runner<I, E>
 where
@@ -126,7 +116,7 @@ pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     socket: Async<TcpStream>,
-) -> io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)> {
+) -> io::Result<(DownloadChannels, UploadChannels, ConnectionRunner)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
@@ -146,7 +136,7 @@ pub async fn channels_from_outgoing(
     info_hash: &[u8; 20],
     remote_addr: SocketAddr,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannel, UploadChannel, ConnectionRunner)> {
+) -> io::Result<(DownloadChannels, UploadChannels, ConnectionRunner)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
@@ -174,7 +164,7 @@ fn setup_channels<I, E>(
     egress: E,
     remote_ip: SocketAddr,
     remote_handshake: Handshake,
-) -> (DownloadChannel, UploadChannel, Runner<I, E>)
+) -> (DownloadChannels, UploadChannels, Runner<I, E>)
 where
     I: futures::AsyncReadExt + Unpin,
     E: futures::AsyncWriteExt + Unpin,
@@ -206,18 +196,29 @@ where
         tx_outbound: local_uploader_msg_out,
     };
 
-    let rx_channel = DownloadChannel {
-        inbound: remote_uploader_msg_out,
-        outbound: local_downloader_msg_in,
-        info: info.clone(),
+    let download_rx = DownloadRxChannel {
+        inner: remote_uploader_msg_out,
+        peer_info: info.clone(),
     };
-    let tx_channel = UploadChannel {
-        inbound: remote_downloader_msg_out,
-        outbound: local_uploader_msg_in,
-        info,
+    let download_tx = DownloadTxChannel {
+        inner: local_downloader_msg_in,
+        peer_info: info.clone(),
     };
 
-    (rx_channel, tx_channel, Runner { receiver, sender })
+    let upload_rx = UploadRxChannel {
+        inner: remote_downloader_msg_out,
+        peer_info: info.clone(),
+    };
+    let upload_tx = UploadTxChannel {
+        inner: local_uploader_msg_in,
+        peer_info: info,
+    };
+
+    (
+        DownloadChannels(download_tx, download_rx),
+        UploadChannels(upload_tx, upload_rx),
+        Runner { receiver, sender },
+    )
 }
 
 struct IngressStream<S: futures::AsyncReadExt + Unpin> {
@@ -451,7 +452,7 @@ mod tests {
         );
 
         let upload_fut = async move {
-            let result = upload.receive_message().await;
+            let result = upload.1.receive_message().await;
             assert!(matches!(result, Ok(DownloaderMessage::Interested)));
         };
 
@@ -460,7 +461,7 @@ mod tests {
         };
 
         let download_fut = async move {
-            let result = download.receive_message().await;
+            let result = download.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
@@ -478,7 +479,7 @@ mod tests {
         );
 
         let download_fut = async move {
-            let result = download.receive_message().await;
+            let result = download.1.receive_message().await;
             assert!(matches!(result, Ok(UploaderMessage::Unchoke)));
         };
 
@@ -487,7 +488,7 @@ mod tests {
         };
 
         let upload_fut = async move {
-            let result = upload.receive_message().await;
+            let result = upload.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
@@ -510,12 +511,12 @@ mod tests {
         );
 
         let upload_fut = async {
-            let result = upload.receive_message().await;
+            let result = upload.1.receive_message().await;
             assert!(matches!(result, Ok(DownloaderMessage::Interested)));
         };
 
         let download_fut = async {
-            let result = download.receive_message().await;
+            let result = download.1.receive_message().await;
             assert!(matches!(result, Ok(UploaderMessage::Unchoke)));
         };
 
@@ -538,12 +539,12 @@ mod tests {
         );
 
         let download_fut = async {
-            let result = download.receive_message().await;
+            let result = download.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
         let upload_fut = async {
-            let result = upload.receive_message().await;
+            let result = upload.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
@@ -566,7 +567,7 @@ mod tests {
         );
 
         let send_msg_fut = async {
-            let result = download.send_message(DownloaderMessage::Interested).await;
+            let result = download.0.send_message(DownloaderMessage::Interested).await;
             assert!(result.is_ok());
         };
 
@@ -593,7 +594,7 @@ mod tests {
         );
 
         let send_msg_fut = async {
-            let result = upload.send_message(UploaderMessage::Unchoke).await;
+            let result = upload.0.send_message(UploaderMessage::Unchoke).await;
             assert!(result.is_ok());
         };
 
@@ -620,7 +621,7 @@ mod tests {
         );
 
         let send_msg_fut = async {
-            let result = download.send_message(DownloaderMessage::Interested).await;
+            let result = download.0.send_message(DownloaderMessage::Interested).await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
@@ -648,6 +649,7 @@ mod tests {
 
         let send_uploader_msg_fut = async move {
             upload
+                .0
                 .send_message(UploaderMessage::Block(
                     BlockInfo {
                         piece_index: 0,
@@ -660,7 +662,7 @@ mod tests {
                 .unwrap();
         };
         let send_downloader_msg_fut = async move {
-            download.send_message(DownloaderMessage::Interested).await.unwrap();
+            download.0.send_message(DownloaderMessage::Interested).await.unwrap();
         };
         let runner_fut = async move {
             loop {
@@ -766,13 +768,14 @@ mod tests {
 
         let fut_download_send = async {
             let result = download
+                .0
                 .send_message_timed(DownloaderMessage::NotInterested, Duration::from_secs(10))
                 .await;
             assert!(matches!(result, Err(ChannelError::Timeout)));
         };
 
         let fut_upload_receive = async {
-            let result = upload.receive_message_timed(Duration::from_secs(10)).await;
+            let result = upload.1.receive_message_timed(Duration::from_secs(10)).await;
             assert!(matches!(result, Err(ChannelError::Timeout)));
         };
 

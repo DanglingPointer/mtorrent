@@ -27,7 +27,7 @@ fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
     Ok(external_port)
 }
 
-async fn receive_from_peer(mut downlink: pwp::DownloadChannel, mut uplink: pwp::UploadChannel) {
+async fn receive_from_peer(mut downlink: pwp::DownloadRxChannel, mut uplink: pwp::UploadRxChannel) {
     let downlink_fut = async move {
         loop {
             if downlink.receive_message().await.is_err() {
@@ -57,7 +57,7 @@ async fn connect_to_peer(local_peer_id: &[u8; 20], info_hash: &[u8; 20], ip: Soc
                     error!("{} runner exited: {}", ip, e);
                 }
             };
-            let _ = join!(receive_from_peer(downlink, uplink), run_fut);
+            let _ = join!(receive_from_peer(downlink.1, uplink.1), run_fut);
         }
         Err(e) => {
             error!("{} connect failed: {}", ip, e);

@@ -3,10 +3,7 @@ mod handshake;
 mod listener;
 mod message;
 
-pub use channels::{
-    channels_from_incoming, channels_from_outgoing, ChannelError, ConnectionRunner,
-    DownloadChannel, UploadChannel,
-};
+pub use channels::*;
 pub use handshake::Handshake;
 pub use listener::{listener_on_addr, ListenMonitor, ListenerRunner};
 pub use message::{Bitfield, BlockInfo, DownloaderMessage, UploaderMessage};
