@@ -1,5 +1,5 @@
-mod channel_monitors;
 mod operations;
-mod peer_status;
+mod peers;
+mod utils;
 
 pub use operations::OperationController;

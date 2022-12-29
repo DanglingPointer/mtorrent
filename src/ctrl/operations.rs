@@ -1,5 +1,4 @@
-use crate::ctrl::channel_monitors::{DownloadChannelMonitor, UploadChannelMonitor};
-use crate::ctrl::peer_status::PeerStatus;
+use crate::ctrl::peers::*;
 use crate::data::{BlockAccountant, PieceInfo};
 use crate::data::{PieceTracker, Storage};
 use crate::pwp::*;
@@ -15,7 +14,6 @@ use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::rc::Rc;
-use std::time::Duration;
 use std::{io, mem};
 
 pub struct OperationController {
@@ -28,7 +26,8 @@ pub struct OperationController {
     local_records: BlockAccountant,
     piece_availability: PieceTracker,
     known_peers: HashSet<SocketAddr>,
-    peer_statuses: HashMap<SocketAddr, PeerStatus>,
+    peermgr: PeerManager,
+    stored_channels: HashMap<SocketAddr, (Option<DownloadTxChannel>, Option<UploadTxChannel>)>,
 }
 
 impl OperationController {
@@ -39,28 +38,32 @@ impl OperationController {
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
     ) -> Option<Self> {
-        let piecekeeper = Rc::new(PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
-        let local_records = BlockAccountant::new(piecekeeper.clone());
-        let piece_tracker = PieceTracker::new(piecekeeper.piece_count());
+        let pieces = Rc::new(PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
+        let local_records = BlockAccountant::new(pieces.clone());
+        let piece_tracker = PieceTracker::new(pieces.piece_count());
+        let peermgr = PeerManager::new(pieces.clone());
         Some(Self {
             metainfo,
             internal_local_ip,
             external_local_ip,
             local_peer_id,
-            pieces: piecekeeper,
+            pieces,
             filekeeper: Rc::new(filekeeper),
             local_records,
             piece_availability: piece_tracker,
             known_peers: HashSet::new(),
-            peer_statuses: HashMap::new(),
+            peermgr,
+            stored_channels: HashMap::new(),
         })
     }
 }
 
 pub enum OperationOutput {
-    DownloadFromPeer(Result<Box<DownloadChannelMonitor>, SocketAddr>),
-    UploadToPeer(Result<Box<UploadChannelMonitor>, SocketAddr>),
-    PeerConnectivity(Result<Box<(DownloadChannel, UploadChannel, ConnectionRunner)>, SocketAddr>),
+    DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),
+    DownloadMsgReceived(Result<(DownloadRxChannel, UploaderMessage), SocketAddr>),
+    UploadMsgSent(Result<UploadTxChannel, SocketAddr>),
+    UploadMsgReceived(Result<(UploadRxChannel, DownloaderMessage), SocketAddr>),
+    PeerConnectivity(Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<AnnounceResponse>>),
     HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
@@ -87,9 +90,13 @@ impl<'h> Handler<'h> for OperationController {
         last_operation_result: OperationOutput,
     ) -> Option<Vec<Operation<'h>>> {
         match last_operation_result {
+            OperationOutput::DownloadMsgSent(result) => self.process_download_msg_sent(result),
+            OperationOutput::DownloadMsgReceived(result) => {
+                self.process_download_msg_received(result)
+            }
+            OperationOutput::UploadMsgSent(result) => self.process_upload_msg_sent(result),
+            OperationOutput::UploadMsgReceived(result) => self.process_upload_msg_received(result),
             OperationOutput::UdpAnnounce(response) => self.process_udp_announce_result(response),
-            OperationOutput::DownloadFromPeer(monitor) => self.process_download_monitor(monitor),
-            OperationOutput::UploadToPeer(monitor) => self.process_upload_monitor(monitor),
             OperationOutput::PeerConnectivity(result) => self.process_connect_result(result),
             OperationOutput::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
             OperationOutput::HttpAnnounce(_) => {
@@ -218,156 +225,192 @@ impl<'h> OperationController {
 
     fn process_connect_result(
         &mut self,
-        outcome: Result<Box<(DownloadChannel, UploadChannel, ConnectionRunner)>, SocketAddr>,
+        outcome: Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let (download_ch, upload_ch, runner) = *outcome.ok()?;
-        let remote_ip = *download_ch.remote_ip();
+        let (download_chs, upload_chs, runner) = *outcome.ok()?;
+        let DownloadChannels(download_tx, download_rx) = download_chs;
+        let UploadChannels(upload_tx, upload_rx) = upload_chs;
 
-        let download_mon = Box::new(DownloadChannelMonitor::new(download_ch));
-        let upload_mon = Box::new(UploadChannelMonitor::new(upload_ch));
+        let remote_ip = *upload_rx.remote_ip();
 
-        let mut peer_status = PeerStatus::new(self.pieces.clone());
+        self.peermgr.add_peer(&remote_ip);
+        self.stored_channels.insert(remote_ip, (None, None));
+
         if self.local_records.accounted_bytes() > 0 {
             let bitfield = self.local_records.generate_bitfield();
-            peer_status.enqueue_uploader_msg(UploaderMessage::Bitfield(bitfield));
+            self.peermgr
+                .upload_monitor(&remote_ip)
+                .unwrap()
+                .submit_outbound(UploaderMessage::Bitfield(bitfield));
         }
-        self.peer_statuses.insert(remote_ip, peer_status);
 
-        let connection_ops = vec![Self::connection_runner_fut(runner)];
-        let download_ops = self.process_download_monitor(Ok(download_mon)).unwrap_or_default();
-        let upload_ops = self.process_upload_monitor(Ok(upload_mon)).unwrap_or_default();
-        Some([connection_ops, download_ops, upload_ops].into_iter().flatten().collect())
+        // TODO: run engine
+
+        let mut ops = vec![
+            Self::connection_runner_fut(runner),
+            Self::download_rx_channel_fut(download_rx),
+            Self::upload_rx_channel_fut(upload_rx),
+        ];
+        if let Some(mut tx_ops) = self.process_download_msg_sent(Ok(download_tx)) {
+            ops.append(&mut tx_ops);
+        }
+        if let Some(mut tx_ops) = self.process_upload_msg_sent(Ok(upload_tx)) {
+            ops.append(&mut tx_ops);
+        }
+        Some(ops)
     }
 
-    fn process_download_monitor(
+    fn process_download_msg_sent(
         &mut self,
-        outcome: Result<Box<DownloadChannelMonitor>, SocketAddr>,
+        outcome: Result<DownloadTxChannel, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let monitor = outcome
+        let tx_channel = outcome
             .map_err(|remote_ip| {
-                error!("DownloadMonitor error, disconnected {}", &remote_ip);
-                self.known_peers.remove(&remote_ip);
-                self.peer_statuses.remove(&remote_ip);
-                remote_ip
+                error!("DownloadTxChannel error, disconnected {remote_ip}");
+                self.peermgr.remove_peer(&remote_ip);
+                self.stored_channels.remove(&remote_ip);
             })
             .ok()?;
 
-        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
-        let state_update = monitor.last_update();
+        let download_handler = self.peermgr.download_handler(tx_channel.remote_ip())?;
+        if let Some(msg) = download_handler.next_outbound() {
+            Some(vec![Self::download_tx_channel_fut(tx_channel, msg)])
+        } else {
+            let (download_channel_slot, _) =
+                self.stored_channels.get_mut(tx_channel.remote_ip()).unwrap();
+            download_channel_slot.replace(tx_channel);
+            None
+        }
+    }
+    fn process_download_msg_received(
+        &mut self,
+        outcome: Result<(DownloadRxChannel, UploaderMessage), SocketAddr>,
+    ) -> Option<Vec<Operation<'h>>> {
+        let (rx_channel, msg) = outcome
+            .map_err(|remote_ip| {
+                error!("DownloadRxChannel error, disconnected {remote_ip}");
+                self.peermgr.remove_peer(&remote_ip);
+                self.stored_channels.remove(&remote_ip);
+            })
+            .ok()?;
 
-        // update peer status
-        peer_status.update_download_state(
-            monitor.am_interested(),
-            monitor.peer_choking(),
-            &state_update,
-        );
+        let remote_ip = *rx_channel.remote_ip();
+        self.peermgr.download_handler(&remote_ip)?.update_state(&msg);
 
-        // write and announce received blocks
-        for (info, data) in state_update.received_blocks {
-            if let Ok(global_offset) = self.local_records.submit_block(&info) {
-                self.filekeeper
-                    .write_block(global_offset, data)
-                    .expect("Failed to write to file");
+        match msg {
+            UploaderMessage::Block(info, data) => {
+                if let Ok(global_offset) = self.local_records.submit_block(&info) {
+                    // TODO: check hash
+                    self.filekeeper
+                        .write_block(global_offset, data)
+                        .expect("Failed to write to file");
 
-                if self.local_records.has_piece(info.piece_index) {
-                    for peer_status in self.peer_statuses.values_mut() {
-                        peer_status.enqueue_uploader_msg(UploaderMessage::Have {
-                            piece_index: info.piece_index,
-                        });
+                    if self.local_records.has_piece(info.piece_index) {
+                        for upload_monitor in self.peermgr.all_upload_monitors() {
+                            upload_monitor.submit_outbound(UploaderMessage::Have {
+                                piece_index: info.piece_index,
+                            });
+                        }
                     }
+                } else {
+                    error!("Received block ignored: {info}");
                 }
-            } else {
-                error!("Received block ignored: {info}");
             }
-        }
-
-        // update piece tracker
-        for bitfield in state_update.received_bitfields {
-            self.piece_availability.add_bitfield_record(*monitor.remote_ip(), &bitfield);
-        }
-        for piece_index in state_update.received_haves {
-            self.piece_availability.add_single_record(*monitor.remote_ip(), piece_index);
+            UploaderMessage::Bitfield(bitfield) => {
+                self.piece_availability.add_bitfield_record(remote_ip, &bitfield);
+            }
+            UploaderMessage::Have { piece_index } => {
+                self.piece_availability.add_single_record(remote_ip, piece_index);
+            }
+            _ => (),
         }
 
         // TODO: run engine
 
-        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
-        let pending_msgs = peer_status.take_pending_downloader_msgs();
-        Some(vec![Self::download_monitor_fut(monitor, pending_msgs)])
+        let mut ops = vec![Self::download_rx_channel_fut(rx_channel)];
+        let (download_channel_slot, _) = self.stored_channels.get_mut(&remote_ip).unwrap();
+        if let Some(tx_channel) = download_channel_slot.take() {
+            if let Some(msg) = self.peermgr.download_handler(&remote_ip).unwrap().next_outbound() {
+                ops.push(Self::download_tx_channel_fut(tx_channel, msg));
+            } else {
+                download_channel_slot.replace(tx_channel);
+            }
+        }
+        Some(ops)
     }
 
-    fn process_upload_monitor(
+    fn process_upload_msg_sent(
         &mut self,
-        outcome: Result<Box<UploadChannelMonitor>, SocketAddr>,
+        outcome: Result<UploadTxChannel, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let monitor = outcome
+        let tx_channel = outcome
             .map_err(|remote_ip| {
-                error!("UploadMonitor error, disconnected {}", &remote_ip);
-                self.known_peers.remove(&remote_ip);
-                self.peer_statuses.remove(&remote_ip);
-                remote_ip
+                error!("UploadTxChannel error, disconnected {remote_ip}");
+                self.peermgr.remove_peer(&remote_ip);
+                self.stored_channels.remove(&remote_ip);
             })
             .ok()?;
 
-        let peer_status = self.peer_statuses.get_mut(monitor.remote_ip())?;
-        let state_update = monitor.last_update();
-
-        // update peer status
-        peer_status.update_upload_state(
-            monitor.peer_interested(),
-            monitor.am_choking(),
-            &state_update,
-        );
-
-        // temp: print received requests
-        let received_requests = state_update
-            .received_requests
-            .iter()
-            .map(|block_info| format!("[{}]", block_info))
-            .collect::<Vec<String>>()
-            .join(", ");
-        if !received_requests.is_empty() {
-            info!("{} Received requests: {}", &monitor.remote_ip(), received_requests);
+        let upload_handler = self.peermgr.upload_handler(tx_channel.remote_ip())?;
+        if let Some(msg) = upload_handler.next_outbound() {
+            Some(vec![Self::upload_tx_channel_fut(
+                tx_channel,
+                msg,
+                self.pieces.clone(),
+                self.filekeeper.clone(),
+            )])
+        } else {
+            let (_, upload_channel_slot) =
+                self.stored_channels.get_mut(tx_channel.remote_ip()).unwrap();
+            upload_channel_slot.replace(tx_channel);
+            None
         }
+    }
 
-        // temp: print received cancellations
-        let received_cancels = state_update
-            .received_cancels
-            .iter()
-            .map(|block_info| format!("[{}]", block_info))
-            .collect::<Vec<String>>()
-            .join(", ");
-        if !received_cancels.is_empty() {
-            info!("{} Received cancellations: {}", &monitor.remote_ip(), received_cancels);
+    fn process_upload_msg_received(
+        &mut self,
+        outcome: Result<(UploadRxChannel, DownloaderMessage), SocketAddr>,
+    ) -> Option<Vec<Operation<'h>>> {
+        let (rx_channel, msg) = outcome
+            .map_err(|remote_ip| {
+                error!("UploadRxChannel error, disconnected {remote_ip}");
+                self.peermgr.remove_peer(&remote_ip);
+                self.stored_channels.remove(&remote_ip);
+            })
+            .ok()?;
+
+        let remote_ip = *rx_channel.remote_ip();
+        self.peermgr.upload_handler(&remote_ip)?.update_state(&msg);
+
+        match msg {
+            DownloaderMessage::Request(block) => {
+                info!("{} Received request: {}", &remote_ip, block);
+                // TODO
+            }
+            DownloaderMessage::Cancel(block) => {
+                info!("{} Received cancel: {}", &remote_ip, block);
+                // TODO
+            }
+            _ => (),
         }
 
         // TODO: run engine
 
-        fn fill_block_with_data(
-            mut msg: UploaderMessage,
-            pieces: &PieceInfo,
-            files: &Storage,
-        ) -> UploaderMessage {
-            if let UploaderMessage::Block(info, data) = &mut msg {
-                let global_offset = pieces
-                    .global_offset(info.piece_index, info.in_piece_offset, info.block_length)
-                    .expect("Logical error, this should never happen");
-                debug_assert!(data.is_empty());
-                let _ = mem::replace(
-                    data,
-                    files
-                        .read_block(global_offset, info.block_length)
-                        .expect("Failed to read from file"),
-                );
+        let mut ops = vec![Self::upload_rx_channel_fut(rx_channel)];
+        let (_, upload_channel_slot) = self.stored_channels.get_mut(&remote_ip).unwrap();
+        if let Some(tx_channel) = upload_channel_slot.take() {
+            if let Some(msg) = self.peermgr.upload_handler(&remote_ip).unwrap().next_outbound() {
+                ops.push(Self::upload_tx_channel_fut(
+                    tx_channel,
+                    msg,
+                    self.pieces.clone(),
+                    self.filekeeper.clone(),
+                ));
+            } else {
+                upload_channel_slot.replace(tx_channel);
             }
-            msg
         }
-        let piece_info = self.pieces.clone();
-        let storage = self.filekeeper.clone();
-        let pending_msgs = peer_status
-            .take_pending_uploader_msgs()
-            .map(move |msg| fill_block_with_data(msg, &piece_info, &storage));
-        Some(vec![Self::upload_monitor_fut(monitor, pending_msgs)])
+        Some(ops)
     }
 }
 
@@ -432,50 +475,68 @@ impl OperationController {
         .boxed_local()
     }
 
-    fn download_monitor_fut<I>(
-        mut monitor: Box<DownloadChannelMonitor>,
-        tx_msgs: I,
-    ) -> Operation<'static>
-    where
-        I: Iterator<Item = DownloaderMessage> + 'static,
-    {
+    fn download_rx_channel_fut(mut channel: DownloadRxChannel) -> Operation<'static> {
         async move {
-            let remote_ip = *monitor.remote_ip();
-            if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
-                return OperationOutput::DownloadFromPeer(Err(remote_ip));
-            }
-            match monitor.receive_incoming(Duration::from_secs(1)).await {
-                Err(ChannelError::ConnectionClosed) => {
-                    OperationOutput::DownloadFromPeer(Err(remote_ip))
-                }
-                _ => OperationOutput::DownloadFromPeer(Ok(monitor)),
+            let remote_ip = *channel.remote_ip();
+            match channel.receive_message().await {
+                Err(_) => OperationOutput::DownloadMsgReceived(Err(remote_ip)),
+                Ok(msg) => OperationOutput::DownloadMsgReceived(Ok((channel, msg))),
             }
         }
         .boxed_local()
     }
 
-    fn upload_monitor_fut<I>(
-        mut monitor: Box<UploadChannelMonitor>,
-        tx_msgs: I,
-    ) -> Operation<'static>
-    where
-        I: Iterator<Item = UploaderMessage> + 'static,
-    {
+    fn download_tx_channel_fut(
+        mut channel: DownloadTxChannel,
+        msg: DownloaderMessage,
+    ) -> Operation<'static> {
         async move {
-            let remote_ip = *monitor.remote_ip();
-            if let Err(_e) = monitor.send_outgoing(tx_msgs).await {
-                return OperationOutput::UploadToPeer(Err(remote_ip));
+            let remote_ip = *channel.remote_ip();
+            match channel.send_message(msg).await {
+                Err(_) => OperationOutput::DownloadMsgSent(Err(remote_ip)),
+                Ok(()) => OperationOutput::DownloadMsgSent(Ok(channel)),
             }
-            loop {
-                match monitor.receive_incoming(Duration::from_millis(500)).await {
-                    Err(ChannelError::ConnectionClosed) => {
-                        return OperationOutput::UploadToPeer(Err(remote_ip));
-                    }
-                    Err(ChannelError::Timeout) => {
-                        return OperationOutput::UploadToPeer(Ok(monitor));
-                    }
-                    _ => (),
-                }
+        }
+        .boxed_local()
+    }
+
+    fn upload_rx_channel_fut(mut channel: UploadRxChannel) -> Operation<'static> {
+        async move {
+            let remote_ip = *channel.remote_ip();
+            match channel.receive_message().await {
+                Err(_) => OperationOutput::UploadMsgReceived(Err(remote_ip)),
+                Ok(msg) => OperationOutput::UploadMsgReceived(Ok((channel, msg))),
+            }
+        }
+        .boxed_local()
+    }
+
+    fn upload_tx_channel_fut(
+        mut channel: UploadTxChannel,
+        mut msg: UploaderMessage,
+        pieces: Rc<PieceInfo>,
+        files: Rc<Storage>,
+    ) -> Operation<'static> {
+        fn fill_block_with_data(msg: &mut UploaderMessage, pieces: &PieceInfo, files: &Storage) {
+            if let UploaderMessage::Block(info, data) = msg {
+                let global_offset = pieces
+                    .global_offset(info.piece_index, info.in_piece_offset, info.block_length)
+                    .expect("Logical error, this should never happen");
+                debug_assert!(data.is_empty());
+                let _ = mem::replace(
+                    data,
+                    files
+                        .read_block(global_offset, info.block_length)
+                        .expect("Failed to read from file"),
+                );
+            }
+        }
+        async move {
+            fill_block_with_data(&mut msg, &pieces, &files);
+            let remote_ip = *channel.remote_ip();
+            match channel.send_message(msg).await {
+                Err(_) => OperationOutput::UploadMsgSent(Err(remote_ip)),
+                Ok(()) => OperationOutput::UploadMsgSent(Ok(channel)),
             }
         }
         .boxed_local()
