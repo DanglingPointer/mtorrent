@@ -267,8 +267,7 @@ impl<'h> OperationController {
         let tx_channel = outcome
             .map_err(|remote_ip| {
                 error!("DownloadTxChannel error, disconnected {remote_ip}");
-                self.peermgr.remove_peer(&remote_ip);
-                self.stored_channels.remove(&remote_ip);
+                self.erase_peer(&remote_ip);
             })
             .ok()?;
 
@@ -289,8 +288,7 @@ impl<'h> OperationController {
         let (rx_channel, msg) = outcome
             .map_err(|remote_ip| {
                 error!("DownloadRxChannel error, disconnected {remote_ip}");
-                self.peermgr.remove_peer(&remote_ip);
-                self.stored_channels.remove(&remote_ip);
+                self.erase_peer(&remote_ip);
             })
             .ok()?;
 
@@ -346,8 +344,7 @@ impl<'h> OperationController {
         let tx_channel = outcome
             .map_err(|remote_ip| {
                 error!("UploadTxChannel error, disconnected {remote_ip}");
-                self.peermgr.remove_peer(&remote_ip);
-                self.stored_channels.remove(&remote_ip);
+                self.erase_peer(&remote_ip);
             })
             .ok()?;
 
@@ -374,8 +371,7 @@ impl<'h> OperationController {
         let (rx_channel, msg) = outcome
             .map_err(|remote_ip| {
                 error!("UploadRxChannel error, disconnected {remote_ip}");
-                self.peermgr.remove_peer(&remote_ip);
-                self.stored_channels.remove(&remote_ip);
+                self.erase_peer(&remote_ip);
             })
             .ok()?;
 
@@ -415,6 +411,12 @@ impl<'h> OperationController {
 }
 
 impl OperationController {
+    fn erase_peer(&mut self, remote_ip: &SocketAddr) {
+        self.peermgr.remove_peer(remote_ip);
+        self.stored_channels.remove(remote_ip);
+        self.piece_availability.forget_peer(*remote_ip);
+    }
+
     fn listen_monitor_fut(mut monitor: Box<ListenMonitor>) -> Operation<'static> {
         async move {
             monitor.handle_incoming().await;
