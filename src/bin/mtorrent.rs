@@ -8,6 +8,7 @@ use mtorrent::utils::meta::Metainfo;
 use mtorrent::utils::upnp;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{env, fs, io};
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Metainfo> {
@@ -62,7 +63,7 @@ fn main() -> io::Result<()> {
         info!("UDP tracker found: {}", addr);
     }
 
-    let local_internal_ip = SocketAddrV4::new(get_local_ip()?, 6889);
+    let local_internal_ip = SocketAddrV4::new(get_local_ip()?, 23015);
     info!("Local internal ip address: {}", local_internal_ip);
 
     let output_dir = if let Some(arg) = env::args().nth(2) {
@@ -90,8 +91,11 @@ fn main() -> io::Result<()> {
         )?
     };
 
-    let port_opener_result =
-        upnp::PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP);
+    let port_opener_result = upnp::PortOpener::new(
+        local_internal_ip,
+        igd::PortMappingProtocol::TCP,
+        Duration::from_secs(60),
+    );
     let local_external_ip = match &port_opener_result {
         Ok(port_opener) => {
             debug!("UPnP succeeded");

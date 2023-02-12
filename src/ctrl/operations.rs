@@ -51,7 +51,7 @@ impl OperationController {
             filekeeper: Rc::new(filekeeper),
             local_records,
             piece_availability: piece_tracker,
-            known_peers: HashSet::new(),
+            known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
             peermgr,
             stored_channels: HashMap::new(),
         })
