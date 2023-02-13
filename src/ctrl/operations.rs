@@ -7,13 +7,14 @@ use crate::tracker::udp::{AnnounceEvent, AnnounceRequest, AnnounceResponse, UdpT
 use crate::tracker::utils::get_udp_tracker_addrs;
 use crate::utils::dispatch::Handler;
 use crate::utils::meta::Metainfo;
-use async_io::Async;
+use async_io::{Async, Timer};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::rc::Rc;
+use std::time::Duration;
 use std::{io, mem};
 
 pub struct OperationController {
@@ -58,6 +59,10 @@ impl OperationController {
     }
 }
 
+pub enum TimerType {
+    Reannounce,
+}
+
 pub enum OperationOutput {
     DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),
     DownloadMsgReceived(Result<(DownloadRxChannel, UploaderMessage), SocketAddr>),
@@ -67,6 +72,7 @@ pub enum OperationOutput {
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<AnnounceResponse>>),
     HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
+    Timeout(TimerType),
     Void,
 }
 
@@ -99,13 +105,9 @@ impl<'h> Handler<'h> for OperationController {
             OperationOutput::UdpAnnounce(response) => self.process_udp_announce_result(response),
             OperationOutput::PeerConnectivity(result) => self.process_connect_result(result),
             OperationOutput::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
-            OperationOutput::HttpAnnounce(_) => {
-                todo!()
-            }
-            OperationOutput::Void => {
-                // TODO: timer, periodic announce?
-                None
-            }
+            OperationOutput::HttpAnnounce(_) => todo!(),
+            OperationOutput::Timeout(timer) => self.process_timeout(timer),
+            OperationOutput::Void => None,
         }
     }
 }
@@ -129,13 +131,14 @@ impl<'h> OperationController {
 
         let downloaded = self.local_records.accounted_bytes();
         let left = self.local_records.missing_bytes();
+        let uploaded = self.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
         let announce_request = AnnounceRequest {
             info_hash: *self.metainfo.info_hash(),
             peer_id: self.local_peer_id,
             downloaded: downloaded as u64,
             left: left as u64,
-            uploaded: 0, // TODO
+            uploaded: uploaded as u64,
             event,
             ip: None,
             key: 0,
@@ -166,19 +169,19 @@ impl<'h> OperationController {
             })
             .ok()?;
         info!("Received announce response: {:?}", response);
-        Some(
-            response
-                .ips
-                .into_iter()
-                .filter_map(|ip| {
-                    self.known_peers.insert(ip).then_some(Self::outgoing_connect_fut(
-                        self.local_peer_id,
-                        *self.metainfo.info_hash(),
-                        ip,
-                    ))
-                })
-                .collect(),
-        )
+        let mut ops = response
+            .ips
+            .into_iter()
+            .filter_map(|ip| {
+                self.known_peers.insert(ip).then_some(Self::outgoing_connect_fut(
+                    self.local_peer_id,
+                    *self.metainfo.info_hash(),
+                    ip,
+                ))
+            })
+            .collect::<Vec<_>>();
+        ops.push(Self::timer_fut(Duration::from_secs(60 * 5), TimerType::Reannounce));
+        Some(ops)
     }
 
     fn create_listener_ops(&mut self) -> Vec<Operation<'h>> {
@@ -201,6 +204,12 @@ impl<'h> OperationController {
                 error!("Failed to create TCP listener: {}", e);
                 Vec::new()
             }
+        }
+    }
+
+    fn process_timeout(&mut self, what: TimerType) -> Option<Vec<Operation<'h>>> {
+        match what {
+            TimerType::Reannounce => Some(self.create_udp_announce_ops(AnnounceEvent::None)),
         }
     }
 
@@ -415,6 +424,14 @@ impl OperationController {
         self.peermgr.remove_peer(remote_ip);
         self.stored_channels.remove(remote_ip);
         self.piece_availability.forget_peer(*remote_ip);
+    }
+
+    fn timer_fut(delay: Duration, timer: TimerType) -> Operation<'static> {
+        async move {
+            Timer::after(delay).await;
+            OperationOutput::Timeout(timer)
+        }
+        .boxed_local()
     }
 
     fn listen_monitor_fut(mut monitor: Box<ListenMonitor>) -> Operation<'static> {
