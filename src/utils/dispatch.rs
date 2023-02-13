@@ -9,6 +9,7 @@ pub trait Handler<'h> {
         &mut self,
         last_operation_result: Self::OperationResult,
     ) -> Option<Vec<LocalBoxFuture<'h, Self::OperationResult>>>;
+    fn finished(&self) -> bool;
 }
 
 pub struct Dispatcher<'d, H: Handler<'d>> {
@@ -23,7 +24,7 @@ impl<'d, H: Handler<'d>> Dispatcher<'d, H> {
     }
 
     pub async fn dispatch_one(&mut self) -> bool {
-        if self.ops.is_empty() {
+        if self.ops.is_empty() || self.handler.finished() {
             return false;
         }
         let current_ops = mem::take(&mut self.ops);

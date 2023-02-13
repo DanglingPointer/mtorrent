@@ -29,6 +29,7 @@ pub struct OperationController {
     known_peers: HashSet<SocketAddr>,
     peermgr: PeerManager,
     stored_channels: HashMap<SocketAddr, (Option<DownloadTxChannel>, Option<UploadTxChannel>)>,
+    debug_finished: bool,
 }
 
 impl OperationController {
@@ -55,12 +56,14 @@ impl OperationController {
             known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
             peermgr,
             stored_channels: HashMap::new(),
+            debug_finished: false,
         })
     }
 }
 
 pub enum TimerType {
     Reannounce,
+    DebugShutdown,
 }
 
 pub enum OperationOutput {
@@ -85,6 +88,10 @@ impl<'h> Handler<'h> for OperationController {
         [
             self.create_udp_announce_ops(AnnounceEvent::Started),
             self.create_listener_ops(),
+            vec![Self::timer_fut(
+                Duration::from_secs(60),
+                TimerType::DebugShutdown,
+            )],
         ]
         .into_iter()
         .flatten()
@@ -109,6 +116,10 @@ impl<'h> Handler<'h> for OperationController {
             OperationOutput::Timeout(timer) => self.process_timeout(timer),
             OperationOutput::Void => None,
         }
+    }
+
+    fn finished(&self) -> bool {
+        self.local_records.missing_bytes() == 0 || self.debug_finished
     }
 }
 
@@ -210,6 +221,10 @@ impl<'h> OperationController {
     fn process_timeout(&mut self, what: TimerType) -> Option<Vec<Operation<'h>>> {
         match what {
             TimerType::Reannounce => Some(self.create_udp_announce_ops(AnnounceEvent::None)),
+            TimerType::DebugShutdown => {
+                self.debug_finished = true;
+                None
+            }
         }
     }
 
