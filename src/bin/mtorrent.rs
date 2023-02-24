@@ -1,5 +1,5 @@
 use log::{debug, error, info, Level};
-use mtorrent::ctrl::OperationController;
+use mtorrent::ctrl::OperationHandler;
 use mtorrent::data::Storage;
 use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
@@ -111,7 +111,7 @@ fn main() -> io::Result<()> {
     let local_peer_id = generate_local_peer_id();
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
-    let ctrl = OperationController::new(
+    let ctrl = OperationHandler::new(
         metainfo,
         filekeeper,
         local_internal_ip,
