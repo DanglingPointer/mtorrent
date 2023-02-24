@@ -125,8 +125,7 @@ async fn read_pstr_and_reserved<S: futures::AsyncReadExt + Unpin>(
     let pstr = {
         let mut pstr_bytes = vec![0u8; pstr_len];
         source.read_exact(&mut pstr_bytes).await?;
-        String::from_utf8(pstr_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "pstr is not utf8"))?
+        String::from_utf8_lossy(&pstr_bytes).to_string()
     };
     if pstr != "BitTorrent protocol" {
         return Err(io::Error::new(io::ErrorKind::Other, format!("Unknown protocol: '{}'", pstr)));
