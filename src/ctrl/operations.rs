@@ -7,7 +7,7 @@ use crate::tracker::udp::AnnounceResponse;
 use crate::tracker::udp::UdpTrackerConnection;
 use async_io::{Async, Timer};
 use futures::future::LocalBoxFuture;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::rc::Rc;
 use std::time::Duration;
@@ -67,15 +67,28 @@ impl Outcome {
         info_hash: [u8; 20],
         remote_ip: SocketAddr,
     ) -> Self {
-        info!("Trying to establish an outgoing connection to {remote_ip}");
-        match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
-            Ok(channels) => {
-                info!("Successfully established an outgoing connection to {remote_ip}");
-                Outcome::PeerConnectivity(Ok(Box::new(channels)))
-            }
-            Err(e) => {
-                error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
-                Outcome::PeerConnectivity(Err(remote_ip))
+        let mut attempts_left = 3;
+        let mut reconnect_interval = Duration::from_secs(2);
+        loop {
+            debug!("Connecting to {remote_ip}, attempts left: {attempts_left}");
+            match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
+                Ok(channels) => {
+                    info!("Successfully established an outgoing connection to {remote_ip} (attempts_left={attempts_left})");
+                    return Outcome::PeerConnectivity(Ok(Box::new(channels)));
+                }
+                Err(e) => match e.kind() {
+                    io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
+                        if attempts_left > 0 =>
+                    {
+                        Timer::after(reconnect_interval).await;
+                        attempts_left -= 1;
+                        reconnect_interval *= 2;
+                    }
+                    _ => {
+                        error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
+                        return Outcome::PeerConnectivity(Err(remote_ip));
+                    }
+                },
             }
         }
     }
