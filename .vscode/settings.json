@@ -1,0 +1,28 @@
+{
+    "search.exclude": {
+        "**/.git": true,
+        "**/test_output": true,
+        "**/target": true,
+        "**/.idea": true
+    },
+    "files.exclude": {
+        "**/.git": true,
+        "**/test_output": true,
+        "**/target": true,
+        "**/.idea": true
+    },
+    "editor.inlayHints.enabled": "offUnlessPressed",
+    "editor.formatOnSave": true,
+    "workbench.editor.enablePreview": false,
+    "rust-analyzer.lens.implementations.enable": false,
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.check.command": "clippy",
+    "gitlens.codeLens.enabled": false,
+    "editor.semanticTokenColorCustomizations": {
+        "rules": {
+            "*.mutable": {
+                "fontStyle": "",
+            },
+        },
+    },
+}
