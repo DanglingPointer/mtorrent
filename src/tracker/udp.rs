@@ -1,21 +1,20 @@
 use crate::tracker::utils;
-use async_io::{Async, Timer};
-use futures::prelude::*;
-use futures::select;
 use log::debug;
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::time::{Duration, Instant};
 use std::{io, str};
+use tokio::net::UdpSocket;
+use tokio::time::timeout;
 
 pub struct UdpTrackerConnection {
-    socket: Async<UdpSocket>,
+    socket: UdpSocket,
     connection_id: u64,
     connection_eof: Instant,
 }
 
 impl UdpTrackerConnection {
-    pub async fn from_connected_socket(socket: Async<UdpSocket>) -> io::Result<Self> {
+    pub async fn from_connected_socket(socket: UdpSocket) -> io::Result<Self> {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
@@ -126,7 +125,7 @@ impl UdpTrackerConnection {
     }
 
     async fn do_request<R, F>(
-        socket: &Async<UdpSocket>,
+        socket: &UdpSocket,
         request: Vec<u8>,
         process_response: F,
     ) -> io::Result<R>
@@ -144,23 +143,23 @@ impl UdpTrackerConnection {
             let timeout_sec = 15 * (1 << retransmit_n);
 
             let mut recv_buf = [0u8; 1024];
+            let receive_fut = async { socket.recv(&mut recv_buf).await };
 
-            let timeout_fut = async { Timer::after(Duration::from_secs(timeout_sec)).await };
-            select! {
-                read_res = socket.recv(&mut recv_buf).fuse() => {
+            match timeout(Duration::from_secs(timeout_sec), receive_fut).await {
+                Ok(read_res) => {
                     let bytes_read = read_res?;
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {
                         return Ok(result);
                     }
                 }
-                _ = timeout_fut.fuse() => {
+                Err(_) => {
                     if retransmit_n == 8 {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     retransmit_n += 1;
                     debug!("Retrying request, retransmit_n={}", retransmit_n);
                 }
-            };
+            }
         }
     }
 }
@@ -472,18 +471,16 @@ mod tests {
         assert_eq!(0x41727101980, parsed.connection_id);
     }
 
-    #[test]
-    fn test_connect_request_response() {
+    #[tokio::test]
+    async fn test_connect_request_response() {
         let server_addr = "localhost:6882";
         let client_addr = "localhost:6883";
 
-        let server_socket = UdpSocket::bind(server_addr).unwrap();
-        server_socket.connect(client_addr).unwrap();
-        let server_socket = Async::<UdpSocket>::try_from(server_socket).unwrap();
+        let server_socket = UdpSocket::bind(server_addr).await.unwrap();
+        server_socket.connect(client_addr).await.unwrap();
 
-        let client_socket = UdpSocket::bind(client_addr).unwrap();
-        client_socket.connect(server_addr).unwrap();
-        let client_socket = Async::<UdpSocket>::try_from(client_socket).unwrap();
+        let client_socket = UdpSocket::bind(client_addr).await.unwrap();
+        client_socket.connect(server_addr).await.unwrap();
 
         let client_fut = async {
             UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
@@ -512,6 +509,6 @@ mod tests {
             server_socket.send(&response).await.unwrap();
         };
 
-        async_io::block_on(async { join!(client_fut, server_fut) });
+        join!(client_fut, server_fut);
     }
 }

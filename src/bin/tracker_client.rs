@@ -1,4 +1,3 @@
-use async_io::Async;
 use futures::join;
 use futures::prelude::*;
 
@@ -8,9 +7,10 @@ use mtorrent::pwp;
 use mtorrent::tracker::udp::{AnnounceEvent, AnnounceRequest, UdpTrackerConnection};
 use mtorrent::utils::benc;
 use mtorrent::utils::meta;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use std::{env, fs};
+use tokio::net::UdpSocket;
 
 fn open_external_port(local_addr: SocketAddrV4) -> Result<u16, igd::Error> {
     info!("Searching gateway...");
@@ -160,39 +160,46 @@ fn main() {
         port: external_port,
     };
 
-    for tracker_addr in &udp_tracker_addrs {
-        info!("-----------------------------------------------------------------------");
-        info!("Creating client for tracker {} ...", tracker_addr);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            for tracker_addr in &udp_tracker_addrs {
+                info!("-----------------------------------------------------------------------");
+                info!("Creating client for tracker {} ...", tracker_addr);
 
-        let client_socket = UdpSocket::bind(local_addr).unwrap();
-        client_socket.connect(tracker_addr).unwrap();
-        let client_socket = Async::<UdpSocket>::try_from(client_socket).unwrap();
+                let client_socket = UdpSocket::bind(local_addr).await.unwrap();
+                client_socket.connect(tracker_addr).await.unwrap();
 
-        info!("Local socket at {} successfully bound to tracker at {}", local_addr, tracker_addr);
+                info!(
+                    "Local socket at {} successfully bound to tracker at {}",
+                    local_addr, tracker_addr
+                );
 
-        async_io::block_on(async {
-            let client = UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
+                let client =
+                    UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
 
-            let response = match client.do_announce_request(announce_request.clone()).await {
-                Ok(response) => {
-                    info!("Announce response: {:?}", response);
-                    Some(response)
+                let response = match client.do_announce_request(announce_request.clone()).await {
+                    Ok(response) => {
+                        info!("Announce response: {:?}", response);
+                        Some(response)
+                    }
+                    Err(e) => {
+                        error!("Announce error: {}", e);
+                        None
+                    }
+                };
+
+                if let Some(response) = response {
+                    future::join_all(
+                        response
+                            .ips
+                            .into_iter()
+                            .map(|ip| connect_to_peer(&local_peer_id, metainfo.info_hash(), ip)),
+                    )
+                    .await;
                 }
-                Err(e) => {
-                    error!("Announce error: {}", e);
-                    None
-                }
-            };
-
-            if let Some(response) = response {
-                future::join_all(
-                    response
-                        .ips
-                        .into_iter()
-                        .map(|ip| connect_to_peer(&local_peer_id, metainfo.info_hash(), ip)),
-                )
-                .await;
             }
         });
-    }
 }

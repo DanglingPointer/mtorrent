@@ -191,7 +191,7 @@ impl<'h> OperationHandler {
     fn process_listener_result(&mut self, mut monitor: Box<ListenMonitor>) -> Vec<Operation<'h>> {
         if let Some(stream) = monitor.take_pending_stream() {
             let mut ops = vec![Action::from_listen_monitor(monitor).boxed_local()];
-            if let Ok(remote_ip) = stream.get_ref().peer_addr() {
+            if let Ok(remote_ip) = stream.peer_addr() {
                 self.known_peers.insert(remote_ip);
                 ops.push(
                     Action::new_incoming_connect(

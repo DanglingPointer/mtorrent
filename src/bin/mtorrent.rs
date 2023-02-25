@@ -120,10 +120,14 @@ fn main() -> io::Result<()> {
     )
     .unwrap();
 
-    async_io::block_on(async move {
-        let mut dispatcher = Dispatcher::new(ctrl);
-        while dispatcher.dispatch_one().await {}
-    });
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async move {
+            let mut dispatcher = Dispatcher::new(ctrl);
+            while dispatcher.dispatch_one().await {}
+        });
 
     Ok(())
 }

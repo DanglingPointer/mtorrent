@@ -1,6 +1,6 @@
 use bitvec::prelude::*;
-use futures::prelude::*;
 use std::{fmt, io};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 
 pub type Bitfield = BitVec<u8, Msb0>;
 
@@ -38,9 +38,7 @@ pub(super) enum PeerMessage {
 }
 
 impl PeerMessage {
-    pub(super) async fn read_from<S: futures::AsyncReadExt + Unpin>(
-        src: &mut S,
-    ) -> io::Result<PeerMessage> {
+    pub(super) async fn read_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<PeerMessage> {
         use PeerMessage::*;
 
         let msg_len = read_u32_from(src).await? as usize;
@@ -112,9 +110,9 @@ impl PeerMessage {
         }
     }
 
-    pub(super) async fn write_to<S: futures::AsyncWriteExt + Unpin>(
+    pub(super) async fn write_to<S: AsyncWriteExt + Unpin>(
         &self,
-        dest: &mut futures::io::BufWriter<S>,
+        dest: &mut BufWriter<S>,
     ) -> io::Result<()> {
         use PeerMessage::*;
 
@@ -208,7 +206,7 @@ const ID_PIECE: u8 = 7;
 const ID_CANCEL: u8 = 8;
 const ID_PORT: u8 = 9;
 
-async fn read_u32_from<S: futures::AsyncReadExt + Unpin>(src: &mut S) -> io::Result<u32> {
+async fn read_u32_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<u32> {
     let mut bytes = [0u8; 4];
     src.read_exact(&mut bytes).await?;
     Ok(u32::from_be_bytes(bytes))

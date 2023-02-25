@@ -5,13 +5,14 @@ use crate::tracker::http::TrackerResponseContent;
 use crate::tracker::udp::AnnounceRequest;
 use crate::tracker::udp::AnnounceResponse;
 use crate::tracker::udp::UdpTrackerConnection;
-use async_io::{Async, Timer};
 use futures::future::LocalBoxFuture;
 use log::{debug, error, info, warn};
-use std::net::{SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
+use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::time::Duration;
 use std::{io, mem};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::time::sleep;
 
 pub enum TimerType {
     Reannounce,
@@ -35,7 +36,7 @@ pub type Operation<'o> = LocalBoxFuture<'o, Action>;
 
 impl Action {
     pub async fn new_timer(delay: Duration, timer: TimerType) -> Self {
-        Timer::after(delay).await;
+        sleep(delay).await;
         Action::Timeout(timer)
     }
 
@@ -47,7 +48,7 @@ impl Action {
     pub async fn new_incoming_connect(
         local_peer_id: [u8; 20],
         info_hash: [u8; 20],
-        stream: Async<TcpStream>,
+        stream: TcpStream,
         remote_ip: SocketAddr,
     ) -> Self {
         match channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await {
@@ -80,7 +81,7 @@ impl Action {
                     io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
                         if attempts_left > 0 =>
                     {
-                        Timer::after(reconnect_interval).await;
+                        sleep(reconnect_interval).await;
                         attempts_left -= 1;
                         reconnect_interval *= 2;
                     }
@@ -169,8 +170,8 @@ impl Action {
         request: AnnounceRequest,
     ) -> Self {
         let inner_fut = async move {
-            let socket = Async::<UdpSocket>::bind(local_addr)?;
-            socket.get_ref().connect(&tracker_addr)?;
+            let socket = UdpSocket::bind(local_addr).await?;
+            socket.connect(&tracker_addr).await?;
             let client = UdpTrackerConnection::from_connected_socket(socket).await?;
             info!("Connected to tracker at {}", tracker_addr);
             client.do_announce_request(request).await

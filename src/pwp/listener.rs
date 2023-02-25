@@ -1,38 +1,34 @@
-use async_io::Async;
 use futures::channel::mpsc;
-use futures::pin_mut;
 use futures::prelude::*;
 use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
+use tokio::net::{TcpListener, TcpStream};
 
 pub struct ListenerRunner {
-    channel: mpsc::Sender<Async<TcpStream>>,
-    listener: Async<TcpListener>,
+    channel: mpsc::Sender<TcpStream>,
+    listener_addr: SocketAddr,
 }
 
 impl ListenerRunner {
     pub async fn run(mut self) -> io::Result<()> {
-        let incoming = self.listener.incoming();
-        pin_mut!(incoming);
-
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
+        let listener = TcpListener::bind(self.listener_addr).await?;
+        loop {
+            let (stream, _addr) = listener.accept().await?;
             self.channel
                 .send(stream)
                 .await
                 .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
         }
-        unreachable!()
     }
 }
 
 pub struct ListenMonitor {
-    channel: mpsc::Receiver<Async<TcpStream>>,
-    pending_stream: Option<Async<TcpStream>>,
+    channel: mpsc::Receiver<TcpStream>,
+    pending_stream: Option<TcpStream>,
 }
 
 impl ListenMonitor {
-    pub fn take_pending_stream(&mut self) -> Option<Async<TcpStream>> {
+    pub fn take_pending_stream(&mut self) -> Option<TcpStream> {
         self.pending_stream.take()
     }
     pub async fn handle_incoming(&mut self) {
@@ -44,8 +40,7 @@ impl ListenMonitor {
 pub fn listener_on_addr<A: Into<SocketAddr>>(
     addr: A,
 ) -> io::Result<(ListenMonitor, ListenerRunner)> {
-    let listener = Async::<TcpListener>::bind(addr)?;
-    let (sender, receiver) = mpsc::channel::<Async<TcpStream>>(0);
+    let (sender, receiver) = mpsc::channel::<TcpStream>(0);
     Ok((
         ListenMonitor {
             channel: receiver,
@@ -53,7 +48,7 @@ pub fn listener_on_addr<A: Into<SocketAddr>>(
         },
         ListenerRunner {
             channel: sender,
-            listener,
+            listener_addr: addr.into(),
         },
     ))
 }
