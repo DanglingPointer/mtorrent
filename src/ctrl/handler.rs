@@ -158,7 +158,11 @@ impl<'h> OperationHandler {
             })
             .collect::<Vec<_>>();
         ops.push(
-            Outcome::new_timer(Duration::from_secs(60 * 5), TimerType::Reannounce).boxed_local(),
+            Outcome::new_timer(
+                Duration::from_secs(response.interval as u64),
+                TimerType::Reannounce,
+            )
+            .boxed_local(),
         );
         Some(ops)
     }
