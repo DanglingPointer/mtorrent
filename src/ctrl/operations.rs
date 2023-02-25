@@ -18,7 +18,7 @@ pub enum TimerType {
     DebugShutdown,
 }
 
-pub enum Outcome {
+pub enum Action {
     DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),
     DownloadMsgReceived(Result<(DownloadRxChannel, UploaderMessage), SocketAddr>),
     UploadMsgSent(Result<UploadTxChannel, SocketAddr>),
@@ -31,17 +31,17 @@ pub enum Outcome {
     Void,
 }
 
-pub type Operation<'o> = LocalBoxFuture<'o, Outcome>;
+pub type Operation<'o> = LocalBoxFuture<'o, Action>;
 
-impl Outcome {
+impl Action {
     pub async fn new_timer(delay: Duration, timer: TimerType) -> Self {
         Timer::after(delay).await;
-        Outcome::Timeout(timer)
+        Action::Timeout(timer)
     }
 
     pub async fn from_listen_monitor(mut monitor: Box<ListenMonitor>) -> Self {
         monitor.handle_incoming().await;
-        Outcome::PeerListen(monitor)
+        Action::PeerListen(monitor)
     }
 
     pub async fn new_incoming_connect(
@@ -53,11 +53,11 @@ impl Outcome {
         match channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await {
             Ok(channels) => {
                 info!("Successfully established an incoming connection to {remote_ip}");
-                Outcome::PeerConnectivity(Ok(Box::new(channels)))
+                Action::PeerConnectivity(Ok(Box::new(channels)))
             }
             Err(e) => {
                 error!("Failed to establish an incoming connection to {remote_ip}: {e}");
-                Outcome::PeerConnectivity(Err(remote_ip))
+                Action::PeerConnectivity(Err(remote_ip))
             }
         }
     }
@@ -74,7 +74,7 @@ impl Outcome {
             match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
                 Ok(channels) => {
                     info!("Successfully established an outgoing connection to {remote_ip} (attempts_left={attempts_left})");
-                    return Outcome::PeerConnectivity(Ok(Box::new(channels)));
+                    return Action::PeerConnectivity(Ok(Box::new(channels)));
                 }
                 Err(e) => match e.kind() {
                     io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
@@ -86,7 +86,7 @@ impl Outcome {
                     }
                     _ => {
                         error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
-                        return Outcome::PeerConnectivity(Err(remote_ip));
+                        return Action::PeerConnectivity(Err(remote_ip));
                     }
                 },
             }
@@ -97,7 +97,7 @@ impl Outcome {
         if let Err(e) = runner.run().await {
             warn!("Peer runner exited: {}", e);
         }
-        Outcome::Void
+        Action::Void
     }
 
     pub async fn from_listener_runner(receiver: ListenerRunner, local_ip: SocketAddrV4) -> Self {
@@ -105,14 +105,14 @@ impl Outcome {
         if let Err(e) = receiver.run().await {
             warn!("TCP Listener exited: {}", e);
         }
-        Outcome::Void
+        Action::Void
     }
 
     pub async fn from_download_rx_channel(mut channel: DownloadRxChannel) -> Self {
         let remote_ip = *channel.remote_ip();
         match channel.receive_message().await {
-            Err(_) => Outcome::DownloadMsgReceived(Err(remote_ip)),
-            Ok(msg) => Outcome::DownloadMsgReceived(Ok((channel, msg))),
+            Err(_) => Action::DownloadMsgReceived(Err(remote_ip)),
+            Ok(msg) => Action::DownloadMsgReceived(Ok((channel, msg))),
         }
     }
 
@@ -122,16 +122,16 @@ impl Outcome {
     ) -> Self {
         let remote_ip = *channel.remote_ip();
         match channel.send_message(msg).await {
-            Err(_) => Outcome::DownloadMsgSent(Err(remote_ip)),
-            Ok(()) => Outcome::DownloadMsgSent(Ok(channel)),
+            Err(_) => Action::DownloadMsgSent(Err(remote_ip)),
+            Ok(()) => Action::DownloadMsgSent(Ok(channel)),
         }
     }
 
     pub async fn from_upload_rx_channel(mut channel: UploadRxChannel) -> Self {
         let remote_ip = *channel.remote_ip();
         match channel.receive_message().await {
-            Err(_) => Outcome::UploadMsgReceived(Err(remote_ip)),
-            Ok(msg) => Outcome::UploadMsgReceived(Ok((channel, msg))),
+            Err(_) => Action::UploadMsgReceived(Err(remote_ip)),
+            Ok(msg) => Action::UploadMsgReceived(Ok((channel, msg))),
         }
     }
 
@@ -158,8 +158,8 @@ impl Outcome {
         fill_block_with_data(&mut msg, &pieces, &files);
         let remote_ip = *channel.remote_ip();
         match channel.send_message(msg).await {
-            Err(_) => Outcome::UploadMsgSent(Err(remote_ip)),
-            Ok(()) => Outcome::UploadMsgSent(Ok(channel)),
+            Err(_) => Action::UploadMsgSent(Err(remote_ip)),
+            Ok(()) => Action::UploadMsgSent(Ok(channel)),
         }
     }
 
@@ -175,6 +175,6 @@ impl Outcome {
             info!("Connected to tracker at {}", tracker_addr);
             client.do_announce_request(request).await
         };
-        Outcome::UdpAnnounce(Box::new(inner_fut.await))
+        Action::UdpAnnounce(Box::new(inner_fut.await))
     }
 }

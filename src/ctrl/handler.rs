@@ -60,14 +60,14 @@ impl OperationHandler {
 }
 
 impl<'h> Handler<'h> for OperationHandler {
-    type OperationResult = Outcome;
+    type OperationResult = Action;
 
     fn first_operations(&mut self) -> Vec<Operation<'h>> {
         [
             self.create_udp_announce_ops(AnnounceEvent::Started),
             self.create_listener_ops(),
             vec![
-                Outcome::new_timer(Duration::from_secs(60), TimerType::DebugShutdown).boxed_local(),
+                Action::new_timer(Duration::from_secs(60), TimerType::DebugShutdown).boxed_local(),
             ],
         ]
         .into_iter()
@@ -75,18 +75,18 @@ impl<'h> Handler<'h> for OperationHandler {
         .collect()
     }
 
-    fn next_operations(&mut self, last_operation_result: Outcome) -> Option<Vec<Operation<'h>>> {
+    fn next_operations(&mut self, last_operation_result: Action) -> Option<Vec<Operation<'h>>> {
         match last_operation_result {
-            Outcome::DownloadMsgSent(result) => self.process_download_msg_sent(result),
-            Outcome::DownloadMsgReceived(result) => self.process_download_msg_received(result),
-            Outcome::UploadMsgSent(result) => self.process_upload_msg_sent(result),
-            Outcome::UploadMsgReceived(result) => self.process_upload_msg_received(result),
-            Outcome::UdpAnnounce(response) => self.process_udp_announce_result(response),
-            Outcome::PeerConnectivity(result) => self.process_connect_result(result),
-            Outcome::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
-            Outcome::HttpAnnounce(_) => todo!(),
-            Outcome::Timeout(timer) => self.process_timeout(timer),
-            Outcome::Void => None,
+            Action::DownloadMsgSent(result) => self.process_download_msg_sent(result),
+            Action::DownloadMsgReceived(result) => self.process_download_msg_received(result),
+            Action::UploadMsgSent(result) => self.process_upload_msg_sent(result),
+            Action::UploadMsgReceived(result) => self.process_upload_msg_received(result),
+            Action::UdpAnnounce(response) => self.process_udp_announce_result(response),
+            Action::PeerConnectivity(result) => self.process_connect_result(result),
+            Action::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
+            Action::HttpAnnounce(_) => todo!(),
+            Action::Timeout(timer) => self.process_timeout(timer),
+            Action::Void => None,
         }
     }
 
@@ -120,8 +120,7 @@ impl<'h> OperationHandler {
             .map(|(index, tracker_addr)| {
                 let mut addr = self.internal_local_ip;
                 addr.set_port(addr.port() + index as u16);
-                Outcome::new_udp_announce(addr, tracker_addr, announce_request.clone())
-                    .boxed_local()
+                Action::new_udp_announce(addr, tracker_addr, announce_request.clone()).boxed_local()
             })
             .collect()
     }
@@ -148,7 +147,7 @@ impl<'h> OperationHandler {
             .into_iter()
             .filter_map(|ip| {
                 self.known_peers.insert(ip).then_some(
-                    Outcome::new_outgoing_connect(
+                    Action::new_outgoing_connect(
                         self.local_peer_id,
                         *self.metainfo.info_hash(),
                         ip,
@@ -158,11 +157,8 @@ impl<'h> OperationHandler {
             })
             .collect::<Vec<_>>();
         ops.push(
-            Outcome::new_timer(
-                Duration::from_secs(response.interval as u64),
-                TimerType::Reannounce,
-            )
-            .boxed_local(),
+            Action::new_timer(Duration::from_secs(response.interval as u64), TimerType::Reannounce)
+                .boxed_local(),
         );
         Some(ops)
     }
@@ -171,8 +167,8 @@ impl<'h> OperationHandler {
         match listener_on_addr(self.internal_local_ip) {
             Ok((monitor, receiver)) => {
                 vec![
-                    Outcome::from_listener_runner(receiver, self.internal_local_ip).boxed_local(),
-                    Outcome::from_listen_monitor(Box::new(monitor)).boxed_local(),
+                    Action::from_listener_runner(receiver, self.internal_local_ip).boxed_local(),
+                    Action::from_listen_monitor(Box::new(monitor)).boxed_local(),
                 ]
             }
             Err(e) => {
@@ -194,11 +190,11 @@ impl<'h> OperationHandler {
 
     fn process_listener_result(&mut self, mut monitor: Box<ListenMonitor>) -> Vec<Operation<'h>> {
         if let Some(stream) = monitor.take_pending_stream() {
-            let mut ops = vec![Outcome::from_listen_monitor(monitor).boxed_local()];
+            let mut ops = vec![Action::from_listen_monitor(monitor).boxed_local()];
             if let Ok(remote_ip) = stream.get_ref().peer_addr() {
                 self.known_peers.insert(remote_ip);
                 ops.push(
-                    Outcome::new_incoming_connect(
+                    Action::new_incoming_connect(
                         self.local_peer_id,
                         *self.metainfo.info_hash(),
                         stream,
@@ -238,9 +234,9 @@ impl<'h> OperationHandler {
         // TODO: run engine
 
         let mut ops = vec![
-            Outcome::from_connection_runner(runner).boxed_local(),
-            Outcome::from_download_rx_channel(download_rx).boxed_local(),
-            Outcome::from_upload_rx_channel(upload_rx).boxed_local(),
+            Action::from_connection_runner(runner).boxed_local(),
+            Action::from_download_rx_channel(download_rx).boxed_local(),
+            Action::from_upload_rx_channel(upload_rx).boxed_local(),
         ];
         if let Some(mut tx_ops) = self.process_download_msg_sent(Ok(download_tx)) {
             ops.append(&mut tx_ops);
@@ -264,7 +260,7 @@ impl<'h> OperationHandler {
 
         let download_handler = self.peermgr.download_handler(tx_channel.remote_ip())?;
         if let Some(msg) = download_handler.next_outbound() {
-            Some(vec![Outcome::from_download_tx_channel(tx_channel, msg).boxed_local()])
+            Some(vec![Action::from_download_tx_channel(tx_channel, msg).boxed_local()])
         } else {
             let (download_channel_slot, _) =
                 self.stored_channels.get_mut(tx_channel.remote_ip()).unwrap();
@@ -316,11 +312,11 @@ impl<'h> OperationHandler {
 
         // TODO: run engine
 
-        let mut ops = vec![Outcome::from_download_rx_channel(rx_channel).boxed_local()];
+        let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
         let (download_channel_slot, _) = self.stored_channels.get_mut(&remote_ip).unwrap();
         if let Some(tx_channel) = download_channel_slot.take() {
             if let Some(msg) = self.peermgr.download_handler(&remote_ip).unwrap().next_outbound() {
-                ops.push(Outcome::from_download_tx_channel(tx_channel, msg).boxed_local());
+                ops.push(Action::from_download_tx_channel(tx_channel, msg).boxed_local());
             } else {
                 download_channel_slot.replace(tx_channel);
             }
@@ -341,7 +337,7 @@ impl<'h> OperationHandler {
 
         let upload_handler = self.peermgr.upload_handler(tx_channel.remote_ip())?;
         if let Some(msg) = upload_handler.next_outbound() {
-            Some(vec![Outcome::from_upload_tx_channel(
+            Some(vec![Action::from_upload_tx_channel(
                 tx_channel,
                 msg,
                 self.pieces.clone(),
@@ -384,12 +380,12 @@ impl<'h> OperationHandler {
 
         // TODO: run engine
 
-        let mut ops = vec![Outcome::from_upload_rx_channel(rx_channel).boxed_local()];
+        let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
         let (_, upload_channel_slot) = self.stored_channels.get_mut(&remote_ip).unwrap();
         if let Some(tx_channel) = upload_channel_slot.take() {
             if let Some(msg) = self.peermgr.upload_handler(&remote_ip).unwrap().next_outbound() {
                 ops.push(
-                    Outcome::from_upload_tx_channel(
+                    Action::from_upload_tx_channel(
                         tx_channel,
                         msg,
                         self.pieces.clone(),
