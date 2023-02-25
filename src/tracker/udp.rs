@@ -2,7 +2,7 @@ use crate::tracker::utils;
 use async_io::{Async, Timer};
 use futures::prelude::*;
 use futures::select;
-use log::{debug, trace};
+use log::debug;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::str::Utf8Error;
 use std::time::{Duration, Instant};
@@ -76,7 +76,10 @@ impl UdpTrackerConnection {
                 }
 
                 match parse_response(data, transaction_id) {
-                    Ok(AnyResponse::Announce(announce)) => Some(Ok(announce)),
+                    Ok(AnyResponse::Announce(announce)) => {
+                        debug!("Received announce response: {:?}", announce);
+                        Some(Ok(announce))
+                    }
                     Ok(AnyResponse::Error(error)) => {
                         Some(Err(io::Error::new(io::ErrorKind::Other, error.message)))
                     }
@@ -108,7 +111,10 @@ impl UdpTrackerConnection {
                 }
 
                 match parse_response(data, transaction_id) {
-                    Ok(AnyResponse::Scrape(scrape)) => Some(Ok(scrape)),
+                    Ok(AnyResponse::Scrape(scrape)) => {
+                        debug!("Received scrape response: {:?}", scrape);
+                        Some(Ok(scrape))
+                    }
                     Ok(AnyResponse::Error(error)) => {
                         Some(Err(io::Error::new(io::ErrorKind::Other, error.message)))
                     }
@@ -130,7 +136,6 @@ impl UdpTrackerConnection {
         let mut retransmit_n = 0usize;
 
         loop {
-            trace!("Sending bytes: {:?}", request);
             let mut bytes_written: usize = 0;
             while bytes_written < request.len() {
                 bytes_written = socket.send(&request[bytes_written..]).await?;
@@ -144,7 +149,6 @@ impl UdpTrackerConnection {
             select! {
                 read_res = socket.recv(&mut recv_buf).fuse() => {
                     let bytes_read = read_res?;
-                    trace!("Received bytes: {:?}", &recv_buf[..bytes_read]);
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {
                         return Ok(result);
                     }
@@ -387,12 +391,14 @@ impl TryFrom<&[u8]> for AnnounceResponse {
     }
 }
 
+#[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
     pub completed: u32,
     pub leechers: u32,
 }
 
+#[derive(Debug)]
 pub struct ScrapeResponse(Vec<ScrapeResponseEntry>);
 
 impl TryFrom<&[u8]> for ScrapeResponse {

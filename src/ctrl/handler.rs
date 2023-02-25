@@ -133,11 +133,16 @@ impl<'h> OperationHandler {
     ) -> Option<Vec<Operation<'h>>> {
         let response = outcome
             .map_err(|e| {
-                info!("Announce error: {}", e);
+                error!("Announce error: {}", e);
                 e
             })
             .ok()?;
-        info!("Received announce response: {:?}", response);
+        info!(
+            "Received announce response with {} ips, {} seeders, {} leechers",
+            response.ips.len(),
+            response.seeders,
+            response.leechers,
+        );
         let mut ops = response
             .ips
             .into_iter()

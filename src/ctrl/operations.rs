@@ -170,9 +170,9 @@ impl Outcome {
     ) -> Self {
         let inner_fut = async move {
             let socket = Async::<UdpSocket>::bind(local_addr)?;
-            info!("Connecting to tracker at {}", tracker_addr);
-            socket.get_ref().connect(tracker_addr)?;
+            socket.get_ref().connect(&tracker_addr)?;
             let client = UdpTrackerConnection::from_connected_socket(socket).await?;
+            info!("Connected to tracker at {}", tracker_addr);
             client.do_announce_request(request).await
         };
         Outcome::UdpAnnounce(Box::new(inner_fut.await))
