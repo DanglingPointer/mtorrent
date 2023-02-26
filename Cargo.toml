@@ -6,14 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#hyper = { version = "0.14.17", features = ["client"] }
-#http = "0.2.6" # request, response
-#httparse = "1.6.0"
-#async-std = "1.10.0" #yield
-#async-net = "1.6.1"
-url = "2.2.2"
+reqwest = { version = "0.11.14", features = ["gzip"] }
+url = "2.3.1"
+form_urlencoded = "1.1.0"
+# urlencoding = "2.1.2"                                  # temp
 futures = "0.3.21"
-# async-io = "1.6.0"                                #timer, runtime
 rand = "0.8.5"
 bitvec = "1.0.0"
 igd = "0.12.0"

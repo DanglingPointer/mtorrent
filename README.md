@@ -1,7 +1,7 @@
 [![Tests](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml)
 
 # mtorrent
-Simple lightweight Bittorrent client in Rust. No Tokio, no threadpool, currently uses 2 threads in total. WIP.
+Simple lightweight Bittorrent client in Rust. Uses Tokio, no threadpool, currently uses 1 thread in total. WIP.
 
 ## Useful links
 - https://wiki.theory.org/BitTorrentSpecification
@@ -11,7 +11,7 @@ Simple lightweight Bittorrent client in Rust. No Tokio, no threadpool, currently
 #### Required:
 - [x] [Basic protocol](https://www.bittorrent.org/beps/bep_0003.html)
 - [ ] [Business logic](https://wiki.theory.org/BitTorrentSpecification#Algorithms)
-- [ ] HTTP engine (without thread pool / tokio)
+- [x] HTTP tracker client
 #### Optional:
 - [x] [Multitracker Metadata Extension](https://www.bittorrent.org/beps/bep_0012.html)
 - [x] [UDP Tracker Protocol](https://www.bittorrent.org/beps/bep_0015.html)

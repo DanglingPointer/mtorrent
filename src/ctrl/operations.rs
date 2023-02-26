@@ -1,7 +1,7 @@
 use crate::data::PieceInfo;
 use crate::data::Storage;
 use crate::pwp::*;
-use crate::tracker::http::TrackerResponseContent;
+use crate::tracker::http::AnnounceResponseContent;
 use crate::tracker::udp::AnnounceRequest;
 use crate::tracker::udp::AnnounceResponse;
 use crate::tracker::udp::UdpTrackerConnection;
@@ -27,7 +27,7 @@ pub enum Action {
     PeerConnectivity(Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<AnnounceResponse>>),
-    HttpAnnounce(Box<io::Result<TrackerResponseContent>>),
+    HttpAnnounce(Box<io::Result<AnnounceResponseContent>>),
     Timeout(TimerType),
     Void,
 }

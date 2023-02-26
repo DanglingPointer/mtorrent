@@ -1,12 +1,76 @@
 use crate::tracker::utils;
 use crate::utils::benc;
+use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::str;
-use url::{form_urlencoded, Url};
+use std::time::Duration;
+use std::{fmt, str};
+
+#[derive(Debug)]
+pub enum Error {
+    Http(reqwest::Error),
+    Benc(benc::ParseError),
+    Response(String),
+    Unsupported,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Http(e) => write!(f, "[http]{e}"),
+            Error::Benc(e) => write!(f, "[benc]{:?}", e),
+            Error::Response(s) => write!(f, "[response]{}", s),
+            Error::Unsupported => write!(f, "unsupported"),
+        }
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(value: reqwest::Error) -> Self {
+        Error::Http(value)
+    }
+}
+
+impl From<benc::ParseError> for Error {
+    fn from(value: benc::ParseError) -> Self {
+        Error::Benc(value)
+    }
+}
+
+pub async fn do_announce_request(
+    request_builder: TrackerRequestBuilder,
+) -> Result<AnnounceResponseContent, Error> {
+    let client = reqwest::Client::builder().gzip(true).timeout(Duration::from_secs(30)).build()?;
+    let announce_url = request_builder.build_announce();
+    log::debug!("Sending announce request to {}", announce_url);
+
+    let response_data = client.get(announce_url).send().await?.bytes().await?;
+    log::debug!("Announce response: {}", String::from_utf8_lossy(&response_data));
+
+    let entity = benc::Element::from_bytes(&response_data)?;
+    let content = AnnounceResponseContent::from_benc(entity)
+        .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".to_string())))?;
+
+    match content.failure_reason() {
+        Some(reason) => Err(Error::Response(reason.to_string())),
+        None => Ok(content),
+    }
+}
+
+pub async fn do_scrape_request(request_builder: TrackerRequestBuilder) -> Result<String, Error> {
+    let client = reqwest::Client::builder().gzip(true).timeout(Duration::from_secs(30)).build()?;
+    let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
+    log::debug!("Sending scrape request to {}", scrape_url);
+
+    let response_data = client.get(scrape_url).send().await?.bytes().await?;
+    log::debug!("Scrape response: {}", String::from_utf8_lossy(&response_data));
+
+    // TODO: parse response
+    Ok(String::from_utf8_lossy(&response_data).to_string())
+}
 
 pub struct TrackerRequestBuilder {
-    uri: Url,
+    base_url: Url,
     query: String,
 }
 
@@ -15,10 +79,16 @@ impl TryFrom<&str> for TrackerRequestBuilder {
 
     fn try_from(announce_url: &str) -> Result<Self, Self::Error> {
         Ok(TrackerRequestBuilder {
-            uri: Url::parse(announce_url)?,
+            base_url: Url::parse(announce_url)?,
             query: String::with_capacity(128),
         })
     }
+}
+
+pub enum Event {
+    Started,
+    Stopped,
+    Compeleted,
 }
 
 impl TrackerRequestBuilder {
@@ -38,8 +108,20 @@ impl TrackerRequestBuilder {
         self.append_tostring("uploaded", count)
     }
 
+    pub fn bytes_downloaded(&mut self, count: usize) -> &mut Self {
+        self.append_tostring("downloaded", count)
+    }
+
     pub fn bytes_left(&mut self, count: usize) -> &mut Self {
         self.append_tostring("left", count)
+    }
+
+    pub fn event(&mut self, event: Event) -> &mut Self {
+        match event {
+            Event::Started => self.append_tostring("event", "started"),
+            Event::Stopped => self.append_tostring("event", "stopped"),
+            Event::Compeleted => self.append_tostring("event", "compeleted"),
+        }
     }
 
     pub fn compact_support(&mut self) -> &mut Self {
@@ -52,19 +134,22 @@ impl TrackerRequestBuilder {
         self
     }
 
-    pub fn build_announce(mut self) -> Url {
+    fn build_announce(mut self) -> Url {
         if let Some(substr) = self.query.get(1..) {
-            self.uri.set_query(Some(substr));
+            self.base_url.set_query(Some(substr));
         }
-        self.uri
+        self.base_url
     }
 
-    pub fn build_scrape(mut self) -> Option<Url> {
-        if self.uri.path() != "/announce" {
+    fn build_scrape(mut self) -> Option<Url> {
+        if self.base_url.path() != "/announce" {
             None
         } else {
-            self.uri.set_path("/scrape");
-            Some(self.build_announce())
+            self.base_url.set_path("scrape");
+            if let Some(substr) = self.query.get(1..) {
+                self.base_url.set_query(Some(substr));
+            }
+            Some(self.base_url)
         }
     }
 
@@ -88,25 +173,21 @@ impl TrackerRequestBuilder {
 
 // -------------------------------------------------------------------------------------------------
 
-pub struct TrackerResponseContent {
+pub struct AnnounceResponseContent {
     root: BTreeMap<String, benc::Element>,
 }
 
-impl TryFrom<benc::Element> for TrackerResponseContent {
-    type Error = ();
-
-    fn try_from(e: benc::Element) -> Result<Self, Self::Error> {
+impl AnnounceResponseContent {
+    pub fn from_benc(e: benc::Element) -> Option<Self> {
         match e {
-            benc::Element::Dictionary(dict) => Ok(TrackerResponseContent {
+            benc::Element::Dictionary(dict) => Some(AnnounceResponseContent {
                 root: benc::convert_dictionary(dict),
             }),
-            _ => Err(()),
+            _ => None,
         }
     }
-}
 
-impl TrackerResponseContent {
-    pub fn failure_reason(&self) -> Option<&str> {
+    fn failure_reason(&self) -> Option<&str> {
         if let Some(benc::Element::ByteString(data)) = self.root.get("failure reason") {
             str::from_utf8(data).ok()
         } else {
@@ -165,6 +246,30 @@ impl TrackerResponseContent {
     }
 }
 
+impl fmt::Display for AnnounceResponseContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(warning) = self.warning_message() {
+            write!(f, "warning={warning} ")?;
+        }
+        if let Some(tracker_id) = self.tracker_id() {
+            write!(f, "tracker_id={tracker_id} ")?;
+        }
+        if let Some(interval) = self.interval() {
+            write!(f, "interval={interval} ")?;
+        }
+        if let Some(complete) = self.complete() {
+            write!(f, "complete={complete} ")?;
+        }
+        if let Some(incomplete) = self.incomplete() {
+            write!(f, "incomplete={incomplete} ")?;
+        }
+        if let Some(peers) = self.peers() {
+            write!(f, "peers={:?}", peers)?;
+        }
+        Ok(())
+    }
+}
+
 fn dictionary_peers(data: &[benc::Element]) -> impl Iterator<Item = SocketAddr> + '_ {
     fn to_addr_and_port(dict: &BTreeMap<benc::Element, benc::Element>) -> Option<SocketAddr> {
         let ip = dict.get(&benc::Element::from("ip"))?;
@@ -213,11 +318,20 @@ mod tests {
 
         let mut builder = TrackerRequestBuilder::try_from(url_base).unwrap();
         builder.info_hash(hash);
-        let uri = builder.build_scrape().unwrap();
+        let uri = builder.build_scrape();
 
         assert_eq!(
             "http://example.com/scrape?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A",
-            uri.as_str()
+            uri.unwrap().as_str()
         );
+    }
+    #[test]
+    fn test_unsupported_scrape_uri() {
+        let url_base = "http://example.com";
+
+        let builder = TrackerRequestBuilder::try_from(url_base).unwrap();
+        let uri = builder.build_scrape();
+
+        assert!(uri.is_none());
     }
 }

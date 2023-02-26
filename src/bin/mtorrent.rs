@@ -6,7 +6,7 @@ use mtorrent::utils::benc;
 use mtorrent::utils::dispatch::Dispatcher;
 use mtorrent::utils::meta::Metainfo;
 use mtorrent::utils::upnp;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, fs, io};
@@ -16,20 +16,6 @@ fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Metainfo> {
     let root_entity = benc::Element::from_bytes(&file_content)?;
     Metainfo::try_from(root_entity)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))
-}
-
-fn get_local_ip() -> io::Result<Ipv4Addr> {
-    let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
-    let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
-        .split_once(' ')
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Unexpected output from 'hostname -I'")
-        })?
-        .0
-        .to_string();
-    ipv4_string
-        .parse::<Ipv4Addr>()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
 }
 
 fn generate_local_peer_id() -> [u8; 20] {
@@ -63,7 +49,7 @@ fn main() -> io::Result<()> {
         info!("UDP tracker found: {}", addr);
     }
 
-    let local_internal_ip = SocketAddrV4::new(get_local_ip()?, 23015);
+    let local_internal_ip = SocketAddrV4::new(utils::get_local_ip()?, 23015);
     info!("Local internal ip address: {}", local_internal_ip);
 
     let output_dir = if let Some(arg) = env::args().nth(2) {

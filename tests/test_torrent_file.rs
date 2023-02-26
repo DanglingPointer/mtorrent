@@ -1,4 +1,5 @@
 use mtorrent::data;
+use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
 use mtorrent::utils::meta;
 use std::fs;
@@ -38,6 +39,18 @@ fn test_read_example_torrent_file() {
         assert_eq!(vec!["udp://tracker.tallpenguin.org:15760/announce"], tier);
 
         assert!(iter.next().is_none());
+    }
+    {
+        let mut http_iter = utils::get_http_tracker_addrs(&info).into_iter();
+        assert_eq!("http://tracker.trackerfix.com:80/announce", http_iter.next().unwrap());
+        assert!(http_iter.next().is_none());
+    }
+    {
+        let mut udp_iter = utils::get_udp_tracker_addrs(&info).into_iter();
+        assert_eq!("9.rarbg.me:2720", udp_iter.next().unwrap());
+        assert_eq!("9.rarbg.to:2740", udp_iter.next().unwrap());
+        assert_eq!("tracker.fatkhoala.org:13780", udp_iter.next().unwrap());
+        assert_eq!("tracker.tallpenguin.org:15760", udp_iter.next().unwrap());
     }
 
     let name = info.name().unwrap();
