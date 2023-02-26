@@ -654,9 +654,7 @@ mod tests {
             download.0.send_message(DownloaderMessage::Interested).await.unwrap();
         };
         let runner_fut = async move {
-            loop {
-                runner_copy.borrow_mut().sender.write_one_message().await.unwrap();
-            }
+            while runner_copy.borrow_mut().sender.write_one_message().await.is_ok() {}
         };
         let mut pool = LocalPool::new();
 
