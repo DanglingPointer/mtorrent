@@ -22,9 +22,9 @@ pub enum TimerType {
 
 pub enum Action {
     DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),
-    DownloadMsgReceived(Result<(DownloadRxChannel, UploaderMessage), SocketAddr>),
+    DownloadMsgReceived(Result<Box<(DownloadRxChannel, UploaderMessage)>, SocketAddr>),
     UploadMsgSent(Result<UploadTxChannel, SocketAddr>),
-    UploadMsgReceived(Result<(UploadRxChannel, DownloaderMessage), SocketAddr>),
+    UploadMsgReceived(Result<Box<(UploadRxChannel, DownloaderMessage)>, SocketAddr>),
     PeerConnectivity(Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<(udp::AnnounceResponse, String)>>),
@@ -114,7 +114,7 @@ impl Action {
         let remote_ip = *channel.remote_ip();
         match channel.receive_message().await {
             Err(_) => Action::DownloadMsgReceived(Err(remote_ip)),
-            Ok(msg) => Action::DownloadMsgReceived(Ok((channel, msg))),
+            Ok(msg) => Action::DownloadMsgReceived(Ok(Box::new((channel, msg)))),
         }
     }
 
@@ -133,7 +133,7 @@ impl Action {
         let remote_ip = *channel.remote_ip();
         match channel.receive_message().await {
             Err(_) => Action::UploadMsgReceived(Err(remote_ip)),
-            Ok(msg) => Action::UploadMsgReceived(Ok((channel, msg))),
+            Ok(msg) => Action::UploadMsgReceived(Ok(Box::new((channel, msg)))),
         }
     }
 
@@ -186,5 +186,16 @@ impl Action {
     ) -> Self {
         let inner_fut = async move { Ok((http::do_announce_request(request).await?, tracker_url)) };
         Action::HttpAnnounce(Box::new(inner_fut.await))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sizeof_action() {
+        let size = std::mem::size_of::<Action>();
+        assert!(size <= 64, "{size} > 64");
     }
 }

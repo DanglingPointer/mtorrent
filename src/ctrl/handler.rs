@@ -339,9 +339,9 @@ impl<'h> OperationHandler {
     }
     fn process_download_msg_received(
         &mut self,
-        outcome: Result<(DownloadRxChannel, UploaderMessage), SocketAddr>,
+        outcome: Result<Box<(DownloadRxChannel, UploaderMessage)>, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let (rx_channel, msg) = outcome
+        let (rx_channel, msg) = *outcome
             .map_err(|remote_ip| {
                 error!("DownloadRxChannel error, disconnected {remote_ip}");
                 self.erase_peer(&remote_ip);
@@ -354,12 +354,13 @@ impl<'h> OperationHandler {
         match msg {
             UploaderMessage::Block(info, data) => {
                 if let Ok(global_offset) = self.local_records.submit_block(&info) {
-                    // TODO: check hash
                     self.filekeeper
                         .write_block(global_offset, data)
                         .expect("Failed to write to file");
 
                     if self.local_records.has_piece(info.piece_index) {
+                        // TODO: check hash
+                        self.piece_availability.forget_piece(info.piece_index);
                         for upload_monitor in self.peermgr.all_upload_monitors() {
                             upload_monitor.submit_outbound(UploaderMessage::Have {
                                 piece_index: info.piece_index,
@@ -423,9 +424,9 @@ impl<'h> OperationHandler {
 
     fn process_upload_msg_received(
         &mut self,
-        outcome: Result<(UploadRxChannel, DownloaderMessage), SocketAddr>,
+        outcome: Result<Box<(UploadRxChannel, DownloaderMessage)>, SocketAddr>,
     ) -> Option<Vec<Operation<'h>>> {
-        let (rx_channel, msg) = outcome
+        let (rx_channel, msg) = *outcome
             .map_err(|remote_ip| {
                 error!("UploadRxChannel error, disconnected {remote_ip}");
                 self.erase_peer(&remote_ip);
