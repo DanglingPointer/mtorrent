@@ -3,17 +3,16 @@ use crate::ctrl::peers::*;
 use crate::data::{BlockAccountant, PieceInfo};
 use crate::data::{PieceTracker, Storage};
 use crate::pwp::*;
-use crate::tracker::udp::{AnnounceEvent, AnnounceRequest, AnnounceResponse};
-use crate::tracker::utils::get_udp_tracker_addrs;
+use crate::tracker::{http, udp, utils};
 use crate::utils::dispatch::Handler;
 use crate::utils::meta::Metainfo;
 use futures::prelude::*;
 use log::{error, info};
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::time::Duration;
+use std::{io, iter};
 
 pub struct OperationHandler {
     metainfo: Metainfo,
@@ -63,8 +62,11 @@ impl<'h> Handler<'h> for OperationHandler {
     type OperationResult = Action;
 
     fn first_operations(&mut self) -> Vec<Operation<'h>> {
+        let http_trackers = utils::get_http_tracker_addrs(&self.metainfo).into_iter();
+        let udp_trackers = utils::get_udp_tracker_addrs(&self.metainfo).into_iter();
         [
-            self.create_udp_announce_ops(AnnounceEvent::Started),
+            self.create_http_announce_ops(Some(http::AnnounceEvent::Started), http_trackers),
+            self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
             vec![
                 Action::new_timer(Duration::from_secs(60), TimerType::DebugShutdown).boxed_local(),
@@ -81,10 +83,10 @@ impl<'h> Handler<'h> for OperationHandler {
             Action::DownloadMsgReceived(result) => self.process_download_msg_received(result),
             Action::UploadMsgSent(result) => self.process_upload_msg_sent(result),
             Action::UploadMsgReceived(result) => self.process_upload_msg_received(result),
-            Action::UdpAnnounce(response) => self.process_udp_announce_result(response),
+            Action::UdpAnnounce(response) => self.process_udp_announce_result(*response),
+            Action::HttpAnnounce(response) => self.process_http_announce_result(*response),
             Action::PeerConnectivity(result) => self.process_connect_result(result),
             Action::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
-            Action::HttpAnnounce(_) => todo!(),
             Action::Timeout(timer) => self.process_timeout(timer),
             Action::Void => None,
         }
@@ -96,12 +98,16 @@ impl<'h> Handler<'h> for OperationHandler {
 }
 
 impl<'h> OperationHandler {
-    fn create_udp_announce_ops(&mut self, event: AnnounceEvent) -> Vec<Operation<'h>> {
+    fn create_udp_announce_ops(
+        &mut self,
+        event: udp::AnnounceEvent,
+        tracker_addrs: impl Iterator<Item = String>,
+    ) -> Vec<Operation<'h>> {
         let downloaded = self.local_records.accounted_bytes();
         let left = self.local_records.missing_bytes();
         let uploaded = self.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
-        let announce_request = AnnounceRequest {
+        let announce_request = udp::AnnounceRequest {
             info_hash: *self.metainfo.info_hash(),
             peer_id: self.local_peer_id,
             downloaded: downloaded as u64,
@@ -114,8 +120,7 @@ impl<'h> OperationHandler {
             port: self.external_local_ip.port(),
         };
 
-        get_udp_tracker_addrs(&self.metainfo)
-            .into_iter()
+        tracker_addrs
             .enumerate()
             .map(|(index, tracker_addr)| {
                 let mut addr = self.internal_local_ip;
@@ -125,19 +130,44 @@ impl<'h> OperationHandler {
             .collect()
     }
 
-    #[allow(clippy::boxed_local)]
+    fn create_http_announce_ops(
+        &mut self,
+        event: Option<http::AnnounceEvent>,
+        tracker_urls: impl Iterator<Item = String>,
+    ) -> Vec<Operation<'h>> {
+        let downloaded = self.local_records.accounted_bytes();
+        let left = self.local_records.missing_bytes();
+        let uploaded = self.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
+
+        tracker_urls
+            .filter_map(|url| {
+                let mut request = http::TrackerRequestBuilder::try_from(url.as_str())
+                    .map_err(|e| error!("Invalid tracker url ({url}): {e}"))
+                    .ok()?;
+                request
+                    .info_hash(self.metainfo.info_hash())
+                    .peer_id(&self.local_peer_id)
+                    .bytes_downloaded(downloaded)
+                    .bytes_left(left)
+                    .bytes_uploaded(uploaded)
+                    .numwant(50)
+                    .port(self.external_local_ip.port());
+                if let Some(event) = &event {
+                    request.event(*event);
+                }
+                Some(Action::new_http_announce(request, url).boxed_local())
+            })
+            .collect()
+    }
+
     fn process_udp_announce_result(
         &mut self,
-        outcome: Box<io::Result<AnnounceResponse>>,
+        outcome: io::Result<(udp::AnnounceResponse, String)>,
     ) -> Option<Vec<Operation<'h>>> {
-        let response = outcome
-            .map_err(|e| {
-                error!("Announce error: {}", e);
-                e
-            })
-            .ok()?;
+        let (response, tracker_addr) =
+            outcome.map_err(|e| error!("Udp announce error: {}", e)).ok()?;
         info!(
-            "Received announce response with {} ips, {} seeders, {} leechers",
+            "Received UDP announce response with {} ips, {} seeders, {} leechers",
             response.ips.len(),
             response.seeders,
             response.leechers,
@@ -157,8 +187,42 @@ impl<'h> OperationHandler {
             })
             .collect::<Vec<_>>();
         ops.push(
-            Action::new_timer(Duration::from_secs(response.interval as u64), TimerType::Reannounce)
-                .boxed_local(),
+            Action::new_timer(
+                Duration::from_secs(response.interval as u64),
+                TimerType::UdpReannounce { tracker_addr },
+            )
+            .boxed_local(),
+        );
+        Some(ops)
+    }
+
+    fn process_http_announce_result(
+        &mut self,
+        outcome: Result<(http::AnnounceResponseContent, String), http::Error>,
+    ) -> Option<Vec<Operation<'h>>> {
+        let (response, tracker_url) =
+            outcome.map_err(|e| error!("Http announce error: {e}")).ok()?;
+        info!("Received HTTP announce response: {response}");
+        let mut ops = response
+            .peers()?
+            .into_iter()
+            .filter_map(|ip| {
+                self.known_peers.insert(ip).then_some(
+                    Action::new_outgoing_connect(
+                        self.local_peer_id,
+                        *self.metainfo.info_hash(),
+                        ip,
+                    )
+                    .boxed_local(),
+                )
+            })
+            .collect::<Vec<_>>();
+        ops.push(
+            Action::new_timer(
+                Duration::from_secs(response.interval().unwrap_or(900) as u64),
+                TimerType::HttpReannounce { tracker_url },
+            )
+            .boxed_local(),
         );
         Some(ops)
     }
@@ -180,11 +244,16 @@ impl<'h> OperationHandler {
 
     fn process_timeout(&mut self, what: TimerType) -> Option<Vec<Operation<'h>>> {
         match what {
-            TimerType::Reannounce => Some(self.create_udp_announce_ops(AnnounceEvent::None)),
             TimerType::DebugShutdown => {
                 self.debug_finished = true;
                 None
             }
+            TimerType::HttpReannounce { tracker_url } => {
+                Some(self.create_http_announce_ops(None, iter::once(tracker_url)))
+            }
+            TimerType::UdpReannounce { tracker_addr } => Some(
+                self.create_udp_announce_ops(udp::AnnounceEvent::None, iter::once(tracker_addr)),
+            ),
         }
     }
 

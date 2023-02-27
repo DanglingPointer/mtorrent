@@ -85,7 +85,8 @@ impl TryFrom<&str> for TrackerRequestBuilder {
     }
 }
 
-pub enum Event {
+#[derive(Clone, Copy)]
+pub enum AnnounceEvent {
     Started,
     Stopped,
     Compeleted,
@@ -116,12 +117,16 @@ impl TrackerRequestBuilder {
         self.append_tostring("left", count)
     }
 
-    pub fn event(&mut self, event: Event) -> &mut Self {
+    pub fn event(&mut self, event: AnnounceEvent) -> &mut Self {
         match event {
-            Event::Started => self.append_tostring("event", "started"),
-            Event::Stopped => self.append_tostring("event", "stopped"),
-            Event::Compeleted => self.append_tostring("event", "compeleted"),
+            AnnounceEvent::Started => self.append_tostring("event", "started"),
+            AnnounceEvent::Stopped => self.append_tostring("event", "stopped"),
+            AnnounceEvent::Compeleted => self.append_tostring("event", "compeleted"),
         }
+    }
+
+    pub fn numwant(&mut self, num_want: usize) -> &mut Self {
+        self.append_tostring("numwant", num_want)
     }
 
     pub fn compact_support(&mut self) -> &mut Self {
@@ -301,12 +306,17 @@ mod tests {
         let url_base = "http://example.com/announce";
 
         let mut builder = TrackerRequestBuilder::try_from(url_base).unwrap();
-        builder.info_hash(hash).bytes_left(42).bytes_uploaded(3).no_peer_id();
+        builder
+            .info_hash(hash)
+            .bytes_left(42)
+            .bytes_uploaded(3)
+            .no_peer_id()
+            .numwant(50);
 
         let uri = builder.build_announce();
 
         assert_eq!(
-            "http://example.com/announce?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A&left=42&uploaded=3&no_peer_id=1",
+            "http://example.com/announce?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A&left=42&uploaded=3&no_peer_id=1&numwant=50",
             uri.as_str());
     }
 

@@ -74,7 +74,7 @@ async fn test_http_announce() {
         .bytes_left(0)
         .bytes_uploaded(0)
         .bytes_downloaded(0)
-        .event(http::Event::Started)
+        .event(http::AnnounceEvent::Started)
         .port(6666);
 
     let response = http::do_announce_request(request)
@@ -101,7 +101,7 @@ async fn test_https_announce() {
             .bytes_left(0)
             .bytes_uploaded(0)
             .bytes_downloaded(0)
-            .event(http::Event::Started)
+            .event(http::AnnounceEvent::Started)
             .port(6666);
 
         let response = http::do_announce_request(request)

@@ -1,10 +1,6 @@
-use crate::data::PieceInfo;
-use crate::data::Storage;
+use crate::data::{PieceInfo, Storage};
 use crate::pwp::*;
-use crate::tracker::http::AnnounceResponseContent;
-use crate::tracker::udp::AnnounceRequest;
-use crate::tracker::udp::AnnounceResponse;
-use crate::tracker::udp::UdpTrackerConnection;
+use crate::tracker::{http, udp};
 use futures::future::LocalBoxFuture;
 use log::{debug, error, info, warn};
 use std::net::{SocketAddr, SocketAddrV4};
@@ -15,7 +11,12 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::sleep;
 
 pub enum TimerType {
-    Reannounce,
+    HttpReannounce {
+        tracker_url: String,
+    },
+    UdpReannounce {
+        tracker_addr: String,
+    },
     DebugShutdown,
 }
 
@@ -26,8 +27,8 @@ pub enum Action {
     UploadMsgReceived(Result<(UploadRxChannel, DownloaderMessage), SocketAddr>),
     PeerConnectivity(Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
-    UdpAnnounce(Box<io::Result<AnnounceResponse>>),
-    HttpAnnounce(Box<io::Result<AnnounceResponseContent>>),
+    UdpAnnounce(Box<io::Result<(udp::AnnounceResponse, String)>>),
+    HttpAnnounce(Box<Result<(http::AnnounceResponseContent, String), http::Error>>),
     Timeout(TimerType),
     Void,
 }
@@ -167,15 +168,23 @@ impl Action {
     pub async fn new_udp_announce(
         local_addr: SocketAddrV4,
         tracker_addr: String,
-        request: AnnounceRequest,
+        request: udp::AnnounceRequest,
     ) -> Self {
         let inner_fut = async move {
             let socket = UdpSocket::bind(local_addr).await?;
             socket.connect(&tracker_addr).await?;
-            let client = UdpTrackerConnection::from_connected_socket(socket).await?;
+            let client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
             info!("Connected to tracker at {}", tracker_addr);
-            client.do_announce_request(request).await
+            Ok((client.do_announce_request(request).await?, tracker_addr))
         };
         Action::UdpAnnounce(Box::new(inner_fut.await))
+    }
+
+    pub async fn new_http_announce(
+        request: http::TrackerRequestBuilder,
+        tracker_url: String,
+    ) -> Self {
+        let inner_fut = async move { Ok((http::do_announce_request(request).await?, tracker_url)) };
+        Action::HttpAnnounce(Box::new(inner_fut.await))
     }
 }
