@@ -117,13 +117,8 @@ impl BlockAccountant {
 
     pub fn generate_bitfield(&self) -> Bitfield {
         let mut bitfield = Bitfield::repeat(false, self.pieces.piece_count());
-        let piece_length = self.pieces.piece_len();
         for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
-            let global_offset = self
-                .pieces
-                .global_offset(piece_index, 0, piece_length)
-                .expect("This should never happen");
-            if self.has_exact_block_at(global_offset, piece_length) {
+            if self.has_piece(piece_index) {
                 is_piece_present.set(true);
             }
         }
