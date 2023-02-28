@@ -1,3 +1,4 @@
+mod engine;
 mod handler;
 mod operations;
 mod peers;

@@ -1,7 +1,7 @@
+use crate::ctrl::engine;
 use crate::ctrl::operations::*;
 use crate::ctrl::peers::*;
-use crate::data::{BlockAccountant, PieceInfo};
-use crate::data::{PieceTracker, Storage};
+use crate::data;
 use crate::pwp::*;
 use crate::tracker::{http, udp, utils};
 use crate::utils::dispatch::Handler;
@@ -19,40 +19,38 @@ pub struct OperationHandler {
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    pieces: Rc<PieceInfo>,
-    filekeeper: Rc<Storage>,
-    local_records: BlockAccountant,
-    piece_availability: PieceTracker,
+    filekeeper: Rc<data::Storage>,
     known_peers: HashSet<SocketAddr>,
-    peermgr: PeerManager,
     stored_channels: HashMap<SocketAddr, (Option<DownloadTxChannel>, Option<UploadTxChannel>)>,
+    pieces: Rc<data::PieceInfo>,
+    ctx: engine::Context,
     debug_finished: bool,
 }
 
 impl OperationHandler {
     pub fn new(
         metainfo: Metainfo,
-        filekeeper: Storage,
+        filekeeper: data::Storage,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
     ) -> Option<Self> {
-        let pieces = Rc::new(PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
-        let local_records = BlockAccountant::new(pieces.clone());
-        let piece_tracker = PieceTracker::new(pieces.piece_count());
-        let peermgr = PeerManager::new(pieces.clone());
+        let pieces = Rc::new(data::PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
+        let ctx = engine::Context {
+            local_availability: data::BlockAccountant::new(pieces.clone()),
+            piece_tracker: data::PieceTracker::new(pieces.piece_count()),
+            peermgr: PeerManager::new(pieces.clone()),
+        };
         Some(Self {
             metainfo,
             internal_local_ip,
             external_local_ip,
             local_peer_id,
-            pieces,
             filekeeper: Rc::new(filekeeper),
-            local_records,
-            piece_availability: piece_tracker,
             known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
-            peermgr,
             stored_channels: HashMap::new(),
+            pieces,
+            ctx,
             debug_finished: false,
         })
     }
@@ -93,7 +91,7 @@ impl<'h> Handler<'h> for OperationHandler {
     }
 
     fn finished(&self) -> bool {
-        self.local_records.missing_bytes() == 0 || self.debug_finished
+        self.ctx.local_availability.missing_bytes() == 0 || self.debug_finished
     }
 }
 
@@ -103,9 +101,10 @@ impl<'h> OperationHandler {
         event: udp::AnnounceEvent,
         tracker_addrs: impl Iterator<Item = String>,
     ) -> Vec<Operation<'h>> {
-        let downloaded = self.local_records.accounted_bytes();
-        let left = self.local_records.missing_bytes();
-        let uploaded = self.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
+        let downloaded = self.ctx.local_availability.accounted_bytes();
+        let left = self.ctx.local_availability.missing_bytes();
+        let uploaded =
+            self.ctx.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
         let announce_request = udp::AnnounceRequest {
             info_hash: *self.metainfo.info_hash(),
@@ -135,9 +134,10 @@ impl<'h> OperationHandler {
         event: Option<http::AnnounceEvent>,
         tracker_urls: impl Iterator<Item = String>,
     ) -> Vec<Operation<'h>> {
-        let downloaded = self.local_records.accounted_bytes();
-        let left = self.local_records.missing_bytes();
-        let uploaded = self.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
+        let downloaded = self.ctx.local_availability.accounted_bytes();
+        let left = self.ctx.local_availability.missing_bytes();
+        let uploaded =
+            self.ctx.peermgr.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
         tracker_urls
             .filter_map(|url| {
@@ -289,12 +289,13 @@ impl<'h> OperationHandler {
 
         let remote_ip = *upload_rx.remote_ip();
 
-        self.peermgr.add_peer(&remote_ip);
+        self.ctx.peermgr.add_peer(&remote_ip);
         self.stored_channels.insert(remote_ip, (None, None));
 
-        if self.local_records.accounted_bytes() > 0 {
-            let bitfield = self.local_records.generate_bitfield();
-            self.peermgr
+        if self.ctx.local_availability.accounted_bytes() > 0 {
+            let bitfield = self.ctx.local_availability.generate_bitfield();
+            self.ctx
+                .peermgr
                 .upload_monitor(&remote_ip)
                 .unwrap()
                 .submit_outbound(UploaderMessage::Bitfield(bitfield));
@@ -327,7 +328,7 @@ impl<'h> OperationHandler {
             })
             .ok()?;
 
-        let download_handler = self.peermgr.download_handler(tx_channel.remote_ip())?;
+        let download_handler = self.ctx.peermgr.download_handler(tx_channel.remote_ip())?;
         if let Some(msg) = download_handler.next_outbound() {
             Some(vec![Action::from_download_tx_channel(tx_channel, msg).boxed_local()])
         } else {
@@ -349,20 +350,20 @@ impl<'h> OperationHandler {
             .ok()?;
 
         let remote_ip = *rx_channel.remote_ip();
-        self.peermgr.download_handler(&remote_ip)?.update_state(&msg);
+        self.ctx.peermgr.download_handler(&remote_ip)?.update_state(&msg);
 
         match msg {
             UploaderMessage::Block(info, data) => {
                 // TODO: ignore unless interested and peer not choking
-                if let Ok(global_offset) = self.local_records.submit_block(&info) {
+                if let Ok(global_offset) = self.ctx.local_availability.submit_block(&info) {
                     self.filekeeper
                         .write_block(global_offset, data)
                         .expect("Failed to write to file");
 
-                    if self.local_records.has_piece(info.piece_index) {
+                    if self.ctx.local_availability.has_piece(info.piece_index) {
                         // TODO: check hash
-                        self.piece_availability.forget_piece(info.piece_index);
-                        for upload_monitor in self.peermgr.all_upload_monitors() {
+                        self.ctx.piece_tracker.forget_piece(info.piece_index);
+                        for upload_monitor in self.ctx.peermgr.all_upload_monitors() {
                             upload_monitor.submit_outbound(UploaderMessage::Have {
                                 piece_index: info.piece_index,
                             });
@@ -373,10 +374,10 @@ impl<'h> OperationHandler {
                 }
             }
             UploaderMessage::Bitfield(bitfield) => {
-                self.piece_availability.add_bitfield_record(remote_ip, &bitfield);
+                self.ctx.piece_tracker.add_bitfield_record(remote_ip, &bitfield);
             }
             UploaderMessage::Have { piece_index } => {
-                self.piece_availability.add_single_record(remote_ip, piece_index);
+                self.ctx.piece_tracker.add_single_record(remote_ip, piece_index);
             }
             _ => (),
         }
@@ -386,7 +387,9 @@ impl<'h> OperationHandler {
         let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
         let (download_channel_slot, _) = self.stored_channels.get_mut(&remote_ip).unwrap();
         if let Some(tx_channel) = download_channel_slot.take() {
-            if let Some(msg) = self.peermgr.download_handler(&remote_ip).unwrap().next_outbound() {
+            if let Some(msg) =
+                self.ctx.peermgr.download_handler(&remote_ip).unwrap().next_outbound()
+            {
                 ops.push(Action::from_download_tx_channel(tx_channel, msg).boxed_local());
             } else {
                 download_channel_slot.replace(tx_channel);
@@ -406,7 +409,7 @@ impl<'h> OperationHandler {
             })
             .ok()?;
 
-        let upload_handler = self.peermgr.upload_handler(tx_channel.remote_ip())?;
+        let upload_handler = self.ctx.peermgr.upload_handler(tx_channel.remote_ip())?;
         if let Some(msg) = upload_handler.next_outbound() {
             Some(vec![Action::from_upload_tx_channel(
                 tx_channel,
@@ -435,7 +438,7 @@ impl<'h> OperationHandler {
             .ok()?;
 
         let remote_ip = *rx_channel.remote_ip();
-        self.peermgr.upload_handler(&remote_ip)?.update_state(&msg);
+        self.ctx.peermgr.upload_handler(&remote_ip)?.update_state(&msg);
 
         match msg {
             DownloaderMessage::Request(block) => {
@@ -454,7 +457,8 @@ impl<'h> OperationHandler {
         let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
         let (_, upload_channel_slot) = self.stored_channels.get_mut(&remote_ip).unwrap();
         if let Some(tx_channel) = upload_channel_slot.take() {
-            if let Some(msg) = self.peermgr.upload_handler(&remote_ip).unwrap().next_outbound() {
+            if let Some(msg) = self.ctx.peermgr.upload_handler(&remote_ip).unwrap().next_outbound()
+            {
                 ops.push(
                     Action::from_upload_tx_channel(
                         tx_channel,
@@ -474,8 +478,8 @@ impl<'h> OperationHandler {
 
 impl OperationHandler {
     fn erase_peer(&mut self, remote_ip: &SocketAddr) {
-        self.peermgr.remove_peer(remote_ip);
+        self.ctx.peermgr.remove_peer(remote_ip);
         self.stored_channels.remove(remote_ip);
-        self.piece_availability.forget_peer(*remote_ip);
+        self.ctx.piece_tracker.forget_peer(*remote_ip);
     }
 }
