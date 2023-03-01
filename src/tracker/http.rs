@@ -89,7 +89,7 @@ impl TryFrom<&str> for TrackerRequestBuilder {
 pub enum AnnounceEvent {
     Started,
     Stopped,
-    Compeleted,
+    Completed,
 }
 
 impl TrackerRequestBuilder {
@@ -118,11 +118,12 @@ impl TrackerRequestBuilder {
     }
 
     pub fn event(&mut self, event: AnnounceEvent) -> &mut Self {
-        match event {
-            AnnounceEvent::Started => self.append_tostring("event", "started"),
-            AnnounceEvent::Stopped => self.append_tostring("event", "stopped"),
-            AnnounceEvent::Compeleted => self.append_tostring("event", "compeleted"),
-        }
+        let value = match event {
+            AnnounceEvent::Started => "started",
+            AnnounceEvent::Stopped => "stopped",
+            AnnounceEvent::Completed => "completed",
+        };
+        self.append_tostring("event", value)
     }
 
     pub fn numwant(&mut self, num_want: usize) -> &mut Self {
