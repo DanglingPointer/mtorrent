@@ -8,7 +8,7 @@ mod storage;
 pub use block_accountant::BlockAccountant;
 pub use piece_info::PieceInfo;
 pub use piece_tracker::PieceTracker;
-pub use storage::Storage;
+pub use storage::*;
 
 #[derive(Debug)]
 pub enum Error {

@@ -19,7 +19,7 @@ pub struct OperationHandler {
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    filekeeper: Rc<data::Storage>,
+    filekeeper: Rc<data::StorageProxy>,
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Option<DownloadTxChannel>, Option<UploadTxChannel>)>,
     pieces: Rc<data::PieceInfo>,
@@ -30,7 +30,7 @@ pub struct OperationHandler {
 impl OperationHandler {
     pub fn new(
         metainfo: Metainfo,
-        filekeeper: data::Storage,
+        filekeeper: data::StorageProxy,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
@@ -357,8 +357,8 @@ impl<'h> OperationHandler {
                 // TODO: ignore unless interested and peer not choking
                 if let Ok(global_offset) = self.ctx.local_availability.submit_block(&info) {
                     self.filekeeper
-                        .write_block(global_offset, data)
-                        .expect("Failed to write to file");
+                        .write_block_detached(global_offset, data)
+                        .unwrap_or_else(|_| panic!("Failed to write to file: {}", info));
 
                     if self.ctx.local_availability.has_piece(info.piece_index) {
                         // TODO: check hash

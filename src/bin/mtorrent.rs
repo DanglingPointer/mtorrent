@@ -1,15 +1,15 @@
 use log::{debug, error, info, Level};
 use mtorrent::ctrl::OperationHandler;
-use mtorrent::data::Storage;
+use mtorrent::data;
 use mtorrent::tracker::utils;
-use mtorrent::utils::benc;
 use mtorrent::utils::dispatch::Dispatcher;
 use mtorrent::utils::meta::Metainfo;
-use mtorrent::utils::upnp;
+use mtorrent::utils::{benc, upnp};
 use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::{env, fs, io};
+use std::{env, fs, io, thread};
+use tokio::runtime;
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Metainfo> {
     let file_content = fs::read(metainfo_filepath)?;
@@ -31,6 +31,23 @@ fn generate_local_peer_id() -> [u8; 20] {
         *b = rand::random::<u8>() % (127 - 32) + 32;
     }
     ret
+}
+
+fn start_storage(storage: data::Storage) -> (data::StorageProxy, thread::JoinHandle<()>) {
+    let (proxy, runner) = data::async_storage(storage);
+
+    let handle = thread::spawn(move || {
+        debug!("Storage thread starting");
+        // runtime::Builder::new_current_thread()
+        //     .build()
+        //     .expect("Failed to create Storage runtime")
+        //     .block_on(async move {
+        //         runner.run().await;
+        //     });
+        runner.run_blocking();
+        debug!("Storage thread exiting");
+    });
+    (proxy, handle)
 }
 
 fn main() -> io::Result<()> {
@@ -59,13 +76,13 @@ fn main() -> io::Result<()> {
     };
     let _ = fs::remove_dir_all(&output_dir);
     let filekeeper = if let Some(files) = metainfo.files() {
-        Storage::new(output_dir, files)?
+        data::Storage::new(output_dir, files)?
     } else {
         let name = match metainfo.name() {
             Some(s) => s.to_string(),
             None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
         };
-        Storage::new(
+        data::Storage::new(
             output_dir,
             [(
                 metainfo.length().ok_or_else(|| {
@@ -97,22 +114,26 @@ fn main() -> io::Result<()> {
     let local_peer_id = generate_local_peer_id();
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
+    let (storage, storage_th_handle) = start_storage(filekeeper);
+
     let ctrl = OperationHandler::new(
         metainfo,
-        filekeeper,
+        storage,
         local_internal_ip,
         local_external_ip,
         local_peer_id,
     )
     .unwrap();
 
-    tokio::runtime::Builder::new_current_thread()
+    runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(async move {
             let mut dispatcher = Dispatcher::new(ctrl);
             while dispatcher.dispatch_one().await {}
         });
+
+    storage_th_handle.join().expect("Failed to join Storage thread");
 
     Ok(())
 }

@@ -1,7 +1,122 @@
 use crate::data::Error;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::{fs, io};
+use std::{fmt, fs, io};
+use tokio::sync::{mpsc, oneshot};
+
+pub struct StorageRunner {
+    channel: mpsc::UnboundedReceiver<Command>,
+    storage: Storage,
+}
+
+pub struct StorageProxy {
+    channel: mpsc::UnboundedSender<Command>,
+}
+
+pub fn async_storage(storage: Storage) -> (StorageProxy, StorageRunner) {
+    let (tx, rx) = mpsc::unbounded_channel::<Command>();
+    (
+        StorageProxy { channel: tx },
+        StorageRunner {
+            channel: rx,
+            storage,
+        },
+    )
+}
+
+impl StorageRunner {
+    pub async fn run(mut self) {
+        while let Some(cmd) = self.channel.recv().await {
+            self.handle_cmd(cmd);
+        }
+    }
+
+    pub fn run_blocking(mut self) {
+        while let Some(cmd) = self.channel.blocking_recv() {
+            self.handle_cmd(cmd);
+        }
+    }
+
+    fn handle_cmd(&self, cmd: Command) {
+        match cmd {
+            Command::WriteBlock {
+                global_offset,
+                data,
+                callback,
+            } => {
+                let result = self.storage.write_block(global_offset, data);
+                if let Some(callback) = callback {
+                    let _ = callback.send(result);
+                }
+            }
+            Command::ReadBlock {
+                global_offset,
+                length,
+                callback,
+            } => {
+                let result = self.storage.read_block(global_offset, length);
+                let _ = callback.send(result);
+            }
+        }
+    }
+}
+
+impl StorageProxy {
+    pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
+        let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
+        self.channel
+            .send(Command::WriteBlock {
+                global_offset,
+                data,
+                callback: Some(result_sender),
+            })
+            .map_err(Self::to_io_error_other)?;
+        result_receiver.await.map_err(Self::to_io_error_other)?
+    }
+
+    pub fn write_block_detached(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
+        self.channel
+            .send(Command::WriteBlock {
+                global_offset,
+                data,
+                callback: None,
+            })
+            .map_err(Self::to_io_error_other)?;
+        Ok(())
+    }
+
+    pub async fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
+        let (result_sender, result_receiver) = oneshot::channel::<ReadResult>();
+        self.channel
+            .send(Command::ReadBlock {
+                global_offset,
+                length,
+                callback: result_sender,
+            })
+            .map_err(Self::to_io_error_other)?;
+        result_receiver.await.map_err(Self::to_io_error_other)?
+    }
+
+    fn to_io_error_other<E: fmt::Display>(e: E) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, format!("{e}"))
+    }
+}
+
+type WriteResult = Result<(), Error>;
+type ReadResult = Result<Vec<u8>, Error>;
+
+enum Command {
+    WriteBlock {
+        global_offset: usize,
+        data: Vec<u8>,
+        callback: Option<oneshot::Sender<WriteResult>>,
+    },
+    ReadBlock {
+        global_offset: usize,
+        length: usize,
+        callback: oneshot::Sender<ReadResult>,
+    },
+}
 
 pub struct Storage {
     files: BTreeMap<usize, fs::File>,

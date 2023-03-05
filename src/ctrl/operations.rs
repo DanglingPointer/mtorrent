@@ -1,4 +1,4 @@
-use crate::data::{PieceInfo, Storage};
+use crate::data::{PieceInfo, StorageProxy};
 use crate::pwp::*;
 use crate::tracker::{http, udp};
 use futures::future::LocalBoxFuture;
@@ -141,23 +141,22 @@ impl Action {
         mut channel: UploadTxChannel,
         mut msg: UploaderMessage,
         pieces: Rc<PieceInfo>,
-        files: Rc<Storage>,
+        files: Rc<StorageProxy>,
     ) -> Self {
-        fn fill_block_with_data(msg: &mut UploaderMessage, pieces: &PieceInfo, files: &Storage) {
-            if let UploaderMessage::Block(info, data) = msg {
-                let global_offset = pieces
-                    .global_offset(info.piece_index, info.in_piece_offset, info.block_length)
-                    .expect("Logical error, this should never happen");
-                debug_assert!(data.is_empty());
-                let _ = mem::replace(
-                    data,
-                    files
-                        .read_block(global_offset, info.block_length)
-                        .expect("Failed to read from file"),
-                );
-            }
+        if let UploaderMessage::Block(info, data) = &mut msg {
+            let global_offset = pieces
+                .global_offset(info.piece_index, info.in_piece_offset, info.block_length)
+                .expect("Logical error, this should never happen");
+            debug_assert!(data.is_empty());
+
+            let _ = mem::replace(
+                data,
+                files
+                    .read_block(global_offset, info.block_length)
+                    .await
+                    .unwrap_or_else(|_| panic!("Failed to read from file: {}", info)),
+            );
         }
-        fill_block_with_data(&mut msg, &pieces, &files);
         let remote_ip = *channel.remote_ip();
         match channel.send_message(msg).await {
             Err(_) => Action::UploadMsgSent(Err(remote_ip)),
