@@ -353,6 +353,7 @@ impl<'h> OperationHandler {
 
         match msg {
             UploaderMessage::Block(info, data) => {
+                // TODO: ignore unless interested and peer not choking
                 if let Ok(global_offset) = self.local_records.submit_block(&info) {
                     self.filekeeper
                         .write_block(global_offset, data)
