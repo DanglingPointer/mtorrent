@@ -108,8 +108,7 @@ fn main() -> io::Result<()> {
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(async move {
             let mut dispatcher = Dispatcher::new(ctrl);
             while dispatcher.dispatch_one().await {}
