@@ -14,6 +14,8 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{io, iter};
 
+type Slot<C> = std::cell::Cell<Option<C>>;
+
 pub struct OperationHandler {
     metainfo: Metainfo,
     internal_local_ip: SocketAddrV4,
@@ -21,7 +23,7 @@ pub struct OperationHandler {
     local_peer_id: [u8; 20],
     filekeeper: Rc<data::StorageProxy>,
     known_peers: HashSet<SocketAddr>,
-    stored_channels: HashMap<SocketAddr, (Option<DownloadTxChannel>, Option<UploadTxChannel>)>,
+    stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
     pieces: Rc<data::PieceInfo>,
     ctx: engine::Context,
     debug_finished: bool,
@@ -290,7 +292,7 @@ impl<'h> OperationHandler {
         let remote_ip = *upload_rx.remote_ip();
 
         self.ctx.peermgr.add_peer(&remote_ip);
-        self.stored_channels.insert(remote_ip, (None, None));
+        self.stored_channels.insert(remote_ip, (Slot::default(), Slot::default()));
 
         if self.ctx.local_availability.accounted_bytes() > 0 {
             let bitfield = self.ctx.local_availability.generate_bitfield();
@@ -333,8 +335,8 @@ impl<'h> OperationHandler {
             Some(vec![Action::from_download_tx_channel(tx_channel, msg).boxed_local()])
         } else {
             let (download_channel_slot, _) =
-                self.stored_channels.get_mut(tx_channel.remote_ip()).unwrap();
-            download_channel_slot.replace(tx_channel);
+                self.stored_channels.get(tx_channel.remote_ip()).unwrap();
+            download_channel_slot.replace(Some(tx_channel));
             None
         }
     }
@@ -385,16 +387,7 @@ impl<'h> OperationHandler {
         // TODO: run engine
 
         let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
-        let (download_channel_slot, _) = self.stored_channels.get_mut(&remote_ip).unwrap();
-        if let Some(tx_channel) = download_channel_slot.take() {
-            if let Some(msg) =
-                self.ctx.peermgr.download_handler(&remote_ip).unwrap().next_outbound()
-            {
-                ops.push(Action::from_download_tx_channel(tx_channel, msg).boxed_local());
-            } else {
-                download_channel_slot.replace(tx_channel);
-            }
-        }
+        self.fill_tx_channels(&mut ops);
         Some(ops)
     }
 
@@ -420,8 +413,8 @@ impl<'h> OperationHandler {
             .boxed_local()])
         } else {
             let (_, upload_channel_slot) =
-                self.stored_channels.get_mut(tx_channel.remote_ip()).unwrap();
-            upload_channel_slot.replace(tx_channel);
+                self.stored_channels.get(tx_channel.remote_ip()).unwrap();
+            upload_channel_slot.replace(Some(tx_channel));
             None
         }
     }
@@ -455,24 +448,36 @@ impl<'h> OperationHandler {
         // TODO: run engine
 
         let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
-        let (_, upload_channel_slot) = self.stored_channels.get_mut(&remote_ip).unwrap();
-        if let Some(tx_channel) = upload_channel_slot.take() {
-            if let Some(msg) = self.ctx.peermgr.upload_handler(&remote_ip).unwrap().next_outbound()
-            {
-                ops.push(
-                    Action::from_upload_tx_channel(
-                        tx_channel,
-                        msg,
-                        self.pieces.clone(),
-                        self.filekeeper.clone(),
-                    )
-                    .boxed_local(),
-                );
-            } else {
-                upload_channel_slot.replace(tx_channel);
+        self.fill_tx_channels(&mut ops);
+        Some(ops)
+    }
+
+    fn fill_tx_channels(&mut self, ops: &mut Vec<Operation<'h>>) {
+        let peermgr = &mut self.ctx.peermgr;
+        for (ip, (download_channel_slot, upload_channel_slot)) in &self.stored_channels {
+            if let Some(channel) = download_channel_slot.take() {
+                if let Some(msg) = peermgr.download_handler(ip).and_then(|h| h.next_outbound()) {
+                    ops.push(Action::from_download_tx_channel(channel, msg).boxed_local());
+                } else {
+                    download_channel_slot.replace(Some(channel));
+                }
+            }
+            if let Some(channel) = upload_channel_slot.take() {
+                if let Some(msg) = peermgr.upload_handler(ip).and_then(|h| h.next_outbound()) {
+                    ops.push(
+                        Action::from_upload_tx_channel(
+                            channel,
+                            msg,
+                            self.pieces.clone(),
+                            self.filekeeper.clone(),
+                        )
+                        .boxed_local(),
+                    );
+                } else {
+                    upload_channel_slot.replace(Some(channel));
+                }
             }
         }
-        Some(ops)
     }
 }
 
