@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
-pub struct StorageRunner {
+pub type StorageRunner = GenericStorageRunner<fs::File>;
+
+pub struct GenericStorageRunner<F: RandomAccessReadWrite> {
     channel: mpsc::UnboundedReceiver<Command>,
-    storage: Storage,
+    storage: GenericStorage<F>,
 }
 
 pub struct StorageProxy {
@@ -14,17 +16,23 @@ pub struct StorageProxy {
 }
 
 pub fn async_storage(storage: Storage) -> (StorageProxy, StorageRunner) {
+    async_storage_impl(storage)
+}
+
+fn async_storage_impl<F: RandomAccessReadWrite>(
+    storage: GenericStorage<F>,
+) -> (StorageProxy, GenericStorageRunner<F>) {
     let (tx, rx) = mpsc::unbounded_channel::<Command>();
     (
         StorageProxy { channel: tx },
-        StorageRunner {
+        GenericStorageRunner {
             channel: rx,
             storage,
         },
     )
 }
 
-impl StorageRunner {
+impl<F: RandomAccessReadWrite> GenericStorageRunner<F> {
     pub async fn run(mut self) {
         while let Some(cmd) = self.channel.recv().await {
             self.handle_cmd(cmd);
@@ -120,25 +128,39 @@ enum Command {
 
 // ------
 
-pub struct Storage {
-    files: BTreeMap<usize, fs::File>,
-}
+pub type Storage = GenericStorage<fs::File>;
 
+pub struct GenericStorage<F: RandomAccessReadWrite> {
+    files: BTreeMap<usize, F>,
+}
 impl Storage {
     pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
         parent_dir: P,
         length_path_it: I,
     ) -> Result<Self, Error> {
-        let mut filemap = BTreeMap::new();
-        let mut offset = 0usize;
-
-        for (length, path) in length_path_it {
+        let open_file = |(length, path): (usize, PathBuf)| -> io::Result<(usize, fs::File)> {
             let path = parent_dir.as_ref().join(path);
             if let Some(prefix) = path.parent() {
                 fs::create_dir_all(prefix)?;
             }
             let file = fs::OpenOptions::new().write(true).read(true).create_new(true).open(path)?;
             file.set_len(length as u64)?;
+            Ok((length, file))
+        };
+
+        Self::from_length_file_pairs(length_path_it.map(open_file))
+    }
+}
+
+impl<F: RandomAccessReadWrite> GenericStorage<F> {
+    fn from_length_file_pairs<I: Iterator<Item = io::Result<(usize, F)>>>(
+        length_file_it: I,
+    ) -> Result<Self, Error> {
+        let mut filemap = BTreeMap::new();
+        let mut offset = 0usize;
+
+        for result in length_file_it {
+            let (length, file) = result?;
             filemap.insert(offset, file);
             offset += length;
         }
@@ -146,7 +168,7 @@ impl Storage {
             let fd_clone = file.try_clone()?;
             filemap.insert(offset, fd_clone);
         }
-        Ok(Storage { files: filemap })
+        Ok(Self { files: filemap })
     }
 
     pub fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
@@ -161,9 +183,12 @@ impl Storage {
     }
 }
 
-trait RandomAccessReadWrite {
+pub trait RandomAccessReadWrite {
     fn read_at_offset(&self, dest: &mut [u8], offset: u64) -> io::Result<usize>;
     fn write_at_offset(&self, src: &[u8], offset: u64) -> io::Result<usize>;
+    fn try_clone(&self) -> io::Result<Self>
+    where
+        Self: Sized;
 
     fn read_all_at_offset(&self, mut dest: &mut [u8], mut offset: u64) -> io::Result<()> {
         while !dest.is_empty() {
@@ -206,6 +231,13 @@ impl RandomAccessReadWrite for fs::File {
         use std::os::unix::prelude::*;
         self.write_at(src, offset)
     }
+
+    fn try_clone(&self) -> io::Result<Self>
+    where
+        Self: Sized,
+    {
+        self.try_clone()
+    }
 }
 
 #[cfg(target_family = "windows")]
@@ -218,6 +250,13 @@ impl RandomAccessReadWrite for fs::File {
     fn write_at_offset(&self, src: &[u8], offset: u64) -> io::Result<usize> {
         use std::os::windows::prelude::*;
         self.seek_write(src, offset)
+    }
+
+    fn try_clone(&self) -> io::Result<Self>
+    where
+        Self: Sized,
+    {
+        self.try_clone()
     }
 }
 
@@ -280,11 +319,13 @@ fn read_block_from<F: RandomAccessReadWrite>(
 mod tests {
     use super::*;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+    use std::iter;
+    use tokio::task;
 
     type FakeFile = std::cell::RefCell<Cursor<Vec<u8>>>;
 
-    fn fake_file_from(content: Vec<u8>) -> FakeFile {
-        std::cell::RefCell::new(Cursor::new(content))
+    fn fake_length_file_pair(content: Vec<u8>) -> io::Result<(usize, FakeFile)> {
+        Ok((content.len(), std::cell::RefCell::new(Cursor::new(content))))
     }
 
     impl RandomAccessReadWrite for FakeFile {
@@ -297,78 +338,110 @@ mod tests {
             self.borrow_mut().seek(SeekFrom::Start(offset))?;
             self.borrow_mut().write(src)
         }
+
+        fn try_clone(&self) -> io::Result<Self>
+        where
+            Self: Sized,
+        {
+            Ok(self.clone())
+        }
     }
 
     #[test]
     fn test_write_piece_within_one_file() {
-        let mut map = BTreeMap::<usize, FakeFile>::new();
-        map.insert(0, fake_file_from(vec![0u8; 10]));
-        map.insert(10, fake_file_from(vec![0u8; 10]));
-        map.insert(20, fake_file_from(vec![0u8; 10]));
-        map.insert(30, fake_file_from(Vec::<u8>::new()));
+        let s = GenericStorage::from_length_file_pairs(
+            iter::repeat_with(|| fake_length_file_pair(vec![0u8; 10])).take(3),
+        )
+        .unwrap();
 
-        write_block_to(&map, 16, vec![1u8, 2u8, 3u8, 4u8].as_ref()).unwrap();
+        s.write_block(16, vec![1u8, 2u8, 3u8, 4u8]).unwrap();
 
-        assert_eq!(&vec![0u8; 10], map.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(&vec![0u8; 10], s.files.get(&0).unwrap().borrow().get_ref());
         assert_eq!(
             &vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 1u8, 2u8, 3u8, 4u8],
-            map.get(&10).unwrap().borrow().get_ref()
+            s.files.get(&10).unwrap().borrow().get_ref()
         );
-        assert_eq!(&vec![0u8; 10], map.get(&20).unwrap().borrow().get_ref());
+        assert_eq!(&vec![0u8; 10], s.files.get(&20).unwrap().borrow().get_ref());
     }
 
     #[test]
     fn test_write_piece_on_file_boundary() {
-        let mut map = BTreeMap::<usize, FakeFile>::new();
-        map.insert(0, fake_file_from(vec![0u8; 10]));
-        map.insert(10, fake_file_from(vec![0u8; 10]));
-        map.insert(20, fake_file_from(vec![0u8; 10]));
-        map.insert(30, fake_file_from(Vec::<u8>::new()));
+        let s = GenericStorage::from_length_file_pairs(
+            iter::repeat_with(|| fake_length_file_pair(vec![0u8; 10])).take(3),
+        )
+        .unwrap();
 
-        write_block_to(&map, 17, vec![1u8, 2u8, 3u8, 4u8, 5u8].as_ref()).unwrap();
+        s.write_block(17, vec![1u8, 2u8, 3u8, 4u8, 5u8]).unwrap();
 
-        assert_eq!(&vec![0u8; 10], map.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(&vec![0u8; 10], s.files.get(&0).unwrap().borrow().get_ref());
         assert_eq!(
             &vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 1u8, 2u8, 3u8],
-            map.get(&10).unwrap().borrow().get_ref()
+            s.files.get(&10).unwrap().borrow().get_ref()
         );
         assert_eq!(
             &vec![4u8, 5u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8],
-            map.get(&20).unwrap().borrow().get_ref()
+            s.files.get(&20).unwrap().borrow().get_ref()
         );
     }
 
     #[test]
     fn test_read_piece_within_one_file() {
-        let mut map = BTreeMap::<usize, FakeFile>::new();
-        map.insert(0, fake_file_from((0u8..10u8).collect()));
-        map.insert(10, fake_file_from((0u8..10u8).collect()));
-        map.insert(20, fake_file_from((0u8..10u8).collect()));
-        map.insert(30, fake_file_from(Vec::<u8>::new()));
+        let s = GenericStorage::from_length_file_pairs(
+            iter::repeat_with(|| fake_length_file_pair((0u8..10u8).collect())).take(3),
+        )
+        .unwrap();
 
-        let mut dest = vec![0u8; 3];
-        read_block_from(&map, 12, &mut dest).unwrap();
-
+        let dest = s.read_block(12, 3).unwrap();
         assert_eq!(vec![2u8, 3u8, 4u8], dest);
 
-        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&0).unwrap().borrow().get_ref());
-        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&10).unwrap().borrow().get_ref());
-        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), map.get(&20).unwrap().borrow().get_ref());
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), s.files.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), s.files.get(&10).unwrap().borrow().get_ref());
+        assert_eq!(&(0u8..10u8).collect::<Vec<u8>>(), s.files.get(&20).unwrap().borrow().get_ref());
     }
 
     #[test]
     fn test_read_piece_on_file_boundary() {
-        let mut map = BTreeMap::<usize, FakeFile>::new();
-        map.insert(0, fake_file_from((1u8..=10u8).collect()));
-        map.insert(10, fake_file_from((1u8..=10u8).collect()));
-        map.insert(20, fake_file_from(Vec::<u8>::new()));
+        let s = GenericStorage::from_length_file_pairs(
+            iter::repeat_with(|| fake_length_file_pair((1u8..=10u8).collect())).take(2),
+        )
+        .unwrap();
 
-        let mut dest = vec![0u8; 3];
-        read_block_from(&map, 8, &mut dest).unwrap();
-
+        let dest = s.read_block(8, 3).unwrap();
         assert_eq!(vec![9u8, 10u8, 1u8], dest);
 
-        assert_eq!(&(1u8..=10u8).collect::<Vec<u8>>(), map.get(&0).unwrap().borrow().get_ref());
-        assert_eq!(&(1u8..=10u8).collect::<Vec<u8>>(), map.get(&10).unwrap().borrow().get_ref());
+        assert_eq!(&(1u8..=10u8).collect::<Vec<u8>>(), s.files.get(&0).unwrap().borrow().get_ref());
+        assert_eq!(
+            &(1u8..=10u8).collect::<Vec<u8>>(),
+            s.files.get(&10).unwrap().borrow().get_ref()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_async_detached_write_then_read_on_file_boundary() {
+        task::LocalSet::new()
+            .run_until(async {
+                let s = GenericStorage::from_length_file_pairs(
+                    iter::repeat_with(|| fake_length_file_pair(vec![0u8; 10])).take(2),
+                )
+                .unwrap();
+
+                let (proxy, runner) = async_storage_impl(s);
+
+                task::spawn_local(async move {
+                    runner.run().await;
+                });
+
+                // given
+                let initial_data = proxy.read_block(8, 3).await.unwrap();
+                assert_eq!(vec![0u8, 0u8, 0u8], initial_data);
+
+                // when
+                proxy.write_block_detached(8, vec![9u8, 10u8, 1u8]).unwrap();
+
+                // then
+                let final_data = proxy.read_block(8, 3).await.unwrap();
+                assert_eq!(vec![9u8, 10u8, 1u8], final_data);
+            })
+            .await;
     }
 }
