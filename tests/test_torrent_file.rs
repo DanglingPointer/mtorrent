@@ -2,8 +2,8 @@ use mtorrent::data;
 use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
 use mtorrent::utils::meta;
-use std::fs;
 use std::path::Path;
+use std::{fs, io};
 
 #[test]
 fn test_read_example_torrent_file() {
@@ -221,6 +221,21 @@ fn test_read_example_torrent_file() {
 
 #[test]
 fn test_read_metainfo_and_spawn_files() {
+    fn count_files(dir: &Path) -> io::Result<usize> {
+        let mut count = 0usize;
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_files(&path)?;
+                } else {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
     let data = fs::read("tests/example.torrent").unwrap();
     let entity = benc::Element::from_bytes(&data).unwrap();
     if let benc::Element::Dictionary(ref dict) = entity {
@@ -230,8 +245,11 @@ fn test_read_metainfo_and_spawn_files() {
     }
     let info = meta::Metainfo::try_from(entity).unwrap();
 
+    let initial_file_count = count_files(".".as_ref()).unwrap();
     let parent_dir = "test_output";
     let filekeeper = data::Storage::new(parent_dir, info.files().unwrap());
+
+    assert_eq!(info.files().unwrap().count(), count_files(parent_dir.as_ref()).unwrap());
 
     for (length, path) in info.files().unwrap() {
         let path = Path::new(parent_dir).join(path);
@@ -239,6 +257,10 @@ fn test_read_metainfo_and_spawn_files() {
             .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
         assert_eq!(length as u64, file.metadata().unwrap().len());
     }
+
     fs::remove_dir_all(parent_dir).unwrap();
     drop(filekeeper);
+
+    let final_file_count = count_files(".".as_ref()).unwrap();
+    assert_eq!(initial_file_count, final_file_count);
 }
