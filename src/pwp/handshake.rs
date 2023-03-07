@@ -55,7 +55,7 @@ pub(super) async fn do_handshake_incoming(
     debug!(
         "Incoming handshake with {} DONE. Peer id: {}",
         remote_ip,
-        String::from_utf8_lossy(&remote_handshake.peer_id)
+        String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
     );
     Ok((socket, remote_handshake))
 }
@@ -96,7 +96,7 @@ pub(super) async fn do_handshake_outgoing(
     debug!(
         "Outgoing handshake with {} DONE. Peer id: {}",
         remote_ip,
-        String::from_utf8_lossy(&remote_handshake.peer_id)
+        String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
     );
     Ok((socket, remote_handshake))
 }
