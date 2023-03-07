@@ -118,13 +118,13 @@ enum Command {
     },
 }
 
+// ------
+
 pub struct Storage {
     files: BTreeMap<usize, fs::File>,
 }
 
 impl Storage {
-    const PLACEHOLDER_FILE: &'static str = "ignore_me.txt";
-
     pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
         parent_dir: P,
         length_path_it: I,
@@ -142,8 +142,10 @@ impl Storage {
             filemap.insert(offset, file);
             offset += length;
         }
-        filemap.insert(offset, fs::File::create(Storage::PLACEHOLDER_FILE)?);
-
+        if let Some((_offset, file)) = filemap.last_key_value() {
+            let fd_clone = file.try_clone()?;
+            filemap.insert(offset, fd_clone);
+        }
         Ok(Storage { files: filemap })
     }
 
@@ -156,12 +158,6 @@ impl Storage {
         let mut dest = vec![0u8; length];
         read_block_from(&self.files, global_offset, &mut dest)?;
         Ok(dest)
-    }
-}
-
-impl Drop for Storage {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(Storage::PLACEHOLDER_FILE);
     }
 }
 
