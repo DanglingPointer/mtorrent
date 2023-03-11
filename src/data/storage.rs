@@ -133,6 +133,7 @@ pub type Storage = GenericStorage<fs::File>;
 pub struct GenericStorage<F: RandomAccessReadWrite> {
     files: BTreeMap<usize, F>,
 }
+
 impl Storage {
     pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
         parent_dir: P,
@@ -172,14 +173,58 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
     }
 
     pub fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
-        write_block_to(&self.files, global_offset, &block)?;
+        self.write_block_to(global_offset, &block)?;
         Ok(())
     }
 
     pub fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
         let mut dest = vec![0u8; length];
-        read_block_from(&self.files, global_offset, &mut dest)?;
+        self.read_block_from(global_offset, &mut dest)?;
         Ok(dest)
+    }
+
+    fn find_file_and_offset(&self, global_offset: usize) -> Result<(usize, &F, usize), Error> {
+        let next_start_offset = {
+            let (offset, _) =
+                self.files.range(global_offset + 1..).next().ok_or(Error::InvalidLocation)?;
+            *offset
+        };
+        let (start_offset, file) = {
+            let (offset, file) =
+                self.files.range(..=global_offset).last().ok_or(Error::InvalidLocation)?;
+            (*offset, file)
+        };
+        Ok((start_offset, file, next_start_offset))
+    }
+
+    fn write_block_to(&self, global_offset: usize, block: &[u8]) -> Result<(), Error> {
+        let (start_offset, file, next_start_offset) = self.find_file_and_offset(global_offset)?;
+        let local_offset = global_offset - start_offset;
+
+        let available_space = next_start_offset - global_offset;
+        if block.len() <= available_space {
+            file.write_all_at_offset(block, local_offset as u64)?;
+            Ok(())
+        } else {
+            let (left, right) = block.split_at(available_space);
+            file.write_all_at_offset(left, local_offset as u64)?;
+            self.write_block_to(next_start_offset, right)
+        }
+    }
+
+    fn read_block_from(&self, global_offset: usize, dest: &mut [u8]) -> Result<(), Error> {
+        let (start_offset, file, next_start_offset) = self.find_file_and_offset(global_offset)?;
+        let local_offset = global_offset - start_offset;
+
+        let available_space = next_start_offset - global_offset;
+        if dest.len() <= available_space {
+            file.read_all_at_offset(dest, local_offset as u64)?;
+            Ok(())
+        } else {
+            let (left, right) = dest.split_at_mut(available_space);
+            file.read_all_at_offset(left, local_offset as u64)?;
+            self.read_block_from(next_start_offset, right)
+        }
     }
 }
 
@@ -257,61 +302,6 @@ impl RandomAccessReadWrite for fs::File {
         Self: Sized,
     {
         self.try_clone()
-    }
-}
-
-fn find_file_and_offset<F>(
-    all_files: &BTreeMap<usize, F>,
-    global_offset: usize,
-) -> Result<(usize, &F, usize), Error> {
-    let next_start_offset = {
-        let (offset, _) =
-            all_files.range(global_offset + 1..).next().ok_or(Error::InvalidLocation)?;
-        *offset
-    };
-    let (start_offset, file) = {
-        let (offset, file) =
-            all_files.range(..=global_offset).last().ok_or(Error::InvalidLocation)?;
-        (*offset, file)
-    };
-    Ok((start_offset, file, next_start_offset))
-}
-
-fn write_block_to<F: RandomAccessReadWrite>(
-    dest: &BTreeMap<usize, F>,
-    global_offset: usize,
-    block: &[u8],
-) -> Result<(), Error> {
-    let (start_offset, file, next_start_offset) = find_file_and_offset(dest, global_offset)?;
-    let local_offset = global_offset - start_offset;
-
-    let available_space = next_start_offset - global_offset;
-    if block.len() <= available_space {
-        file.write_all_at_offset(block, local_offset as u64)?;
-        Ok(())
-    } else {
-        let (left, right) = block.split_at(available_space);
-        file.write_all_at_offset(left, local_offset as u64)?;
-        write_block_to(dest, next_start_offset, right)
-    }
-}
-
-fn read_block_from<F: RandomAccessReadWrite>(
-    src: &BTreeMap<usize, F>,
-    global_offset: usize,
-    dest: &mut [u8],
-) -> Result<(), Error> {
-    let (start_offset, file, next_start_offset) = find_file_and_offset(src, global_offset)?;
-    let local_offset = global_offset - start_offset;
-
-    let available_space = next_start_offset - global_offset;
-    if dest.len() <= available_space {
-        file.read_all_at_offset(dest, local_offset as u64)?;
-        Ok(())
-    } else {
-        let (left, right) = dest.split_at_mut(available_space);
-        file.read_all_at_offset(left, local_offset as u64)?;
-        read_block_from(src, next_start_offset, right)
     }
 }
 
