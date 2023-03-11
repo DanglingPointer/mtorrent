@@ -1,4 +1,5 @@
 use crate::data::Error;
+use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
@@ -65,6 +66,18 @@ impl<F: RandomAccessReadWrite> GenericStorageRunner<F> {
                 let result = self.storage.read_block(global_offset, length);
                 let _ = callback.send(result);
             }
+            Command::VerifyBlock {
+                global_offset,
+                length,
+                expected_sha1,
+                callback,
+            } => {
+                let result = self.storage.read_block(global_offset, length).map(|data| {
+                    let computed_sha1: [u8; 20] = Sha1::from(data).digest().bytes();
+                    computed_sha1 == expected_sha1
+                });
+                let _ = callback.send(result);
+            }
         }
     }
 }
@@ -105,6 +118,24 @@ impl StorageProxy {
         result_receiver.await.map_err(Self::to_io_error_other)?
     }
 
+    pub async fn verify_block(
+        &self,
+        global_offset: usize,
+        length: usize,
+        expected_sha1: &[u8; 20],
+    ) -> Result<bool, Error> {
+        let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
+        self.channel
+            .send(Command::VerifyBlock {
+                global_offset,
+                length,
+                expected_sha1: *expected_sha1,
+                callback: result_sender,
+            })
+            .map_err(Self::to_io_error_other)?;
+        result_receiver.await.map_err(Self::to_io_error_other)?
+    }
+
     fn to_io_error_other<E: fmt::Display>(e: E) -> io::Error {
         io::Error::new(io::ErrorKind::Other, format!("{e}"))
     }
@@ -112,7 +143,9 @@ impl StorageProxy {
 
 type WriteResult = Result<(), Error>;
 type ReadResult = Result<Vec<u8>, Error>;
+type VerifyResult = Result<bool, Error>;
 
+#[allow(clippy::enum_variant_names)]
 enum Command {
     WriteBlock {
         global_offset: usize,
@@ -123,6 +156,12 @@ enum Command {
         global_offset: usize,
         length: usize,
         callback: oneshot::Sender<ReadResult>,
+    },
+    VerifyBlock {
+        global_offset: usize,
+        length: usize,
+        expected_sha1: [u8; 20],
+        callback: oneshot::Sender<VerifyResult>,
     },
 }
 
@@ -431,6 +470,40 @@ mod tests {
                 // then
                 let final_data = proxy.read_block(8, 3).await.unwrap();
                 assert_eq!(vec![9u8, 10u8, 1u8], final_data);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_async_verify_block() {
+        let expected_sha1_0_10 =
+            b"\x49\x41\x79\x71\x4a\x6c\xd6\x27\x23\x9d\xfe\xde\xdf\x2d\xe9\xef\x99\x4c\xaf\x03";
+        let expected_sha1_10_20 =
+            b"\xdd\xd1\x27\x8d\x28\xaf\x87\xc7\x58\x84\xf5\x5b\x71\xfb\xb4\xa1\x23\x1a\xf2\xe5";
+        task::LocalSet::new()
+            .run_until(async {
+                let s = GenericStorage::from_length_file_pairs(iter::once(fake_length_file_pair(
+                    (0u8..20u8).collect(),
+                )))
+                .unwrap();
+
+                let (proxy, runner) = async_storage_impl(s);
+
+                task::spawn_local(async move {
+                    runner.run().await;
+                });
+
+                let verify_success = proxy.verify_block(0, 10, expected_sha1_0_10).await.unwrap();
+                assert!(verify_success);
+
+                let verify_success = proxy.verify_block(0, 10, expected_sha1_10_20).await.unwrap();
+                assert!(!verify_success);
+
+                let verify_success = proxy.verify_block(10, 10, expected_sha1_10_20).await.unwrap();
+                assert!(verify_success);
+
+                let verify_success = proxy.verify_block(10, 10, expected_sha1_0_10).await.unwrap();
+                assert!(!verify_success);
             })
             .await;
     }
