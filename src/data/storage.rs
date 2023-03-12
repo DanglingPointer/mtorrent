@@ -17,10 +17,10 @@ pub struct StorageProxy {
 }
 
 pub fn async_storage(storage: Storage) -> (StorageProxy, StorageRunner) {
-    async_storage_impl(storage)
+    async_generic_storage(storage)
 }
 
-fn async_storage_impl<F: RandomAccessReadWrite>(
+fn async_generic_storage<F: RandomAccessReadWrite>(
     storage: GenericStorage<F>,
 ) -> (StorageProxy, GenericStorageRunner<F>) {
     let (tx, rx) = mpsc::unbounded_channel::<Command>();
@@ -454,7 +454,7 @@ mod tests {
                 )
                 .unwrap();
 
-                let (proxy, runner) = async_storage_impl(s);
+                let (proxy, runner) = async_generic_storage(s);
 
                 task::spawn_local(async move {
                     runner.run().await;
@@ -487,7 +487,7 @@ mod tests {
                 )))
                 .unwrap();
 
-                let (proxy, runner) = async_storage_impl(s);
+                let (proxy, runner) = async_generic_storage(s);
 
                 task::spawn_local(async move {
                     runner.run().await;
