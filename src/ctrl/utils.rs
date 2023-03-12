@@ -8,14 +8,11 @@ pub fn divide_piece_into_blocks(
     piece_index: usize,
     piece_len: usize,
 ) -> impl Iterator<Item = BlockInfo> {
-    (0..piece_len)
-        .into_iter()
-        .step_by(MAX_BLOCK_SIZE)
-        .map(move |in_piece_offset| BlockInfo {
-            piece_index,
-            in_piece_offset,
-            block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
-        })
+    (0..piece_len).step_by(MAX_BLOCK_SIZE).map(move |in_piece_offset| BlockInfo {
+        piece_index,
+        in_piece_offset,
+        block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
+    })
 }
 
 #[cfg(test)]
