@@ -86,6 +86,44 @@ impl BlockAccountant {
         true
     }
 
+    pub fn remove_piece(&mut self, piece_index: usize) {
+        let piece_length = self.pieces.piece_len();
+        if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
+            self.remove_block_internal(global_offset, piece_length);
+        }
+    }
+
+    fn remove_block_internal(&mut self, global_offset: usize, length: usize) {
+        let start = global_offset;
+        let end = global_offset + length;
+
+        if let Some(prev_block) = self.blocks_start_end.range_mut(..global_offset).last() {
+            let (_prev_start, prev_end) = prev_block;
+            let prev_end_copy = *prev_end;
+            if *prev_end > start {
+                self.total_bytes -= *prev_end - start;
+                *prev_end = start;
+            }
+            if prev_end_copy > end {
+                self.blocks_start_end.insert(end, prev_end_copy);
+                self.total_bytes += prev_end_copy - end;
+            }
+        }
+
+        while let Some(next_block) = self.blocks_start_end.range_mut(global_offset..).next() {
+            let (next_start, next_end) = { (*next_block.0, *next_block.1) };
+            if next_start >= end {
+                break;
+            }
+            self.blocks_start_end.remove(&next_start);
+            self.total_bytes -= next_end - next_start;
+            if next_end > end {
+                self.blocks_start_end.insert(end, next_end);
+                self.total_bytes += next_end - end;
+            }
+        }
+    }
+
     pub fn max_block_length_at(&self, global_offset: usize) -> Option<usize> {
         if let Some((_start, end)) = self.blocks_start_end.range(..=global_offset).last() {
             if *end > global_offset {
@@ -300,5 +338,125 @@ mod tests {
 
         assert!(a.has_exact_block_at(19, 1));
         assert!(!a.has_exact_block_at(19, 2));
+    }
+
+    #[test]
+    fn test_accountant_remove_exact_block() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 5);
+        a.blocks_start_end.insert(10, 15);
+        a.blocks_start_end.insert(20, 25);
+        a.total_bytes = 15;
+
+        // when
+        a.remove_block_internal(10, 5);
+
+        // then
+        assert_eq!(2, a.blocks_start_end.len());
+        assert_eq!(Some(&5), a.blocks_start_end.get(&0));
+        assert_eq!(Some(&25), a.blocks_start_end.get(&20));
+        assert_eq!(10, a.total_bytes);
+    }
+
+    #[test]
+    fn test_accountant_shrink_block_from_tail_end() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 10);
+        a.total_bytes = 10;
+
+        // when
+        a.remove_block_internal(5, 5);
+
+        // then
+        assert_eq!(1, a.blocks_start_end.len());
+        assert_eq!(Some(&5), a.blocks_start_end.get(&0));
+        assert_eq!(5, a.total_bytes);
+    }
+
+    #[test]
+    fn test_accountant_shrink_block_from_head_end() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 10);
+        a.total_bytes = 10;
+
+        // when
+        a.remove_block_internal(0, 5);
+
+        // then
+        assert_eq!(1, a.blocks_start_end.len());
+        assert_eq!(Some(&10), a.blocks_start_end.get(&5));
+        assert_eq!(5, a.total_bytes);
+    }
+
+    #[test]
+    fn test_accountant_split_block_into_two() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 20);
+        a.total_bytes = 20;
+
+        // when
+        a.remove_block_internal(5, 10);
+
+        // then
+        assert_eq!(2, a.blocks_start_end.len());
+        assert_eq!(Some(&5), a.blocks_start_end.get(&0));
+        assert_eq!(Some(&20), a.blocks_start_end.get(&15));
+        assert_eq!(10, a.total_bytes);
+    }
+
+    #[test]
+    fn test_accountant_remove_multiple_nonadjacent_blocks() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 5);
+        a.blocks_start_end.insert(10, 15);
+        a.blocks_start_end.insert(20, 25);
+        a.blocks_start_end.insert(30, 35);
+        a.total_bytes = 20;
+
+        // when
+        a.remove_block_internal(8, 20);
+
+        // then
+        assert_eq!(2, a.blocks_start_end.len());
+        assert_eq!(Some(&5), a.blocks_start_end.get(&0));
+        assert_eq!(Some(&35), a.blocks_start_end.get(&30));
+        assert_eq!(10, a.total_bytes);
+    }
+
+    #[test]
+    fn test_accountant_remove_multiple_nonadjacent_blocks_and_shrink() {
+        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let mut a = BlockAccountant::new(p);
+
+        // given
+        a.blocks_start_end.insert(0, 5);
+        a.blocks_start_end.insert(10, 15);
+        a.blocks_start_end.insert(20, 25);
+        a.blocks_start_end.insert(30, 35);
+        a.total_bytes = 20;
+
+        // when
+        a.remove_block_internal(4, 27);
+
+        // then
+        assert_eq!(2, a.blocks_start_end.len());
+        assert_eq!(Some(&4), a.blocks_start_end.get(&0));
+        assert_eq!(Some(&35), a.blocks_start_end.get(&31));
+        assert_eq!(8, a.total_bytes);
     }
 }
