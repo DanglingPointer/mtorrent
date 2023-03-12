@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 
 mod block_accountant;
 mod piece_info;
@@ -27,6 +27,15 @@ impl From<Error> for io::Error {
         match e {
             Error::IOError(e) => e,
             Error::InvalidLocation => io::Error::from(io::ErrorKind::NotFound),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::IOError(e) => write!(f, "{e}"),
+            Error::InvalidLocation => write!(f, "Invalid Location"),
         }
     }
 }

@@ -95,7 +95,7 @@ impl StorageProxy {
         result_receiver.await.map_err(Self::to_io_error_other)?
     }
 
-    pub fn write_block_detached(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
+    pub fn start_write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
         self.channel
             .send(Command::WriteBlock {
                 global_offset,
@@ -465,7 +465,7 @@ mod tests {
                 assert_eq!(vec![0u8, 0u8, 0u8], initial_data);
 
                 // when
-                proxy.write_block_detached(8, vec![9u8, 10u8, 1u8]).unwrap();
+                proxy.start_write_block(8, vec![9u8, 10u8, 1u8]).unwrap();
 
                 // then
                 let final_data = proxy.read_block(8, 3).await.unwrap();

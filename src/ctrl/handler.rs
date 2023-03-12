@@ -363,9 +363,9 @@ impl<'h> OperationHandler {
             UploaderMessage::Block(info, data) => {
                 // TODO: ignore unless interested and peer not choking
                 if let Ok(global_offset) = self.ctx.local_availability.submit_block(&info) {
-                    self.filekeeper
-                        .write_block_detached(global_offset, data)
-                        .unwrap_or_else(|_| panic!("Failed to write to file: {}", info));
+                    self.filekeeper.start_write_block(global_offset, data).unwrap_or_else(|e| {
+                        panic!("Failed to start write ({info}) to storage: {e}")
+                    });
 
                     if self.ctx.local_availability.has_piece(info.piece_index) {
                         ops.push(
