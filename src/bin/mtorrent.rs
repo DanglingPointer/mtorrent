@@ -7,15 +7,17 @@ use mtorrent::utils::meta::Metainfo;
 use mtorrent::utils::{benc, upnp};
 use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 use std::{env, fs, io, thread};
 use tokio::runtime;
 
-fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Metainfo> {
+fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Rc<Metainfo>> {
     let file_content = fs::read(metainfo_filepath)?;
     let root_entity = benc::Element::from_bytes(&file_content)?;
-    Metainfo::try_from(root_entity)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))
+    let metainfo = Metainfo::try_from(root_entity)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))?;
+    Ok(Rc::new(metainfo))
 }
 
 fn generate_local_peer_id() -> [u8; 20] {

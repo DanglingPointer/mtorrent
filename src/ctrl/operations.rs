@@ -1,6 +1,7 @@
 use crate::data::{PieceInfo, StorageProxy};
 use crate::pwp::*;
 use crate::tracker::{http, udp};
+use crate::utils::meta::Metainfo;
 use futures::future::LocalBoxFuture;
 use log::{debug, error, info, warn};
 use std::net::{SocketAddr, SocketAddrV4};
@@ -25,6 +26,7 @@ pub enum Action {
     DownloadMsgReceived(Result<Box<(DownloadRxChannel, UploaderMessage)>, SocketAddr>),
     UploadMsgSent(Result<UploadTxChannel, SocketAddr>),
     UploadMsgReceived(Result<Box<(UploadRxChannel, DownloaderMessage)>, SocketAddr>),
+    PieceVerification(Result<usize, usize>),
     PeerConnectivity(Result<Box<(DownloadChannels, UploadChannels, ConnectionRunner)>, SocketAddr>),
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<(udp::AnnounceResponse, String)>>),
@@ -185,6 +187,44 @@ impl Action {
     ) -> Self {
         let inner_fut = async move { Ok((http::do_announce_request(request).await?, tracker_url)) };
         Action::HttpAnnounce(Box::new(inner_fut.await))
+    }
+
+    pub async fn from_piece_verification(
+        piece_index: usize,
+        pieces: Rc<PieceInfo>,
+        files: Rc<StorageProxy>,
+        metainfo: Rc<Metainfo>,
+    ) -> Self {
+        let inner_fut = async {
+            let piece_length = pieces.piece_len();
+            let global_offset = pieces.global_offset(piece_index, 0, piece_length).ok()?;
+            let expected_sha1 = {
+                let mut buf = [0u8; 20];
+                buf.copy_from_slice(metainfo.pieces()?.nth(piece_index)?);
+                buf
+            };
+            let result =
+                files.verify_block(global_offset, piece_length, &expected_sha1).await.ok()?;
+            Some(result)
+        };
+        match inner_fut.await {
+            Some(true) => {
+                info!("Piece verified successfully, piece_index={piece_index}");
+                Action::PieceVerification(Ok(piece_index))
+            }
+            Some(false) => {
+                error!("Piece verification failed, piece_index={piece_index}");
+                Action::PieceVerification(Err(piece_index))
+            }
+            None => {
+                error!("Piece verification could not be done, piece_index={piece_index}");
+                debug_assert!(
+                    false,
+                    "Piece verification could not be done, piece_index={piece_index}"
+                );
+                Action::PieceVerification(Err(piece_index))
+            }
+        }
     }
 }
 

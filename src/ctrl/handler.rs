@@ -17,7 +17,7 @@ use std::{io, iter};
 type Slot<C> = std::cell::Cell<Option<C>>;
 
 pub struct OperationHandler {
-    metainfo: Metainfo,
+    metainfo: Rc<Metainfo>,
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
@@ -31,7 +31,7 @@ pub struct OperationHandler {
 
 impl OperationHandler {
     pub fn new(
-        metainfo: Metainfo,
+        metainfo: Rc<Metainfo>,
         filekeeper: data::StorageProxy,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
@@ -83,6 +83,7 @@ impl<'h> Handler<'h> for OperationHandler {
             Action::DownloadMsgReceived(result) => self.process_download_msg_received(result),
             Action::UploadMsgSent(result) => self.process_upload_msg_sent(result),
             Action::UploadMsgReceived(result) => self.process_upload_msg_received(result),
+            Action::PieceVerification(result) => self.process_piece_verification(result),
             Action::UdpAnnounce(response) => self.process_udp_announce_result(*response),
             Action::HttpAnnounce(response) => self.process_http_announce_result(*response),
             Action::PeerConnectivity(result) => self.process_connect_result(result),
@@ -354,6 +355,10 @@ impl<'h> OperationHandler {
         let remote_ip = *rx_channel.remote_ip();
         self.ctx.peermgr.download_handler(&remote_ip)?.update_state(&msg);
 
+        // TODO: run engine
+
+        let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
+
         match msg {
             UploaderMessage::Block(info, data) => {
                 // TODO: ignore unless interested and peer not choking
@@ -363,32 +368,55 @@ impl<'h> OperationHandler {
                         .unwrap_or_else(|_| panic!("Failed to write to file: {}", info));
 
                     if self.ctx.local_availability.has_piece(info.piece_index) {
-                        // TODO: check hash
-                        self.ctx.piece_tracker.forget_piece(info.piece_index);
-                        for upload_monitor in self.ctx.peermgr.all_upload_monitors() {
-                            upload_monitor.submit_outbound(UploaderMessage::Have {
-                                piece_index: info.piece_index,
-                            });
-                        }
+                        ops.push(
+                            Action::from_piece_verification(
+                                info.piece_index,
+                                self.pieces.clone(),
+                                self.filekeeper.clone(),
+                                self.metainfo.clone(),
+                            )
+                            .boxed_local(),
+                        );
                     }
                 } else {
                     error!("Received block ignored: {info}");
                 }
             }
             UploaderMessage::Bitfield(bitfield) => {
+                // temp
                 self.ctx.piece_tracker.add_bitfield_record(remote_ip, &bitfield);
             }
             UploaderMessage::Have { piece_index } => {
+                // temp
                 self.ctx.piece_tracker.add_single_record(remote_ip, piece_index);
             }
             _ => (),
         }
-
-        // TODO: run engine
-
-        let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
         self.fill_tx_channels(&mut ops);
         Some(ops)
+    }
+
+    fn process_piece_verification(
+        &mut self,
+        outcome: Result<usize, usize>,
+    ) -> Option<Vec<Operation<'h>>> {
+        match outcome {
+            Ok(piece_index) => {
+                self.ctx.piece_tracker.forget_piece(piece_index);
+                // temp:
+                for upload_monitor in self.ctx.peermgr.all_upload_monitors() {
+                    upload_monitor.submit_outbound(UploaderMessage::Have { piece_index });
+                }
+
+                let mut ops = Vec::new();
+                self.fill_tx_channels(&mut ops);
+                Some(ops)
+            }
+            Err(piece_index) => {
+                self.ctx.local_availability.remove_piece(piece_index);
+                None
+            }
+        }
     }
 
     fn process_upload_msg_sent(
