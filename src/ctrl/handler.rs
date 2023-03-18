@@ -13,6 +13,7 @@ use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::time::Duration;
 use std::{io, iter};
+use tokio::runtime;
 
 type Slot<C> = std::cell::Cell<Option<C>>;
 
@@ -27,6 +28,7 @@ pub struct OperationHandler {
     pieces: Rc<data::PieceInfo>,
     ctx: engine::Context,
     debug_finished: bool,
+    pwp_worker_handle: runtime::Handle,
 }
 
 impl OperationHandler {
@@ -36,6 +38,7 @@ impl OperationHandler {
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
+        pwp_worker_handle: runtime::Handle,
     ) -> Option<Self> {
         let pieces = Rc::new(data::PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
         let ctx = engine::Context {
@@ -54,6 +57,7 @@ impl OperationHandler {
             pieces,
             ctx,
             debug_finished: false,
+            pwp_worker_handle,
         })
     }
 }
@@ -235,10 +239,11 @@ impl<'h> OperationHandler {
     fn create_listener_ops(&mut self) -> Vec<Operation<'h>> {
         match listener_on_addr(self.internal_local_ip) {
             Ok((monitor, receiver)) => {
-                vec![
-                    Action::from_listener_runner(receiver, self.internal_local_ip).boxed_local(),
-                    Action::from_listen_monitor(Box::new(monitor)).boxed_local(),
-                ]
+                let local_ip = self.internal_local_ip;
+                self.pwp_worker_handle.spawn(async move {
+                    Action::from_listener_runner(receiver, local_ip).await;
+                });
+                vec![Action::from_listen_monitor(Box::new(monitor)).boxed_local()]
             }
             Err(e) => {
                 error!("Failed to create TCP listener: {}", e);
@@ -309,8 +314,10 @@ impl<'h> OperationHandler {
 
         // TODO: run engine
 
+        self.pwp_worker_handle.spawn(async move {
+            Action::from_connection_runner(runner).await;
+        });
         let mut ops = vec![
-            Action::from_connection_runner(runner).boxed_local(),
             Action::from_download_rx_channel(download_rx).boxed_local(),
             Action::from_upload_rx_channel(upload_rx).boxed_local(),
         ];
