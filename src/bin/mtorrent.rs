@@ -35,8 +35,8 @@ fn generate_local_peer_id() -> [u8; 20] {
     ret
 }
 
-fn start_storage(storage: data::Storage) -> (data::StorageProxy, thread::JoinHandle<()>) {
-    let (proxy, runner) = data::async_storage(storage);
+fn start_storage(storage: data::Storage) -> (data::StorageClient, thread::JoinHandle<()>) {
+    let (client, server) = data::async_storage(storage);
 
     let handle = thread::spawn(move || {
         debug!("Storage thread starting");
@@ -44,12 +44,12 @@ fn start_storage(storage: data::Storage) -> (data::StorageProxy, thread::JoinHan
         //     .build()
         //     .expect("Failed to create Storage runtime")
         //     .block_on(async move {
-        //         runner.run().await;
+        //         server.run().await;
         //     });
-        runner.run_blocking();
+        server.run_blocking();
         debug!("Storage thread exiting");
     });
-    (proxy, handle)
+    (client, handle)
 }
 
 fn main() -> io::Result<()> {

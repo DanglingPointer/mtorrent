@@ -5,35 +5,35 @@ use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
-pub type StorageRunner = GenericStorageRunner<fs::File>;
+pub type StorageServer = GenericStorageServer<fs::File>;
 
-pub struct GenericStorageRunner<F: RandomAccessReadWrite> {
+pub struct GenericStorageServer<F: RandomAccessReadWrite> {
     channel: mpsc::UnboundedReceiver<Command>,
     storage: GenericStorage<F>,
 }
 
-pub struct StorageProxy {
+pub struct StorageClient {
     channel: mpsc::UnboundedSender<Command>,
 }
 
-pub fn async_storage(storage: Storage) -> (StorageProxy, StorageRunner) {
+pub fn async_storage(storage: Storage) -> (StorageClient, StorageServer) {
     async_generic_storage(storage)
 }
 
 fn async_generic_storage<F: RandomAccessReadWrite>(
     storage: GenericStorage<F>,
-) -> (StorageProxy, GenericStorageRunner<F>) {
+) -> (StorageClient, GenericStorageServer<F>) {
     let (tx, rx) = mpsc::unbounded_channel::<Command>();
     (
-        StorageProxy { channel: tx },
-        GenericStorageRunner {
+        StorageClient { channel: tx },
+        GenericStorageServer {
             channel: rx,
             storage,
         },
     )
 }
 
-impl<F: RandomAccessReadWrite> GenericStorageRunner<F> {
+impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
     pub async fn run(mut self) {
         while let Some(cmd) = self.channel.recv().await {
             self.handle_cmd(cmd);
@@ -82,7 +82,7 @@ impl<F: RandomAccessReadWrite> GenericStorageRunner<F> {
     }
 }
 
-impl StorageProxy {
+impl StorageClient {
     pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
         let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
         self.channel
@@ -454,21 +454,21 @@ mod tests {
                 )
                 .unwrap();
 
-                let (proxy, runner) = async_generic_storage(s);
+                let (client, server) = async_generic_storage(s);
 
                 task::spawn_local(async move {
-                    runner.run().await;
+                    server.run().await;
                 });
 
                 // given
-                let initial_data = proxy.read_block(8, 3).await.unwrap();
+                let initial_data = client.read_block(8, 3).await.unwrap();
                 assert_eq!(vec![0u8, 0u8, 0u8], initial_data);
 
                 // when
-                proxy.start_write_block(8, vec![9u8, 10u8, 1u8]).unwrap();
+                client.start_write_block(8, vec![9u8, 10u8, 1u8]).unwrap();
 
                 // then
-                let final_data = proxy.read_block(8, 3).await.unwrap();
+                let final_data = client.read_block(8, 3).await.unwrap();
                 assert_eq!(vec![9u8, 10u8, 1u8], final_data);
             })
             .await;
@@ -476,9 +476,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_verify_block() {
-        let expected_sha1_0_10 =
+        let sha1_0_10 =
             b"\x49\x41\x79\x71\x4a\x6c\xd6\x27\x23\x9d\xfe\xde\xdf\x2d\xe9\xef\x99\x4c\xaf\x03";
-        let expected_sha1_10_20 =
+        let sha1_10_20 =
             b"\xdd\xd1\x27\x8d\x28\xaf\x87\xc7\x58\x84\xf5\x5b\x71\xfb\xb4\xa1\x23\x1a\xf2\xe5";
         task::LocalSet::new()
             .run_until(async {
@@ -487,22 +487,22 @@ mod tests {
                 )))
                 .unwrap();
 
-                let (proxy, runner) = async_generic_storage(s);
+                let (client, server) = async_generic_storage(s);
 
                 task::spawn_local(async move {
-                    runner.run().await;
+                    server.run().await;
                 });
 
-                let verify_success = proxy.verify_block(0, 10, expected_sha1_0_10).await.unwrap();
+                let verify_success = client.verify_block(0, 10, sha1_0_10).await.unwrap();
                 assert!(verify_success);
 
-                let verify_success = proxy.verify_block(0, 10, expected_sha1_10_20).await.unwrap();
+                let verify_success = client.verify_block(0, 10, sha1_10_20).await.unwrap();
                 assert!(!verify_success);
 
-                let verify_success = proxy.verify_block(10, 10, expected_sha1_10_20).await.unwrap();
+                let verify_success = client.verify_block(10, 10, sha1_10_20).await.unwrap();
                 assert!(verify_success);
 
-                let verify_success = proxy.verify_block(10, 10, expected_sha1_0_10).await.unwrap();
+                let verify_success = client.verify_block(10, 10, sha1_0_10).await.unwrap();
                 assert!(!verify_success);
             })
             .await;

@@ -1,4 +1,4 @@
-use crate::data::{PieceInfo, StorageProxy};
+use crate::data::{PieceInfo, StorageClient};
 use crate::pwp::*;
 use crate::tracker::{http, udp};
 use crate::utils::meta::Metainfo;
@@ -143,7 +143,7 @@ impl Action {
         mut channel: UploadTxChannel,
         mut msg: UploaderMessage,
         pieces: Rc<PieceInfo>,
-        files: Rc<StorageProxy>,
+        files: Rc<StorageClient>,
     ) -> Self {
         if let UploaderMessage::Block(info, data) = &mut msg {
             let global_offset = pieces
@@ -192,7 +192,7 @@ impl Action {
     pub async fn from_piece_verification(
         piece_index: usize,
         pieces: Rc<PieceInfo>,
-        files: Rc<StorageProxy>,
+        files: Rc<StorageClient>,
         metainfo: Rc<Metainfo>,
     ) -> Self {
         let inner_fut = async {

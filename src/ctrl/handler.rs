@@ -21,7 +21,7 @@ pub struct OperationHandler {
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     local_peer_id: [u8; 20],
-    filekeeper: Rc<data::StorageProxy>,
+    filekeeper: Rc<data::StorageClient>,
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
     pieces: Rc<data::PieceInfo>,
@@ -32,7 +32,7 @@ pub struct OperationHandler {
 impl OperationHandler {
     pub fn new(
         metainfo: Rc<Metainfo>,
-        filekeeper: data::StorageProxy,
+        filekeeper: data::StorageClient,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
