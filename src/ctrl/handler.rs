@@ -8,6 +8,7 @@ use crate::utils::dispatch::Handler;
 use crate::utils::meta::Metainfo;
 use futures::prelude::*;
 use log::{error, info};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
@@ -73,7 +74,11 @@ impl<'h> Handler<'h> for OperationHandler {
             self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
             vec![
-                Action::new_timer(Duration::from_secs(60), TimerType::DebugShutdown).boxed_local(),
+                Action::new_timer(Duration::from_secs(60), |ctx: &mut Self| {
+                    ctx.debug_finished = true;
+                    None
+                })
+                .boxed_local(),
             ],
         ]
         .into_iter()
@@ -92,7 +97,7 @@ impl<'h> Handler<'h> for OperationHandler {
             Action::HttpAnnounce(response) => self.process_http_announce_result(*response),
             Action::PeerConnectivity(result) => self.process_connect_result(result),
             Action::PeerListen(monitor) => Some(self.process_listener_result(monitor)),
-            Action::Timeout(timer) => self.process_timeout(timer),
+            Action::Timeout(func) => self.process_timeout(func),
             Action::Void => None,
         }
     }
@@ -198,7 +203,12 @@ impl<'h> OperationHandler {
         ops.push(
             Action::new_timer(
                 Duration::from_secs(response.interval as u64),
-                TimerType::UdpReannounce { tracker_addr },
+                move |ctx: &mut Self| {
+                    Some(ctx.create_udp_announce_ops(
+                        udp::AnnounceEvent::None,
+                        iter::once(tracker_addr),
+                    ))
+                },
             )
             .boxed_local(),
         );
@@ -229,7 +239,9 @@ impl<'h> OperationHandler {
         ops.push(
             Action::new_timer(
                 Duration::from_secs(response.interval().unwrap_or(900) as u64),
-                TimerType::HttpReannounce { tracker_url },
+                move |ctx: &mut Self| {
+                    Some(ctx.create_http_announce_ops(None, iter::once(tracker_url)))
+                },
             )
             .boxed_local(),
         );
@@ -252,19 +264,9 @@ impl<'h> OperationHandler {
         }
     }
 
-    fn process_timeout(&mut self, what: TimerType) -> Option<Vec<Operation<'h>>> {
-        match what {
-            TimerType::DebugShutdown => {
-                self.debug_finished = true;
-                None
-            }
-            TimerType::HttpReannounce { tracker_url } => {
-                Some(self.create_http_announce_ops(None, iter::once(tracker_url)))
-            }
-            TimerType::UdpReannounce { tracker_addr } => Some(
-                self.create_udp_announce_ops(udp::AnnounceEvent::None, iter::once(tracker_addr)),
-            ),
-        }
+    fn process_timeout(&mut self, f: DelayedFn) -> Option<Vec<Operation<'h>>> {
+        let ctx = self as &mut dyn Any;
+        f(ctx)
     }
 
     fn process_listener_result(&mut self, mut monitor: Box<ListenMonitor>) -> Vec<Operation<'h>> {

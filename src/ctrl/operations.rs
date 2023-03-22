@@ -4,6 +4,7 @@ use crate::tracker::{http, udp};
 use crate::utils::meta::Metainfo;
 use futures::future::LocalBoxFuture;
 use log::{debug, error, info, warn};
+use std::any::Any;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::time::Duration;
@@ -11,15 +12,7 @@ use std::{io, mem};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::sleep;
 
-pub enum TimerType {
-    HttpReannounce {
-        tracker_url: String,
-    },
-    UdpReannounce {
-        tracker_addr: String,
-    },
-    DebugShutdown,
-}
+pub type DelayedFn = Box<dyn FnOnce(&mut dyn Any) -> Option<Vec<Operation<'static>>>>;
 
 pub enum Action {
     DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),
@@ -31,16 +24,26 @@ pub enum Action {
     PeerListen(Box<ListenMonitor>),
     UdpAnnounce(Box<io::Result<(udp::AnnounceResponse, String)>>),
     HttpAnnounce(Box<Result<(http::AnnounceResponseContent, String), http::Error>>),
-    Timeout(TimerType),
+    Timeout(DelayedFn),
     Void,
 }
 
 pub type Operation<'o> = LocalBoxFuture<'o, Action>;
 
 impl Action {
-    pub async fn new_timer(delay: Duration, timer: TimerType) -> Self {
+    pub async fn new_timer<Ctx, F>(delay: Duration, f: F) -> Self
+    where
+        F: 'static + FnOnce(&mut Ctx) -> Option<Vec<Operation<'static>>>,
+        Ctx: Any,
+    {
         sleep(delay).await;
-        Action::Timeout(timer)
+        Action::Timeout(Box::new(move |ctx: &mut dyn Any| {
+            if let Some(ctx) = ctx.downcast_mut::<Ctx>() {
+                f(ctx)
+            } else {
+                None
+            }
+        }))
     }
 
     pub async fn from_listen_monitor(mut monitor: Box<ListenMonitor>) -> Self {
