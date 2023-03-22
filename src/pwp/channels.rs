@@ -233,7 +233,9 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             source: &SocketAddr,
         ) -> io::Result<()> {
             debug!("{} => {}", source, msg);
-            sink.send(msg).await.map_err(|_| io::Error::from(io::ErrorKind::Other))?;
+            sink.send(msg)
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
             Ok(())
         }
 
@@ -268,6 +270,10 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
     const PING_INTERVAL: Duration = Duration::from_secs(30);
 
     async fn write_one_message(&mut self) -> io::Result<()> {
+        fn new_channel_closed_error() -> io::Error {
+            io::Error::new(io::ErrorKind::Other, "Channel closed")
+        }
+
         async fn process_msg<M, S>(
             msg: Option<M>,
             source: &mut mpsc::Receiver<Option<M>>,
@@ -281,19 +287,18 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             let first = msg.expect("First msg must be non-None");
             debug!("{} <= {}", dest, first);
             first.into().write_to(sink).await?;
-            let second =
-                source.next().await.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
+            let second = source.next().await.ok_or_else(new_channel_closed_error)?;
             assert!(second.is_none(), "Second msg must be None");
             Ok(())
         }
 
         select_biased! {
             rx_msg = self.rx_outbound.next().fuse() => {
-                let msg = rx_msg.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
+                let msg = rx_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg(msg, &mut self.rx_outbound, &mut self.sink, &self.remote_ip).await?;
             }
             tx_msg = self.tx_outbound.next().fuse() => {
-                let msg = tx_msg.ok_or_else(|| io::Error::from(io::ErrorKind::Other))?;
+                let msg = tx_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg(msg, &mut self.tx_outbound, &mut self.sink, &self.remote_ip).await?;
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {

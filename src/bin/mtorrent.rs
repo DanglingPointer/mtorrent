@@ -1,4 +1,4 @@
-use log::{debug, error, info, Level};
+use log::{error, info, Level};
 use mtorrent::ctrl::OperationHandler;
 use mtorrent::data;
 use mtorrent::tracker::utils;
@@ -9,7 +9,7 @@ use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
-use std::{env, fs, io};
+use std::{env, fs, io, iter};
 use tokio::runtime;
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Rc<Metainfo>> {
@@ -71,11 +71,6 @@ fn main() -> io::Result<()> {
     })?;
     info!("Successfully consumed metainfo file for '{}'", metainfo.name().unwrap_or("<unknown>"));
 
-    let tracker_addrs = utils::get_udp_tracker_addrs(&metainfo);
-    for addr in &tracker_addrs {
-        info!("UDP tracker found: {}", addr);
-    }
-
     let local_internal_ip = SocketAddrV4::new(utils::get_local_ip()?, 23015);
     info!("Local internal ip address: {}", local_internal_ip);
 
@@ -94,13 +89,12 @@ fn main() -> io::Result<()> {
         };
         data::Storage::new(
             output_dir,
-            [(
+            iter::once((
                 metainfo.length().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::NotFound, "No 'length' in metainfo file")
                 })?,
                 PathBuf::from(name),
-            )]
-            .into_iter(),
+            )),
         )?
     };
 
@@ -111,8 +105,7 @@ fn main() -> io::Result<()> {
     );
     let local_external_ip = match &port_opener_result {
         Ok(port_opener) => {
-            debug!("UPnP succeeded");
-            info!("Local external ip address: {}", port_opener.external_ip());
+            info!("UPnP succeeded, public ip: {}", port_opener.external_ip());
             port_opener.external_ip()
         }
         Err(e) => {
