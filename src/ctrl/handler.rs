@@ -1,7 +1,7 @@
-use crate::ctrl::engine;
 use crate::ctrl::operations::*;
 use crate::ctrl::peers::*;
 use crate::data;
+use crate::engine;
 use crate::pwp::*;
 use crate::tracker::{http, udp, utils};
 use crate::utils::dispatch::Handler;
@@ -16,7 +16,44 @@ use std::time::Duration;
 use std::{io, iter};
 use tokio::runtime;
 
+pub trait DownloadChannelHandler {
+    fn update_state(&mut self, inbound: &UploaderMessage);
+    fn next_outbound(&mut self) -> Option<DownloaderMessage>;
+}
+
+pub trait UploadChannelHandler {
+    fn update_state(&mut self, inbound: &DownloaderMessage);
+    fn next_outbound(&mut self) -> Option<UploaderMessage>;
+}
+
+pub trait HandlerOwner {
+    fn download_handler(
+        &mut self,
+        remote_ip: &SocketAddr,
+    ) -> Option<&mut dyn DownloadChannelHandler>;
+
+    fn upload_handler(&mut self, remote_ip: &SocketAddr) -> Option<&mut dyn UploadChannelHandler>;
+}
+
 type Slot<C> = std::cell::Cell<Option<C>>;
+
+struct Context {
+    local_availability: data::BlockAccountant,
+    piece_tracker: data::PieceTracker,
+    peermgr: PeerManager,
+    state: engine::State,
+}
+
+impl<'a> From<&'a mut Context> for engine::Context<'a> {
+    fn from(ctx: &'a mut Context) -> Self {
+        engine::Context {
+            local_availability: &ctx.local_availability,
+            piece_tracker: &ctx.piece_tracker,
+            monitor_owner: &ctx.peermgr,
+            state: &mut ctx.state,
+        }
+    }
+}
 
 pub struct OperationHandler {
     metainfo: Rc<Metainfo>,
@@ -27,7 +64,7 @@ pub struct OperationHandler {
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
     pieces: Rc<data::PieceInfo>,
-    ctx: engine::Context,
+    ctx: Context,
     debug_finished: bool,
     pwp_worker_handle: runtime::Handle,
 }
@@ -42,10 +79,11 @@ impl OperationHandler {
         pwp_worker_handle: runtime::Handle,
     ) -> Option<Self> {
         let pieces = Rc::new(data::PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
-        let ctx = engine::Context {
+        let ctx = Context {
             local_availability: data::BlockAccountant::new(pieces.clone()),
             piece_tracker: data::PieceTracker::new(pieces.piece_count()),
             peermgr: PeerManager::new(pieces.clone()),
+            state: Default::default(),
         };
         Some(Self {
             metainfo,
@@ -116,8 +154,8 @@ impl<'h> OperationHandler {
         let downloaded = self.ctx.local_availability.accounted_bytes();
         let left = self.ctx.local_availability.missing_bytes();
 
-        let monitors = self.ctx.peermgr.as_monitor_owner();
-        let uploaded = monitors.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
+        let monitors = &mut self.ctx.peermgr as &mut dyn engine::MonitorOwner;
+        let uploaded = monitors.all_upload_monitors().map(|(_, um)| um.bytes_sent()).sum::<usize>();
 
         let announce_request = udp::AnnounceRequest {
             info_hash: *self.metainfo.info_hash(),
@@ -150,8 +188,8 @@ impl<'h> OperationHandler {
         let downloaded = self.ctx.local_availability.accounted_bytes();
         let left = self.ctx.local_availability.missing_bytes();
 
-        let monitors = self.ctx.peermgr.as_monitor_owner();
-        let uploaded = monitors.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
+        let monitors = &mut self.ctx.peermgr as &mut dyn engine::MonitorOwner;
+        let uploaded = monitors.all_upload_monitors().map(|(_, um)| um.bytes_sent()).sum::<usize>();
 
         tracker_urls
             .filter_map(|url| {
@@ -304,9 +342,10 @@ impl<'h> OperationHandler {
         self.ctx.peermgr.add_peer(&remote_ip);
         self.stored_channels.insert(remote_ip, (Slot::default(), Slot::default()));
 
-        let monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = &mut self.ctx.peermgr as &mut dyn engine::MonitorOwner;
 
         if self.ctx.local_availability.accounted_bytes() > 0 {
+            // TODO: handle this somewhere else
             let bitfield = self.ctx.local_availability.generate_bitfield();
             monitors
                 .upload_monitor(&remote_ip)
@@ -314,7 +353,7 @@ impl<'h> OperationHandler {
                 .submit_outbound(UploaderMessage::Bitfield(bitfield));
         }
 
-        // TODO: run engine
+        self.run_engine();
 
         self.pwp_worker_handle.spawn(async move {
             Action::from_connection_runner(runner).await;
@@ -343,7 +382,7 @@ impl<'h> OperationHandler {
             })
             .ok()?;
 
-        let mut handlers = self.ctx.peermgr.as_handler_owner();
+        let handlers = &mut self.ctx.peermgr as &mut dyn HandlerOwner;
         let download_handler = handlers.download_handler(tx_channel.remote_ip())?;
         if let Some(msg) = download_handler.next_outbound() {
             Some(vec![Action::from_download_tx_channel(tx_channel, msg).boxed_local()])
@@ -367,13 +406,12 @@ impl<'h> OperationHandler {
 
         let remote_ip = *rx_channel.remote_ip();
 
-        let mut handlers = self.ctx.peermgr.as_handler_owner();
+        let handlers = &mut self.ctx.peermgr as &mut dyn HandlerOwner;
         handlers.download_handler(&remote_ip)?.update_state(&msg);
 
-        // TODO: run engine
+        let should_run_engine = !matches!(&msg, UploaderMessage::Block(_, _));
 
         let mut ops = vec![Action::from_download_rx_channel(rx_channel).boxed_local()];
-
         match msg {
             UploaderMessage::Block(info, data) => {
                 // TODO: ignore unless interested and peer not choking
@@ -407,6 +445,11 @@ impl<'h> OperationHandler {
             }
             _ => (),
         }
+
+        if should_run_engine {
+            self.run_engine();
+        }
+
         self.fill_tx_channels(&mut ops);
         Some(ops)
     }
@@ -415,14 +458,16 @@ impl<'h> OperationHandler {
         &mut self,
         outcome: Result<usize, usize>,
     ) -> Option<Vec<Operation<'h>>> {
-        let monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = &mut self.ctx.peermgr as &mut dyn engine::MonitorOwner;
         match outcome {
             Ok(piece_index) => {
                 self.ctx.piece_tracker.forget_piece(piece_index);
                 // temp:
-                for upload_monitor in monitors.all_upload_monitors() {
+                for (_ip, upload_monitor) in monitors.all_upload_monitors() {
                     upload_monitor.submit_outbound(UploaderMessage::Have { piece_index });
                 }
+
+                self.run_engine();
 
                 let mut ops = Vec::new();
                 self.fill_tx_channels(&mut ops);
@@ -446,7 +491,7 @@ impl<'h> OperationHandler {
             })
             .ok()?;
 
-        let mut handlers = self.ctx.peermgr.as_handler_owner();
+        let handlers = &mut self.ctx.peermgr as &mut dyn HandlerOwner;
         let upload_handler = handlers.upload_handler(tx_channel.remote_ip())?;
         if let Some(msg) = upload_handler.next_outbound() {
             Some(vec![Action::from_upload_tx_channel(
@@ -477,7 +522,7 @@ impl<'h> OperationHandler {
 
         let remote_ip = *rx_channel.remote_ip();
 
-        let mut handlers = self.ctx.peermgr.as_handler_owner();
+        let handlers = &mut self.ctx.peermgr as &mut dyn HandlerOwner;
         handlers.upload_handler(&remote_ip)?.update_state(&msg);
 
         match msg {
@@ -492,7 +537,7 @@ impl<'h> OperationHandler {
             _ => (),
         }
 
-        // TODO: run engine
+        self.run_engine();
 
         let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
         self.fill_tx_channels(&mut ops);
@@ -500,7 +545,7 @@ impl<'h> OperationHandler {
     }
 
     fn fill_tx_channels(&mut self, ops: &mut Vec<Operation<'h>>) {
-        let mut handlers = self.ctx.peermgr.as_handler_owner();
+        let handlers = &mut self.ctx.peermgr as &mut dyn HandlerOwner;
         for (ip, (download_channel_slot, upload_channel_slot)) in &self.stored_channels {
             if let Some(channel) = download_channel_slot.take() {
                 if let Some(msg) = handlers.download_handler(ip).and_then(|h| h.next_outbound()) {
@@ -533,5 +578,10 @@ impl OperationHandler {
         self.ctx.peermgr.remove_peer(remote_ip);
         self.stored_channels.remove(remote_ip);
         self.ctx.piece_tracker.forget_peer(*remote_ip);
+    }
+
+    fn run_engine(&mut self) {
+        let mut ctx = engine::Context::from(&mut self.ctx);
+        engine::update_interest(&mut ctx);
     }
 }
