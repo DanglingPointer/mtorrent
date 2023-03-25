@@ -1,47 +1,16 @@
 #![allow(dead_code)]
+use super::handler;
 use crate::data::{BlockAccountant, PieceInfo};
+use crate::engine;
 use crate::pwp::{BlockInfo, DownloaderMessage, UploaderMessage};
 use crate::utils::fifo;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-pub trait DownloadChannelHandler {
-    fn update_state(&mut self, inbound: &UploaderMessage);
-    fn next_outbound(&mut self) -> Option<DownloaderMessage>;
-}
-
-pub trait UploadChannelHandler {
-    fn update_state(&mut self, inbound: &DownloaderMessage);
-    fn next_outbound(&mut self) -> Option<UploaderMessage>;
-}
-
-pub trait DownloadChannelMonitor {
-    fn am_interested(&self) -> bool;
-    fn peer_choking(&self) -> bool;
-    fn remote_availability(&self) -> &BlockAccountant;
-    fn bytes_received(&self) -> usize;
-    fn submit_outbound(&self, msg: DownloaderMessage);
-}
-
-pub trait UploadChannelMonitor {
-    fn peer_interested(&self) -> bool;
-    fn am_choking(&self) -> bool;
-    fn bytes_sent(&self) -> usize;
-    fn submit_outbound(&self, msg: UploaderMessage);
-}
-
 pub struct PeerManager {
     pieces: Rc<PieceInfo>,
     channel_states: HashMap<SocketAddr, (DownloadChannelState, UploadChannelState)>,
-}
-
-pub struct HandlerOwner<'m> {
-    inner: &'m mut PeerManager,
-}
-
-pub struct MonitorOwner<'m> {
-    inner: &'m PeerManager,
 }
 
 impl PeerManager {
@@ -73,57 +42,73 @@ impl PeerManager {
     pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         self.channel_states.remove(remote_ip);
     }
-
-    pub fn as_handler_owner(&mut self) -> HandlerOwner {
-        HandlerOwner { inner: self }
-    }
-
-    pub fn as_monitor_owner(&self) -> MonitorOwner {
-        MonitorOwner { inner: self }
-    }
 }
 
-impl<'m> HandlerOwner<'m> {
-    pub fn download_handler(
+impl handler::HandlerOwner for PeerManager {
+    fn download_handler(
         &mut self,
         remote_ip: &SocketAddr,
-    ) -> Option<&mut impl DownloadChannelHandler> {
-        let (download, _upload) = self.inner.channel_states.get_mut(remote_ip)?;
+    ) -> Option<&mut dyn super::handler::DownloadChannelHandler> {
+        let (download, _upload) = self.channel_states.get_mut(remote_ip)?;
         Some(download)
     }
 
-    pub fn upload_handler(
+    fn upload_handler(
         &mut self,
         remote_ip: &SocketAddr,
-    ) -> Option<&mut impl UploadChannelHandler> {
-        let (_download, upload) = self.inner.channel_states.get_mut(remote_ip)?;
+    ) -> Option<&mut dyn super::handler::UploadChannelHandler> {
+        let (_download, upload) = self.channel_states.get_mut(remote_ip)?;
         Some(upload)
     }
 }
 
-impl<'m> MonitorOwner<'m> {
-    pub fn download_monitor(&self, remote_ip: &SocketAddr) -> Option<&impl DownloadChannelMonitor> {
-        let (download, _upload) = self.inner.channel_states.get(remote_ip)?;
-        Some(download)
-    }
-
-    pub fn upload_monitor(&self, remote_ip: &SocketAddr) -> Option<&impl UploadChannelMonitor> {
-        let (_download, upload) = self.inner.channel_states.get(remote_ip)?;
-        Some(upload)
-    }
-
-    pub fn all_download_monitors(&self) -> impl Iterator<Item = &impl DownloadChannelMonitor> {
-        self.inner.channel_states.values().map(|(download, _upload)| download)
-    }
-
-    pub fn all_upload_monitors(&self) -> impl Iterator<Item = &impl UploadChannelMonitor> {
-        self.inner.channel_states.values().map(|(_download, upload)| upload)
-    }
-
-    pub fn all_monitors(
+impl engine::MonitorOwner for PeerManager {
+    fn download_monitor(
         &self,
-    ) -> impl Iterator<Item = (&impl DownloadChannelMonitor, &impl UploadChannelMonitor)> {
-        self.inner.channel_states.values().map(|(download, upload)| (download, upload))
+        remote_ip: &SocketAddr,
+    ) -> Option<&dyn engine::DownloadChannelMonitor> {
+        let (download, _upload) = self.channel_states.get(remote_ip)?;
+        Some(download)
+    }
+
+    fn upload_monitor(&self, remote_ip: &SocketAddr) -> Option<&dyn engine::UploadChannelMonitor> {
+        let (_download, upload) = self.channel_states.get(remote_ip)?;
+        Some(upload)
+    }
+
+    fn all_download_monitors(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&SocketAddr, &dyn engine::DownloadChannelMonitor)> + '_> {
+        Box::new(self.channel_states.iter().map(|(addr, (download, _upload))| {
+            (addr, download as &dyn engine::DownloadChannelMonitor)
+        }))
+    }
+
+    fn all_upload_monitors(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&SocketAddr, &dyn engine::UploadChannelMonitor)> + '_> {
+        Box::new(
+            self.channel_states.iter().map(|(addr, (_download, upload))| {
+                (addr, upload as &dyn engine::UploadChannelMonitor)
+            }),
+        )
+    }
+
+    fn all_monitors(
+        &self,
+    ) -> Box<
+        dyn Iterator<
+                Item = (&dyn engine::DownloadChannelMonitor, &dyn engine::UploadChannelMonitor),
+            > + '_,
+    > {
+        fn to_dyn_ref_pair(
+            val: &(DownloadChannelState, UploadChannelState),
+        ) -> (&dyn engine::DownloadChannelMonitor, &dyn engine::UploadChannelMonitor) {
+            let (download, upload) = val;
+            (download, upload)
+        }
+
+        Box::new(self.channel_states.values().map(to_dyn_ref_pair))
     }
 }
 
@@ -136,7 +121,7 @@ struct DownloadChannelState {
     requested_blocks: HashSet<BlockInfo>,
 }
 
-impl DownloadChannelHandler for DownloadChannelState {
+impl handler::DownloadChannelHandler for DownloadChannelState {
     fn update_state(&mut self, inbound: &UploaderMessage) {
         match inbound {
             UploaderMessage::Unchoke => self.peer_choking = false,
@@ -171,7 +156,7 @@ impl DownloadChannelHandler for DownloadChannelState {
     }
 }
 
-impl DownloadChannelMonitor for DownloadChannelState {
+impl engine::DownloadChannelMonitor for DownloadChannelState {
     fn am_interested(&self) -> bool {
         if self.am_interested {
             !self.pending_tx_msgs.contains(&DownloaderMessage::NotInterested)
@@ -234,7 +219,7 @@ struct UploadChannelState {
     pending_tx_msgs: fifo::Queue<UploaderMessage>,
 }
 
-impl UploadChannelHandler for UploadChannelState {
+impl handler::UploadChannelHandler for UploadChannelState {
     fn update_state(&mut self, inbound: &DownloaderMessage) {
         match inbound {
             DownloaderMessage::NotInterested => self.peer_interested = false,
@@ -260,7 +245,7 @@ impl UploadChannelHandler for UploadChannelState {
     }
 }
 
-impl UploadChannelMonitor for UploadChannelState {
+impl engine::UploadChannelMonitor for UploadChannelState {
     fn peer_interested(&self) -> bool {
         self.peer_interested
     }
@@ -297,10 +282,11 @@ impl UploadChannelMonitor for UploadChannelState {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::handler::HandlerOwner;
     use super::*;
+    use crate::engine::MonitorOwner;
     use std::iter;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -309,36 +295,27 @@ mod tests {
         let ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
         let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
 
-        let mo = mgr.as_monitor_owner();
-        assert_eq!(0, mo.all_monitors().count());
-        assert_eq!(0, mo.all_upload_monitors().count());
-        assert_eq!(0, mo.all_download_monitors().count());
+        assert_eq!(0, mgr.all_monitors().count());
+        assert_eq!(0, mgr.all_upload_monitors().count());
+        assert_eq!(0, mgr.all_download_monitors().count());
 
         mgr.add_peer(&ip);
-
-        let mo = mgr.as_monitor_owner();
-        assert_eq!(1, mo.all_monitors().count());
-        assert_eq!(1, mo.all_upload_monitors().count());
-        assert_eq!(1, mo.all_download_monitors().count());
-        assert!(mo.upload_monitor(&ip).is_some());
-        assert!(mo.download_monitor(&ip).is_some());
-
-        let mut ho = mgr.as_handler_owner();
-        assert!(ho.upload_handler(&ip).is_some());
-        assert!(ho.download_handler(&ip).is_some());
+        assert_eq!(1, mgr.all_monitors().count());
+        assert_eq!(1, mgr.all_upload_monitors().count());
+        assert_eq!(1, mgr.all_download_monitors().count());
+        assert!(mgr.upload_handler(&ip).is_some());
+        assert!(mgr.download_handler(&ip).is_some());
+        assert!(mgr.upload_monitor(&ip).is_some());
+        assert!(mgr.download_monitor(&ip).is_some());
 
         mgr.remove_peer(&ip);
-
-        let mo = mgr.as_monitor_owner();
-        assert_eq!(0, mo.all_monitors().count());
-        assert_eq!(0, mo.all_upload_monitors().count());
-        assert_eq!(0, mo.all_download_monitors().count());
-        assert!(mo.upload_monitor(&ip).is_none());
-        assert!(mo.download_monitor(&ip).is_none());
-
-        let mut ho = mgr.as_handler_owner();
-        assert!(ho.upload_handler(&ip).is_none());
-        assert!(ho.download_handler(&ip).is_none());
+        assert_eq!(0, mgr.all_monitors().count());
+        assert_eq!(0, mgr.all_upload_monitors().count());
+        assert_eq!(0, mgr.all_download_monitors().count());
+        assert!(mgr.upload_handler(&ip).is_none());
+        assert!(mgr.download_handler(&ip).is_none());
+        assert!(mgr.upload_monitor(&ip).is_none());
+        assert!(mgr.download_monitor(&ip).is_none());
     }
 
     fn block() -> BlockInfo {
@@ -361,39 +338,18 @@ mod tests {
             mgr.add_peer(&ip);
             Self { ip, mgr }
         }
-    }
-
-    macro_rules! um {
-        ($fix:ident, $method:ident($( $args:expr ),*)) => {{
-            let ip = $fix.ip;
-            let monitors = $fix.mgr.as_monitor_owner();
-            let monitor = monitors.upload_monitor(&ip).unwrap();
-            monitor.$method($($args),*)
-        }};
-    }
-    macro_rules! dm {
-        ($fix:ident, $method:ident($( $args:expr ),*)) => {{
-            let ip = $fix.ip;
-            let monitors = $fix.mgr.as_monitor_owner();
-            let monitor = monitors.download_monitor(&ip).unwrap();
-            monitor.$method($($args),*)
-        }};
-    }
-    macro_rules! uh {
-        ($fix:ident, $method:ident($( $args:expr ),*)) => {{
-            let ip = $fix.ip;
-            let mut handlers = $fix.mgr.as_handler_owner();
-            let handler = handlers.upload_handler(&ip).unwrap();
-            handler.$method($($args),*)
-        }};
-    }
-    macro_rules! dh {
-        ($fix:ident, $method:ident($( $args:expr ),*)) => {{
-            let ip = $fix.ip;
-            let mut handlers = $fix.mgr.as_handler_owner();
-            let handler = handlers.download_handler(&ip).unwrap();
-            handler.$method($($args),*)
-        }};
+        fn dm(&self) -> &dyn engine::DownloadChannelMonitor {
+            self.mgr.download_monitor(&self.ip).unwrap()
+        }
+        fn um(&self) -> &dyn engine::UploadChannelMonitor {
+            self.mgr.upload_monitor(&self.ip).unwrap()
+        }
+        fn dh(&mut self) -> &mut dyn handler::DownloadChannelHandler {
+            self.mgr.download_handler(&self.ip).unwrap()
+        }
+        fn uh(&mut self) -> &mut dyn handler::UploadChannelHandler {
+            self.mgr.upload_handler(&self.ip).unwrap()
+        }
     }
 
     #[test]
@@ -402,24 +358,20 @@ mod tests {
         let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
         mgr.add_peer(&ip);
 
-        let monitors = mgr.as_monitor_owner();
-
-        let down_mon = monitors.download_monitor(&ip).unwrap();
+        let down_mon = mgr.download_monitor(&ip).unwrap();
         assert!(!down_mon.am_interested());
         assert!(down_mon.peer_choking());
         assert_eq!(0, down_mon.bytes_received());
 
-        let up_mon = monitors.upload_monitor(&ip).unwrap();
+        let up_mon = mgr.upload_monitor(&ip).unwrap();
         assert!(!up_mon.peer_interested());
         assert!(up_mon.am_choking());
         assert_eq!(0, up_mon.bytes_sent());
 
-        let mut handlers = mgr.as_handler_owner();
-
-        let down_hnd = handlers.download_handler(&ip).unwrap();
+        let down_hnd = mgr.download_handler(&ip).unwrap();
         assert!(down_hnd.next_outbound().is_none());
 
-        let up_hnd = handlers.upload_handler(&ip).unwrap();
+        let up_hnd = mgr.upload_handler(&ip).unwrap();
         assert!(up_hnd.next_outbound().is_none());
     }
 
@@ -427,169 +379,169 @@ mod tests {
     fn test_peer_updates_state_on_upload_channel_update() {
         let mut f = Fixture::new();
 
-        uh!(f, update_state(&DownloaderMessage::Interested));
-        assert!(um!(f, peer_interested()));
+        f.uh().update_state(&DownloaderMessage::Interested);
+        assert!(f.um().peer_interested());
 
-        uh!(f, update_state(&DownloaderMessage::NotInterested));
-        assert!(!um!(f, peer_interested()));
+        f.uh().update_state(&DownloaderMessage::NotInterested);
+        assert!(!f.um().peer_interested());
 
-        um!(f, submit_outbound(UploaderMessage::Unchoke));
-        assert!(!um!(f, am_choking()));
-        assert!(matches!(uh!(f, next_outbound()).unwrap(), UploaderMessage::Unchoke));
-        assert!(uh!(f, next_outbound()).is_none());
+        f.um().submit_outbound(UploaderMessage::Unchoke);
+        assert!(!f.um().am_choking());
+        assert!(matches!(f.uh().next_outbound().unwrap(), UploaderMessage::Unchoke));
+        assert!(f.uh().next_outbound().is_none());
 
-        um!(f, submit_outbound(UploaderMessage::Choke));
-        assert!(um!(f, am_choking()));
-        assert!(matches!(uh!(f, next_outbound()).unwrap(), UploaderMessage::Choke));
-        assert!(uh!(f, next_outbound()).is_none());
+        f.um().submit_outbound(UploaderMessage::Choke);
+        assert!(f.um().am_choking());
+        assert!(matches!(f.uh().next_outbound().unwrap(), UploaderMessage::Choke));
+        assert!(f.uh().next_outbound().is_none());
 
         let block = block();
-        um!(f, submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024])));
-        assert_eq!(0, um!(f, bytes_sent()));
+        f.um().submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024]));
+        assert_eq!(0, f.um().bytes_sent());
 
-        let msg = uh!(f, next_outbound()).unwrap();
+        let msg = f.uh().next_outbound().unwrap();
         assert!(matches!(
             msg,
             UploaderMessage::Block(info, data) if info == block && data == vec![0u8; 1024]));
-        assert!(uh!(f, next_outbound()).is_none());
-        assert_eq!(1024, um!(f, bytes_sent()));
+        assert!(f.uh().next_outbound().is_none());
+        assert_eq!(1024, f.um().bytes_sent());
 
-        um!(f, submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024])));
-        assert_eq!(1024, um!(f, bytes_sent()));
+        f.um().submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024]));
+        assert_eq!(1024, f.um().bytes_sent());
 
-        let msg = uh!(f, next_outbound()).unwrap();
+        let msg = f.uh().next_outbound().unwrap();
         assert!(matches!(
             msg,
             UploaderMessage::Block(info, data) if info == block && data == vec![0u8; 1024]));
-        assert!(uh!(f, next_outbound()).is_none());
-        assert_eq!(1024 * 2, um!(f, bytes_sent()));
+        assert!(f.uh().next_outbound().is_none());
+        assert_eq!(1024 * 2, f.um().bytes_sent());
     }
 
     #[test]
     fn test_peer_updates_state_on_download_channel_update() {
         let mut f = Fixture::new();
 
-        dh!(f, update_state(&UploaderMessage::Unchoke));
-        assert!(!dm!(f, peer_choking()));
+        f.dh().update_state(&UploaderMessage::Unchoke);
+        assert!(!f.dm().peer_choking());
 
-        dh!(f, update_state(&UploaderMessage::Choke));
-        assert!(dm!(f, peer_choking()));
+        f.dh().update_state(&UploaderMessage::Choke);
+        assert!(f.dm().peer_choking());
 
-        dm!(f, submit_outbound(DownloaderMessage::Interested));
-        assert!(dm!(f, am_interested()));
-        assert!(matches!(dh!(f, next_outbound()).unwrap(), DownloaderMessage::Interested));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::Interested);
+        assert!(f.dm().am_interested());
+        assert!(matches!(f.dh().next_outbound().unwrap(), DownloaderMessage::Interested));
+        assert!(f.dh().next_outbound().is_none());
 
-        dm!(f, submit_outbound(DownloaderMessage::NotInterested));
-        assert!(!dm!(f, am_interested()));
-        assert!(matches!(dh!(f, next_outbound()).unwrap(), DownloaderMessage::NotInterested));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::NotInterested);
+        assert!(!f.dm().am_interested());
+        assert!(matches!(f.dh().next_outbound().unwrap(), DownloaderMessage::NotInterested));
+        assert!(f.dh().next_outbound().is_none());
 
         let block = block();
-        dh!(f, update_state(&UploaderMessage::Block(block.clone(), vec![0u8; 1024])));
-        assert_eq!(1024, dm!(f, bytes_received()));
+        f.dh().update_state(&UploaderMessage::Block(block.clone(), vec![0u8; 1024]));
+        assert_eq!(1024, f.dm().bytes_received());
 
-        dh!(f, update_state(&UploaderMessage::Block(block, vec![0u8; 1024])));
-        assert_eq!(1024 * 2, dm!(f, bytes_received()));
+        f.dh().update_state(&UploaderMessage::Block(block, vec![0u8; 1024]));
+        assert_eq!(1024 * 2, f.dm().bytes_received());
     }
 
     #[test]
     fn test_duplicated_outbound_upload_messages_are_dropped() {
         let mut f = Fixture::new();
 
-        um!(f, submit_outbound(UploaderMessage::Unchoke));
-        um!(f, submit_outbound(UploaderMessage::Unchoke));
-        assert!(matches!(uh!(f, next_outbound()).unwrap(), UploaderMessage::Unchoke));
-        assert!(uh!(f, next_outbound()).is_none());
+        f.um().submit_outbound(UploaderMessage::Unchoke);
+        f.um().submit_outbound(UploaderMessage::Unchoke);
+        assert!(matches!(f.uh().next_outbound().unwrap(), UploaderMessage::Unchoke));
+        assert!(f.uh().next_outbound().is_none());
 
         let block = block();
-        um!(f, submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024])));
-        um!(f, submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024])));
+        f.um().submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024]));
+        f.um().submit_outbound(UploaderMessage::Block(block.clone(), vec![0u8; 1024]));
         assert!(matches!(
-            uh!(f, next_outbound()).unwrap(),
+            f.uh().next_outbound().unwrap(),
             UploaderMessage::Block(info, data) if info == block && data == vec![0u8; 1024]));
-        assert!(uh!(f, next_outbound()).is_none());
+        assert!(f.uh().next_outbound().is_none());
 
-        um!(f, submit_outbound(UploaderMessage::Have { piece_index: 124 }));
-        um!(f, submit_outbound(UploaderMessage::Have { piece_index: 123 }));
-        um!(f, submit_outbound(UploaderMessage::Have { piece_index: 124 }));
+        f.um().submit_outbound(UploaderMessage::Have { piece_index: 124 });
+        f.um().submit_outbound(UploaderMessage::Have { piece_index: 123 });
+        f.um().submit_outbound(UploaderMessage::Have { piece_index: 124 });
         assert!(matches!(
-            uh!(f, next_outbound()).unwrap(),
+            f.uh().next_outbound().unwrap(),
             UploaderMessage::Have { piece_index: 124 }
         ));
         assert!(matches!(
-            uh!(f, next_outbound()).unwrap(),
+            f.uh().next_outbound().unwrap(),
             UploaderMessage::Have { piece_index: 123 }
         ));
-        assert!(uh!(f, next_outbound()).is_none());
+        assert!(f.uh().next_outbound().is_none());
     }
 
     #[test]
     fn test_duplicated_outbound_download_messages_are_dropped() {
         let mut f = Fixture::new();
 
-        dm!(f, submit_outbound(DownloaderMessage::Interested));
-        dm!(f, submit_outbound(DownloaderMessage::Interested));
-        assert!(matches!(dh!(f, next_outbound()).unwrap(), DownloaderMessage::Interested));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::Interested);
+        f.dm().submit_outbound(DownloaderMessage::Interested);
+        assert!(matches!(f.dh().next_outbound().unwrap(), DownloaderMessage::Interested));
+        assert!(f.dh().next_outbound().is_none());
 
         let block = block();
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
         assert!(matches!(
-            dh!(f, next_outbound()).unwrap(),
+            f.dh().next_outbound().unwrap(),
             DownloaderMessage::Request(info) if info == block));
-        assert!(dh!(f, next_outbound()).is_none());
+        assert!(f.dh().next_outbound().is_none());
 
         let different_block = BlockInfo {
             piece_index: block.piece_index + 1,
             ..block
         };
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(block.clone())));
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(different_block.clone())));
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(block.clone())));
+        f.dm().submit_outbound(DownloaderMessage::Cancel(block.clone()));
+        f.dm().submit_outbound(DownloaderMessage::Cancel(different_block.clone()));
+        f.dm().submit_outbound(DownloaderMessage::Cancel(block.clone()));
         assert!(matches!(
-            dh!(f, next_outbound()).unwrap(),
+            f.dh().next_outbound().unwrap(),
             DownloaderMessage::Cancel(info) if info == block));
         assert!(matches!(
-            dh!(f, next_outbound()).unwrap(),
+            f.dh().next_outbound().unwrap(),
             DownloaderMessage::Cancel(info) if info == different_block));
-        assert!(dh!(f, next_outbound()).is_none());
+        assert!(f.dh().next_outbound().is_none());
     }
 
     #[test]
     fn test_mutually_negating_outbound_upload_messages_are_dropped() {
         let mut f = Fixture::new();
 
-        um!(f, submit_outbound(UploaderMessage::Unchoke));
-        um!(f, submit_outbound(UploaderMessage::Choke));
-        assert!(uh!(f, next_outbound()).is_none());
+        f.um().submit_outbound(UploaderMessage::Unchoke);
+        f.um().submit_outbound(UploaderMessage::Choke);
+        assert!(f.uh().next_outbound().is_none());
 
-        um!(f, submit_outbound(UploaderMessage::Choke));
-        um!(f, submit_outbound(UploaderMessage::Unchoke));
-        assert!(uh!(f, next_outbound()).is_none());
+        f.um().submit_outbound(UploaderMessage::Choke);
+        f.um().submit_outbound(UploaderMessage::Unchoke);
+        assert!(f.uh().next_outbound().is_none());
     }
 
     #[test]
     fn test_mutually_negating_outbound_download_messages_are_dropped() {
         let mut f = Fixture::new();
 
-        dm!(f, submit_outbound(DownloaderMessage::Interested));
-        dm!(f, submit_outbound(DownloaderMessage::NotInterested));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::Interested);
+        f.dm().submit_outbound(DownloaderMessage::NotInterested);
+        assert!(f.dh().next_outbound().is_none());
 
-        dm!(f, submit_outbound(DownloaderMessage::NotInterested));
-        dm!(f, submit_outbound(DownloaderMessage::Interested));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::NotInterested);
+        f.dm().submit_outbound(DownloaderMessage::Interested);
+        assert!(f.dh().next_outbound().is_none());
 
         let block = block();
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(block.clone())));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
+        f.dm().submit_outbound(DownloaderMessage::Cancel(block.clone()));
+        assert!(f.dh().next_outbound().is_none());
 
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(block.clone())));
-        dm!(f, submit_outbound(DownloaderMessage::Request(block)));
-        assert!(dh!(f, next_outbound()).is_none());
+        f.dm().submit_outbound(DownloaderMessage::Cancel(block.clone()));
+        f.dm().submit_outbound(DownloaderMessage::Request(block));
+        assert!(f.dh().next_outbound().is_none());
     }
 
     #[test]
@@ -602,17 +554,18 @@ mod tests {
             piece_index: block.piece_index + 1,
             ..block
         };
-        um!(f, submit_outbound(UploaderMessage::Block(block.clone(), Vec::new())));
-        um!(f, submit_outbound(UploaderMessage::Block(different_block.clone(), Vec::new())));
+        f.um().submit_outbound(UploaderMessage::Block(block.clone(), Vec::new()));
+        f.um()
+            .submit_outbound(UploaderMessage::Block(different_block.clone(), Vec::new()));
 
         // when
-        uh!(f, update_state(&DownloaderMessage::Cancel(block)));
+        f.uh().update_state(&DownloaderMessage::Cancel(block));
 
         // then
         assert!(matches!(
-            uh!(f, next_outbound()).unwrap(),
+            f.uh().next_outbound().unwrap(),
             UploaderMessage::Block(info, _) if info == different_block));
-        assert!(uh!(f, next_outbound()).is_none());
+        assert!(f.uh().next_outbound().is_none());
     }
 
     #[test]
@@ -621,24 +574,24 @@ mod tests {
 
         // given
         let block = block();
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
-        let _ = dh!(f, next_outbound());
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
+        let _ = f.dh().next_outbound();
 
         // when
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
 
         // then
-        assert!(dh!(f, next_outbound()).is_none());
+        assert!(f.dh().next_outbound().is_none());
 
         // when
-        dh!(f, update_state(&UploaderMessage::Block(block.clone(), Vec::new())));
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
+        f.dh().update_state(&UploaderMessage::Block(block.clone(), Vec::new()));
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
 
         // then
         assert!(matches!(
-            dh!(f, next_outbound()),
+            f.dh().next_outbound(),
             Some(DownloaderMessage::Request(info)) if info == block));
-        assert!(dh!(f, next_outbound()).is_none());
+        assert!(f.dh().next_outbound().is_none());
     }
 
     #[test]
@@ -647,18 +600,18 @@ mod tests {
 
         // given
         let block = block();
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
-        let _ = dh!(f, next_outbound());
-        dm!(f, submit_outbound(DownloaderMessage::Cancel(block.clone())));
-        let _ = dh!(f, next_outbound());
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
+        let _ = f.dh().next_outbound();
+        f.dm().submit_outbound(DownloaderMessage::Cancel(block.clone()));
+        let _ = f.dh().next_outbound();
 
         // when
-        dm!(f, submit_outbound(DownloaderMessage::Request(block.clone())));
+        f.dm().submit_outbound(DownloaderMessage::Request(block.clone()));
 
         // then
         assert!(matches!(
-            dh!(f, next_outbound()),
+            f.dh().next_outbound(),
             Some(DownloaderMessage::Request(info)) if info == block));
-        assert!(dh!(f, next_outbound()).is_none());
+        assert!(f.dh().next_outbound().is_none());
     }
 }

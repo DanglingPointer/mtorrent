@@ -26,7 +26,7 @@ impl PieceTracker {
     pub fn get_piece_owners(
         &self,
         piece_index: usize,
-    ) -> Option<impl Iterator<Item = &SocketAddr>> {
+    ) -> Option<impl Iterator<Item = &SocketAddr> + Clone> {
         self.piece_index_to_owners.get(&piece_index).map(|peers| peers.iter())
     }
 
