@@ -246,7 +246,8 @@ fn test_read_metainfo_and_spawn_files() {
     let info = meta::Metainfo::try_from(entity).unwrap();
 
     let initial_file_count = count_files(".".as_ref()).unwrap();
-    let parent_dir = "test_output";
+    let parent_dir = "test_read_metainfo_and_spawn_files_output";
+
     let filekeeper = data::Storage::new(parent_dir, info.files().unwrap());
 
     assert_eq!(info.files().unwrap().count(), count_files(parent_dir.as_ref()).unwrap());

@@ -77,7 +77,7 @@ fn main() -> io::Result<()> {
     let output_dir = if let Some(arg) = env::args().nth(2) {
         arg
     } else {
-        "test_output".to_string()
+        "mtorrent_output".to_string()
     };
     let _ = fs::remove_dir_all(&output_dir);
     let filekeeper = if let Some(files) = metainfo.files() {
