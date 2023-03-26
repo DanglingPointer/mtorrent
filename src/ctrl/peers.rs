@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 use crate::data::{BlockAccountant, PieceInfo};
 use crate::pwp::{BlockInfo, DownloaderMessage, UploaderMessage};
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::utils::fifo;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -20,14 +21,14 @@ pub trait DownloadChannelMonitor {
     fn peer_choking(&self) -> bool;
     fn remote_availability(&self) -> &BlockAccountant;
     fn bytes_received(&self) -> usize;
-    fn submit_outbound(&mut self, msg: DownloaderMessage);
+    fn submit_outbound(&self, msg: DownloaderMessage);
 }
 
 pub trait UploadChannelMonitor {
     fn peer_interested(&self) -> bool;
     fn am_choking(&self) -> bool;
     fn bytes_sent(&self) -> usize;
-    fn submit_outbound(&mut self, msg: UploaderMessage);
+    fn submit_outbound(&self, msg: UploaderMessage);
 }
 
 pub struct PeerManager {
@@ -40,7 +41,7 @@ pub struct HandlerOwner<'m> {
 }
 
 pub struct MonitorOwner<'m> {
-    inner: &'m mut PeerManager,
+    inner: &'m PeerManager,
 }
 
 impl PeerManager {
@@ -57,14 +58,14 @@ impl PeerManager {
             peer_choking: true,
             availability: BlockAccountant::new(self.pieces.clone()),
             bytes_received: 0,
-            pending_tx_msgs: VecDeque::new(),
+            pending_tx_msgs: Default::default(),
             requested_blocks: HashSet::new(),
         };
         let upload = UploadChannelState {
             peer_interested: false,
             am_choking: true,
             bytes_sent: 0,
-            pending_tx_msgs: VecDeque::new(),
+            pending_tx_msgs: Default::default(),
         };
         self.channel_states.insert(*remote_ip, (download, upload));
     }
@@ -77,7 +78,7 @@ impl PeerManager {
         HandlerOwner { inner: self }
     }
 
-    pub fn as_monitor_owner(&mut self) -> MonitorOwner {
+    pub fn as_monitor_owner(&self) -> MonitorOwner {
         MonitorOwner { inner: self }
     }
 }
@@ -101,40 +102,28 @@ impl<'m> HandlerOwner<'m> {
 }
 
 impl<'m> MonitorOwner<'m> {
-    pub fn download_monitor(
-        &mut self,
-        remote_ip: &SocketAddr,
-    ) -> Option<&mut impl DownloadChannelMonitor> {
-        let (download, _upload) = self.inner.channel_states.get_mut(remote_ip)?;
+    pub fn download_monitor(&self, remote_ip: &SocketAddr) -> Option<&impl DownloadChannelMonitor> {
+        let (download, _upload) = self.inner.channel_states.get(remote_ip)?;
         Some(download)
     }
 
-    pub fn upload_monitor(
-        &mut self,
-        remote_ip: &SocketAddr,
-    ) -> Option<&mut impl UploadChannelMonitor> {
-        let (_download, upload) = self.inner.channel_states.get_mut(remote_ip)?;
+    pub fn upload_monitor(&self, remote_ip: &SocketAddr) -> Option<&impl UploadChannelMonitor> {
+        let (_download, upload) = self.inner.channel_states.get(remote_ip)?;
         Some(upload)
     }
 
-    pub fn all_download_monitors(
-        &mut self,
-    ) -> impl Iterator<Item = &mut impl DownloadChannelMonitor> {
-        self.inner.channel_states.values_mut().map(|(download, _upload)| download)
+    pub fn all_download_monitors(&self) -> impl Iterator<Item = &impl DownloadChannelMonitor> {
+        self.inner.channel_states.values().map(|(download, _upload)| download)
     }
 
-    pub fn all_upload_monitors(&mut self) -> impl Iterator<Item = &mut impl UploadChannelMonitor> {
-        self.inner.channel_states.values_mut().map(|(_download, upload)| upload)
+    pub fn all_upload_monitors(&self) -> impl Iterator<Item = &impl UploadChannelMonitor> {
+        self.inner.channel_states.values().map(|(_download, upload)| upload)
     }
 
     pub fn all_monitors(
-        &mut self,
-    ) -> impl Iterator<Item = (&mut impl DownloadChannelMonitor, &mut impl UploadChannelMonitor)>
-    {
-        self.inner
-            .channel_states
-            .values_mut()
-            .map(|(download, upload)| (download, upload))
+        &self,
+    ) -> impl Iterator<Item = (&impl DownloadChannelMonitor, &impl UploadChannelMonitor)> {
+        self.inner.channel_states.values().map(|(download, upload)| (download, upload))
     }
 }
 
@@ -143,7 +132,7 @@ struct DownloadChannelState {
     peer_choking: bool,
     availability: BlockAccountant,
     bytes_received: usize,
-    pending_tx_msgs: VecDeque<DownloaderMessage>,
+    pending_tx_msgs: fifo::Queue<DownloaderMessage>,
     requested_blocks: HashSet<BlockInfo>,
 }
 
@@ -167,7 +156,7 @@ impl DownloadChannelHandler for DownloadChannelState {
     }
 
     fn next_outbound(&mut self) -> Option<DownloaderMessage> {
-        let msg = self.pending_tx_msgs.pop_front()?;
+        let msg = self.pending_tx_msgs.pop()?;
         match &msg {
             DownloaderMessage::Request(block) => {
                 self.requested_blocks.insert(block.clone());
@@ -203,41 +192,37 @@ impl DownloadChannelMonitor for DownloadChannelState {
         self.bytes_received
     }
 
-    fn submit_outbound(&mut self, msg: DownloaderMessage) {
+    fn submit_outbound(&self, msg: DownloaderMessage) {
         if self.pending_tx_msgs.contains(&msg) {
             return;
         }
         let should_enqueue = match &msg {
             DownloaderMessage::Interested => {
-                let contained_notinterested = remove_if(&mut self.pending_tx_msgs, |m| {
-                    matches!(m, DownloaderMessage::NotInterested)
-                });
+                let contained_notinterested =
+                    self.pending_tx_msgs.remove_all(&DownloaderMessage::NotInterested);
                 !contained_notinterested
             }
             DownloaderMessage::NotInterested => {
-                let contained_interested = remove_if(&mut self.pending_tx_msgs, |m| {
-                    matches!(m, DownloaderMessage::Interested)
-                });
+                let contained_interested =
+                    self.pending_tx_msgs.remove_all(&DownloaderMessage::Interested);
                 !contained_interested
             }
             DownloaderMessage::Request(requested_block) => {
-                let contained_cancel = remove_if(
-                    &mut self.pending_tx_msgs,
-                    |m| matches!(m, DownloaderMessage::Cancel(canceled_block) if canceled_block == requested_block),
-                );
+                let contained_cancel = self
+                    .pending_tx_msgs
+                    .remove_all(&DownloaderMessage::Cancel(requested_block.clone()));
                 let already_requested = self.requested_blocks.contains(requested_block);
                 !contained_cancel && !already_requested
             }
             DownloaderMessage::Cancel(canceled_block) => {
-                let contained_request = remove_if(
-                    &mut self.pending_tx_msgs,
-                    |m| matches!(m, DownloaderMessage::Request(requested_block) if requested_block == canceled_block),
-                );
+                let contained_request = self
+                    .pending_tx_msgs
+                    .remove_all(&DownloaderMessage::Request(canceled_block.clone()));
                 !contained_request
             }
         };
         if should_enqueue {
-            self.pending_tx_msgs.push_back(msg);
+            self.pending_tx_msgs.push(msg);
         }
     }
 }
@@ -246,7 +231,7 @@ struct UploadChannelState {
     peer_interested: bool,
     am_choking: bool,
     bytes_sent: usize,
-    pending_tx_msgs: VecDeque<UploaderMessage>,
+    pending_tx_msgs: fifo::Queue<UploaderMessage>,
 }
 
 impl UploadChannelHandler for UploadChannelState {
@@ -255,17 +240,15 @@ impl UploadChannelHandler for UploadChannelState {
             DownloaderMessage::NotInterested => self.peer_interested = false,
             DownloaderMessage::Interested => self.peer_interested = true,
             DownloaderMessage::Cancel(block) => {
-                remove_if(
-                    &mut self.pending_tx_msgs,
-                    |m| matches!(m, UploaderMessage::Block(info, _) if info == block),
-                );
+                self.pending_tx_msgs
+                    .remove_if(|m| matches!(m, UploaderMessage::Block(info, _) if info == block));
             }
             DownloaderMessage::Request(_block) => (),
         }
     }
 
     fn next_outbound(&mut self) -> Option<UploaderMessage> {
-        let msg = self.pending_tx_msgs.pop_front()?;
+        let msg = self.pending_tx_msgs.pop()?;
         match &msg {
             UploaderMessage::Unchoke => self.am_choking = false,
             UploaderMessage::Choke => self.am_choking = true,
@@ -294,36 +277,25 @@ impl UploadChannelMonitor for UploadChannelState {
         self.bytes_sent
     }
 
-    fn submit_outbound(&mut self, msg: UploaderMessage) {
+    fn submit_outbound(&self, msg: UploaderMessage) {
         if self.pending_tx_msgs.contains(&msg) {
             return;
         }
         let should_enqueue = match &msg {
             UploaderMessage::Choke => {
-                let contained_unchoke =
-                    remove_if(&mut self.pending_tx_msgs, |m| matches!(m, UploaderMessage::Unchoke));
+                let contained_unchoke = self.pending_tx_msgs.remove_all(&UploaderMessage::Unchoke);
                 !contained_unchoke
             }
             UploaderMessage::Unchoke => {
-                let contained_choke =
-                    remove_if(&mut self.pending_tx_msgs, |m| matches!(m, UploaderMessage::Choke));
+                let contained_choke = self.pending_tx_msgs.remove_all(&UploaderMessage::Choke);
                 !contained_choke
             }
             _ => true,
         };
         if should_enqueue {
-            self.pending_tx_msgs.push_back(msg);
+            self.pending_tx_msgs.push(msg);
         }
     }
-}
-
-fn remove_if<E, F>(src: &mut VecDeque<E>, pred: F) -> bool
-where
-    F: Fn(&E) -> bool,
-{
-    let initial_len = src.len();
-    src.retain(|e| !pred(e));
-    src.len() != initial_len
 }
 
 #[cfg(test)]
@@ -337,14 +309,14 @@ mod tests {
         let ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
         let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
 
-        let mut mo = mgr.as_monitor_owner();
+        let mo = mgr.as_monitor_owner();
         assert_eq!(0, mo.all_monitors().count());
         assert_eq!(0, mo.all_upload_monitors().count());
         assert_eq!(0, mo.all_download_monitors().count());
 
         mgr.add_peer(&ip);
 
-        let mut mo = mgr.as_monitor_owner();
+        let mo = mgr.as_monitor_owner();
         assert_eq!(1, mo.all_monitors().count());
         assert_eq!(1, mo.all_upload_monitors().count());
         assert_eq!(1, mo.all_download_monitors().count());
@@ -357,7 +329,7 @@ mod tests {
 
         mgr.remove_peer(&ip);
 
-        let mut mo = mgr.as_monitor_owner();
+        let mo = mgr.as_monitor_owner();
         assert_eq!(0, mo.all_monitors().count());
         assert_eq!(0, mo.all_upload_monitors().count());
         assert_eq!(0, mo.all_download_monitors().count());
@@ -394,7 +366,7 @@ mod tests {
     macro_rules! um {
         ($fix:ident, $method:ident($( $args:expr ),*)) => {{
             let ip = $fix.ip;
-            let mut monitors = $fix.mgr.as_monitor_owner();
+            let monitors = $fix.mgr.as_monitor_owner();
             let monitor = monitors.upload_monitor(&ip).unwrap();
             monitor.$method($($args),*)
         }};
@@ -402,7 +374,7 @@ mod tests {
     macro_rules! dm {
         ($fix:ident, $method:ident($( $args:expr ),*)) => {{
             let ip = $fix.ip;
-            let mut monitors = $fix.mgr.as_monitor_owner();
+            let monitors = $fix.mgr.as_monitor_owner();
             let monitor = monitors.download_monitor(&ip).unwrap();
             monitor.$method($($args),*)
         }};
@@ -430,7 +402,7 @@ mod tests {
         let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
         mgr.add_peer(&ip);
 
-        let mut monitors = mgr.as_monitor_owner();
+        let monitors = mgr.as_monitor_owner();
 
         let down_mon = monitors.download_monitor(&ip).unwrap();
         assert!(!down_mon.am_interested());

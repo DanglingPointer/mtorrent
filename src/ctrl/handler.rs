@@ -116,7 +116,7 @@ impl<'h> OperationHandler {
         let downloaded = self.ctx.local_availability.accounted_bytes();
         let left = self.ctx.local_availability.missing_bytes();
 
-        let mut monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = self.ctx.peermgr.as_monitor_owner();
         let uploaded = monitors.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
         let announce_request = udp::AnnounceRequest {
@@ -150,7 +150,7 @@ impl<'h> OperationHandler {
         let downloaded = self.ctx.local_availability.accounted_bytes();
         let left = self.ctx.local_availability.missing_bytes();
 
-        let mut monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = self.ctx.peermgr.as_monitor_owner();
         let uploaded = monitors.all_upload_monitors().map(|um| um.bytes_sent()).sum::<usize>();
 
         tracker_urls
@@ -304,7 +304,7 @@ impl<'h> OperationHandler {
         self.ctx.peermgr.add_peer(&remote_ip);
         self.stored_channels.insert(remote_ip, (Slot::default(), Slot::default()));
 
-        let mut monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = self.ctx.peermgr.as_monitor_owner();
 
         if self.ctx.local_availability.accounted_bytes() > 0 {
             let bitfield = self.ctx.local_availability.generate_bitfield();
@@ -415,7 +415,7 @@ impl<'h> OperationHandler {
         &mut self,
         outcome: Result<usize, usize>,
     ) -> Option<Vec<Operation<'h>>> {
-        let mut monitors = self.ctx.peermgr.as_monitor_owner();
+        let monitors = self.ctx.peermgr.as_monitor_owner();
         match outcome {
             Ok(piece_index) => {
                 self.ctx.piece_tracker.forget_piece(piece_index);
