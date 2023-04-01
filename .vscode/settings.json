@@ -2,12 +2,14 @@
     "search.exclude": {
         "**/.git": true,
         "**/test_output": true,
+        "**/mtorrent_output": true,
         "**/target": true,
         "**/.idea": true
     },
     "files.exclude": {
         "**/.git": true,
         "**/test_output": true,
+        "**/mtorrent_output": true,
         "**/target": true,
         "**/.idea": true
     },
