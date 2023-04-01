@@ -15,6 +15,7 @@ pub fn update_interest(ctx: &mut Context) {
     show_interest_to_nonchoking_single_owners(ctx);
     show_interest_to_only_nonchoking_owners(ctx);
     show_interest_to_any_nonchoking_owners(ctx);
+    show_desperate_interest(ctx);
 }
 
 fn update_state(ctx: &mut Context) {
@@ -52,6 +53,8 @@ fn remove_unneeded_interest(ctx: &mut Context) {
             }
         }
     }
+
+    // TODO: remove interest if no pending requests
 }
 
 fn show_interest_to_nonchoking_single_owners(ctx: &mut Context) {
@@ -101,13 +104,10 @@ fn show_interest_to_only_nonchoking_owners(ctx: &mut Context) {
                             _ => false,
                         })
                         .count();
-                    nonchoking_owners == 1
-                } else {
-                    false
+                    return nonchoking_owners == 1;
                 }
-            } else {
-                false
             }
+            false
         });
         if only_nonchoking_owner {
             dm.submit_outbound(pwp::DownloaderMessage::Interested);
@@ -137,6 +137,32 @@ fn show_interest_to_any_nonchoking_owners(ctx: &mut Context) {
         if owns_missing_piece {
             dm.submit_outbound(pwp::DownloaderMessage::Interested);
             ctx.state.interest.seeders += 1;
+        }
+    }
+}
+
+fn show_desperate_interest(ctx: &mut Context) {
+    let non_choking_peer_that_owns = |piece_index: usize| {
+        let owners_ips = ctx.piece_tracker.get_piece_owners(piece_index)?;
+        owners_ips
+            .filter_map(|ip| ctx.monitor_owner.download_monitor(ip))
+            .find(|dm| !dm.peer_choking())
+    };
+    let has_non_choking_relevant_peers = ctx
+        .piece_tracker
+        .get_rarest_pieces()
+        .any(|piece_index| non_choking_peer_that_owns(piece_index).is_some());
+    if has_non_choking_relevant_peers {
+        return;
+    }
+    for missing_piece in ctx.piece_tracker.get_rarest_pieces() {
+        if let Some(piece_owners_it) = ctx.piece_tracker.get_piece_owners(missing_piece) {
+            for dm in piece_owners_it.filter_map(|ip| ctx.monitor_owner.download_monitor(ip)) {
+                debug_assert!(dm.peer_choking());
+                if !dm.am_interested() {
+                    dm.submit_outbound(pwp::DownloaderMessage::Interested);
+                }
+            }
         }
     }
 }
@@ -391,6 +417,59 @@ mod tests {
             .iter()
             .filter(|(ip, _)| !interesting_peers.contains(ip))
         {
+            assert!(dm.submitted_msgs.borrow().is_empty(), "{ip}");
+        }
+    }
+
+    #[test]
+    fn test_show_desperate_interest() {
+        let mut f = Fixture::new(10, 1024);
+
+        // given
+        let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
+        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, 0);
+
+        let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
+        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, 0);
+
+        let (nonchoking_owner_ip, dm, _) = f.monitor_owner.add_peer();
+        dm.peer_choking.set(false);
+        f.piece_tracker.add_single_record(nonchoking_owner_ip, 1);
+
+        // when
+        show_desperate_interest(&mut f.ctx());
+
+        // then
+        for (ip, (dm, _um)) in &f.monitor_owner.monitors {
+            assert!(dm.submitted_msgs.borrow().is_empty(), "{ip}");
+        }
+
+        // when
+        f.piece_tracker.forget_peer(nonchoking_owner_ip);
+        f.monitor_owner.monitors.remove(&nonchoking_owner_ip);
+        show_desperate_interest(&mut f.ctx());
+
+        // then
+        for (ip, (dm, _um)) in &f.monitor_owner.monitors {
+            assert_eq!(1, dm.submitted_msgs.borrow().len());
+            assert!(
+                matches!(
+                    dm.submitted_msgs.borrow().back().unwrap(),
+                    pwp::DownloaderMessage::Interested
+                ),
+                "{ip}"
+            );
+        }
+
+        // when
+        for (dm, _) in f.monitor_owner.monitors.values() {
+            dm.am_interested.set(true);
+            dm.submitted_msgs.borrow_mut().clear();
+        }
+        show_desperate_interest(&mut f.ctx());
+
+        // then
+        for (ip, (dm, _um)) in &f.monitor_owner.monitors {
             assert!(dm.submitted_msgs.borrow().is_empty(), "{ip}");
         }
     }
