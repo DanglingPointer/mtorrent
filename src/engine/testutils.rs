@@ -34,7 +34,7 @@ impl listeners::DownloadChannelMonitor for FakeDownloadMonitor {
     }
 
     fn remote_availability(&self) -> &BlockAccountant {
-        todo!()
+        unimplemented!()
     }
 
     fn bytes_received(&self) -> usize {
