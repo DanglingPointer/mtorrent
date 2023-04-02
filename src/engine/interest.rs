@@ -39,13 +39,9 @@ fn remove_unneeded_interest(ctx: &mut Context) {
         .all_download_monitors()
         .filter(|(_addr, mon)| mon.am_interested())
     {
-        let owns_missing_piece = piece_tracker.get_rarest_pieces().any(|piece_index| {
-            if let Some(mut owners_it) = piece_tracker.get_piece_owners(piece_index) {
-                owners_it.any(|ip| ip == addr)
-            } else {
-                false
-            }
-        });
+        let owns_missing_piece =
+            piece_tracker.get_peer_pieces(addr).map(|mut it| it.next()).is_some();
+
         if !owns_missing_piece {
             dm.submit_outbound(pwp::DownloaderMessage::NotInterested);
             if !dm.peer_choking() {
@@ -65,18 +61,23 @@ fn show_interest_to_nonchoking_single_owners(ctx: &mut Context) {
         .all_download_monitors()
         .filter(|(_addr, mon)| !mon.peer_choking() && !mon.am_interested())
     {
-        let single_owner = piece_tracker.get_rarest_pieces().any(|piece_index| {
-            if let Some(mut owners_it) = piece_tracker.get_piece_owners(piece_index) {
-                let first = owners_it.next();
-                let second = owners_it.next();
-                match (first, second) {
-                    (Some(ip), None) => ip == addr,
-                    _ => false,
+        let single_owner = piece_tracker
+            .get_rarest_pieces()
+            .find_map(|piece_index| {
+                if let Some(mut owners_it) = piece_tracker.get_piece_owners(piece_index) {
+                    let first_owner = owners_it.next();
+                    let second_owner = owners_it.next();
+                    match (first_owner, second_owner) {
+                        (Some(ip), None) if ip == addr => Some(true),
+                        (Some(_), None) => None,
+                        _ => Some(false),
+                    }
+                } else {
+                    debug_assert!(false);
+                    None
                 }
-            } else {
-                false
-            }
-        });
+            })
+            .unwrap_or(false);
         if single_owner {
             dm.submit_outbound(pwp::DownloaderMessage::Interested);
             ctx.state.interest.seeders += 1;
@@ -92,23 +93,22 @@ fn show_interest_to_only_nonchoking_owners(ctx: &mut Context) {
         .all_download_monitors()
         .filter(|(_addr, mon)| !mon.peer_choking() && !mon.am_interested())
     {
-        let only_nonchoking_owner = piece_tracker.get_rarest_pieces().any(|piece_index| {
-            if let Some(mut owners_it) = piece_tracker.get_piece_owners(piece_index) {
-                let owners_it_copy = owners_it.clone();
-                let owns_missing_piece = owners_it.any(|ip| ip == addr);
-                drop(owners_it);
-                if owns_missing_piece {
-                    let nonchoking_owners = owners_it_copy
+        let only_nonchoking_owner = match piece_tracker.get_peer_pieces(addr) {
+            Some(mut it) => it.any(|piece_index| {
+                if let Some(owners_it) = piece_tracker.get_piece_owners(piece_index) {
+                    let nonchoking_owners = owners_it
                         .filter(|ip| match monitors.download_monitor(ip) {
                             Some(mon) => !mon.peer_choking(),
                             _ => false,
                         })
                         .count();
-                    return nonchoking_owners == 1;
+                    nonchoking_owners == 1
+                } else {
+                    false
                 }
-            }
-            false
-        });
+            }),
+            None => false,
+        };
         if only_nonchoking_owner {
             dm.submit_outbound(pwp::DownloaderMessage::Interested);
             ctx.state.interest.seeders += 1;
@@ -127,13 +127,9 @@ fn show_interest_to_any_nonchoking_owners(ctx: &mut Context) {
         if ctx.state.interest.seeders >= MAX_SEEDERS_COUNT {
             break;
         }
-        let owns_missing_piece = piece_tracker.get_rarest_pieces().any(|piece_index| {
-            if let Some(mut owners_it) = piece_tracker.get_piece_owners(piece_index) {
-                owners_it.any(|ip| ip == addr)
-            } else {
-                false
-            }
-        });
+        let owns_missing_piece =
+            piece_tracker.get_peer_pieces(addr).map(|mut it| it.next()).is_some();
+
         if owns_missing_piece {
             dm.submit_outbound(pwp::DownloaderMessage::Interested);
             ctx.state.interest.seeders += 1;
