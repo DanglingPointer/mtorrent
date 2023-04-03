@@ -365,7 +365,8 @@ impl<'h> OperationHandler {
         let remote_ip = *upload_rx.remote_ip();
 
         self.ctx.peermgr.add_peer(&remote_ip);
-        self.stored_channels.insert(remote_ip, (Slot::default(), Slot::default()));
+        self.stored_channels
+            .insert(remote_ip, (Slot::new(Some(download_tx)), Slot::new(Some(upload_tx))));
 
         let monitors = &mut self.ctx.peermgr as &mut dyn engine::MonitorOwner;
 
@@ -387,13 +388,6 @@ impl<'h> OperationHandler {
         ];
 
         self.run_engine(&mut ops);
-
-        if let Some(mut tx_ops) = self.process_download_msg_sent(Ok(download_tx)) {
-            ops.append(&mut tx_ops);
-        }
-        if let Some(mut tx_ops) = self.process_upload_msg_sent(Ok(upload_tx)) {
-            ops.append(&mut tx_ops);
-        }
         Some(ops)
     }
 
@@ -474,9 +468,9 @@ impl<'h> OperationHandler {
 
         if should_run_engine {
             self.run_engine(&mut ops);
+        } else {
+            self.fill_tx_channels(&mut ops);
         }
-
-        self.fill_tx_channels(&mut ops);
         Some(ops)
     }
 
@@ -495,7 +489,6 @@ impl<'h> OperationHandler {
 
                 let mut ops = Vec::new();
                 self.run_engine(&mut ops);
-                self.fill_tx_channels(&mut ops);
                 Some(ops)
             }
             Err(piece_index) => {
@@ -564,7 +557,6 @@ impl<'h> OperationHandler {
 
         let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
         self.run_engine(&mut ops);
-        self.fill_tx_channels(&mut ops);
         Some(ops)
     }
 
@@ -608,5 +600,7 @@ impl OperationHandler {
         let mut timer = Timer::new(ops);
         let mut ctx = engine_context(&mut self.ctx, &mut timer);
         engine::update_interest(&mut ctx);
+
+        self.fill_tx_channels(ops);
     }
 }
