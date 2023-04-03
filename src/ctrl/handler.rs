@@ -35,7 +35,31 @@ pub trait HandlerOwner {
     fn upload_handler(&mut self, remote_ip: &SocketAddr) -> Option<&mut dyn UploadChannelHandler>;
 }
 
-type Slot<C> = std::cell::Cell<Option<C>>;
+struct Timer<'a, 'o> {
+    ops: &'a mut Vec<Operation<'o>>,
+}
+
+impl<'a, 'o> Timer<'a, 'o> {
+    fn new(ops: &'a mut Vec<Operation<'o>>) -> Self {
+        Self { ops }
+    }
+}
+
+impl<'a, 'o> engine::Timer for Timer<'a, 'o> {
+    fn schedule(&mut self, delay: Duration, f: Box<dyn FnOnce(&mut engine::Context) + 'static>) {
+        self.ops.push(
+            Action::new_timer(delay, move |handler: &mut OperationHandler| {
+                let mut ops = Vec::new();
+                let mut timer = Timer::new(&mut ops);
+                let mut ctx = engine_context(&mut handler.ctx, &mut timer);
+                f(&mut ctx);
+                handler.fill_tx_channels(&mut ops);
+                Some(ops)
+            })
+            .boxed_local(),
+        );
+    }
+}
 
 struct Context {
     local_availability: data::BlockAccountant,
@@ -44,16 +68,17 @@ struct Context {
     state: engine::State,
 }
 
-impl<'a> From<&'a mut Context> for engine::Context<'a> {
-    fn from(ctx: &'a mut Context) -> Self {
-        engine::Context {
-            local_availability: &ctx.local_availability,
-            piece_tracker: &ctx.piece_tracker,
-            monitor_owner: &ctx.peermgr,
-            state: &mut ctx.state,
-        }
+fn engine_context<'a>(ctx: &'a mut Context, timer: &'a mut Timer<'a, '_>) -> engine::Context<'a> {
+    engine::Context {
+        local_availability: &ctx.local_availability,
+        piece_tracker: &ctx.piece_tracker,
+        monitor_owner: &ctx.peermgr,
+        state: &mut ctx.state,
+        timer,
     }
 }
+
+type Slot<C> = std::cell::Cell<Option<C>>;
 
 pub struct OperationHandler {
     metainfo: Rc<Metainfo>,
@@ -353,8 +378,6 @@ impl<'h> OperationHandler {
                 .submit_outbound(UploaderMessage::Bitfield(bitfield));
         }
 
-        self.run_engine();
-
         self.pwp_worker_handle.spawn(async move {
             Action::from_connection_runner(runner).await;
         });
@@ -362,6 +385,9 @@ impl<'h> OperationHandler {
             Action::from_download_rx_channel(download_rx).boxed_local(),
             Action::from_upload_rx_channel(upload_rx).boxed_local(),
         ];
+
+        self.run_engine(&mut ops);
+
         if let Some(mut tx_ops) = self.process_download_msg_sent(Ok(download_tx)) {
             ops.append(&mut tx_ops);
         }
@@ -447,7 +473,7 @@ impl<'h> OperationHandler {
         }
 
         if should_run_engine {
-            self.run_engine();
+            self.run_engine(&mut ops);
         }
 
         self.fill_tx_channels(&mut ops);
@@ -467,9 +493,8 @@ impl<'h> OperationHandler {
                     upload_monitor.submit_outbound(UploaderMessage::Have { piece_index });
                 }
 
-                self.run_engine();
-
                 let mut ops = Vec::new();
+                self.run_engine(&mut ops);
                 self.fill_tx_channels(&mut ops);
                 Some(ops)
             }
@@ -537,9 +562,8 @@ impl<'h> OperationHandler {
             _ => (),
         }
 
-        self.run_engine();
-
         let mut ops = vec![Action::from_upload_rx_channel(rx_channel).boxed_local()];
+        self.run_engine(&mut ops);
         self.fill_tx_channels(&mut ops);
         Some(ops)
     }
@@ -580,8 +604,9 @@ impl OperationHandler {
         self.ctx.piece_tracker.forget_peer(*remote_ip);
     }
 
-    fn run_engine(&mut self) {
-        let mut ctx = engine::Context::from(&mut self.ctx);
+    fn run_engine(&mut self, ops: &mut Vec<Operation<'_>>) {
+        let mut timer = Timer::new(ops);
+        let mut ctx = engine_context(&mut self.ctx, &mut timer);
         engine::update_interest(&mut ctx);
     }
 }

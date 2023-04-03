@@ -1,4 +1,5 @@
 pub mod benc;
+pub mod canceller;
 pub mod dispatch;
 pub mod fifo;
 pub mod meta;

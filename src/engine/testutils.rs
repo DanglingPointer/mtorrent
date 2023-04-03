@@ -2,9 +2,10 @@ use super::{listeners, Context, State};
 use crate::data::{BlockAccountant, PieceInfo, PieceTracker};
 use crate::pwp::{DownloaderMessage, UploaderMessage};
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::{collections::VecDeque, iter, rc::Rc};
+use std::time::{Duration, Instant};
+use std::{iter, mem, rc::Rc};
 
 pub struct FakeDownloadMonitor {
     pub am_interested: Cell<bool>,
@@ -155,11 +156,36 @@ impl listeners::MonitorOwner for FakeMonitorOwner {
     }
 }
 
+type DelayedOperation = Box<dyn FnOnce(&mut Context) + 'static>;
+
+struct FakeTimer {
+    pending: BTreeMap<Instant, Vec<DelayedOperation>>,
+    now: Instant,
+}
+
+impl Default for FakeTimer {
+    fn default() -> Self {
+        Self {
+            pending: Default::default(),
+            now: Instant::now(),
+        }
+    }
+}
+
+impl listeners::Timer for FakeTimer {
+    fn schedule(&mut self, delay: std::time::Duration, f: DelayedOperation) {
+        let time = self.now + delay;
+        let ops = self.pending.entry(time).or_insert_with(|| Vec::new());
+        ops.push(f);
+    }
+}
+
 pub struct Fixture {
     pub block_accountant: BlockAccountant,
     pub piece_tracker: PieceTracker,
     pub monitor_owner: FakeMonitorOwner,
     pub state: State,
+    timer: FakeTimer,
 }
 
 impl Fixture {
@@ -173,12 +199,29 @@ impl Fixture {
         let piece_tracker = PieceTracker::new(piece_count);
         let monitor_owner = FakeMonitorOwner::default();
         let state = State::default();
+        let timer = FakeTimer::default();
 
         Self {
             block_accountant,
             piece_tracker,
             monitor_owner,
             state,
+            timer,
+        }
+    }
+
+    pub fn advance_time(&mut self, duration: Duration) {
+        self.timer.now += duration;
+        while let Some((&time, ops)) = self.timer.pending.iter_mut().next() {
+            if time > self.timer.now {
+                return;
+            }
+            let ops = mem::take(ops);
+            let mut ctx = self.ctx();
+            for op in ops {
+                op(&mut ctx);
+            }
+            self.timer.pending.remove(&time);
         }
     }
 
@@ -188,11 +231,13 @@ impl Fixture {
             piece_tracker: &self.piece_tracker,
             monitor_owner: &self.monitor_owner,
             state: &mut self.state,
+            timer: &mut self.timer,
         }
     }
 }
 
 mod tests {
+    use super::listeners::TimerExt;
     use super::*;
 
     #[test]
@@ -208,5 +253,40 @@ mod tests {
         for (i, (ip, (_, _))) in monitors.monitors.iter().enumerate() {
             assert_eq!(&ips[i], ip);
         }
+    }
+
+    #[test]
+    fn test_fake_timer_advances_time() {
+        let mut f = Fixture::new(10, 1024);
+
+        let results = Rc::new(RefCell::new(Vec::new()));
+
+        let ctx = f.ctx();
+
+        let results_copy = results.clone();
+        ctx.timer.schedule_detached(Duration::from_secs(2), move |_ctx| {
+            results_copy.borrow_mut().push(1);
+        });
+
+        let results_copy = results.clone();
+        ctx.timer.schedule_detached(Duration::from_secs(3), move |_ctx| {
+            results_copy.borrow_mut().push(2);
+        });
+
+        let results_copy = results.clone();
+        ctx.timer.schedule_detached(Duration::from_secs(4), move |_ctx| {
+            results_copy.borrow_mut().push(3);
+        });
+
+        assert!(results.borrow().is_empty());
+
+        f.advance_time(Duration::from_secs(1));
+        assert!(results.borrow().is_empty());
+
+        f.advance_time(Duration::from_secs(1));
+        assert_eq!(vec![1], results.borrow().clone());
+
+        f.advance_time(Duration::from_secs(2));
+        assert_eq!(vec![1, 2, 3], results.borrow().clone());
     }
 }
