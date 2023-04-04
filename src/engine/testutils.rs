@@ -2,7 +2,7 @@ use super::{listeners, Context, State};
 use crate::data::{BlockAccountant, PieceInfo, PieceTracker};
 use crate::pwp::{DownloaderMessage, UploaderMessage};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
 use std::{iter, mem, rc::Rc};
@@ -211,18 +211,25 @@ impl Fixture {
     }
 
     pub fn advance_time(&mut self, duration: Duration) {
-        self.timer.now += duration;
+        let new_now = self.timer.now + duration;
         while let Some((&time, ops)) = self.timer.pending.iter_mut().next() {
-            if time > self.timer.now {
-                return;
+            if time > new_now {
+                break;
             }
+            self.timer.now = time;
             let ops = mem::take(ops);
             let mut ctx = self.ctx();
             for op in ops {
                 op(&mut ctx);
             }
-            self.timer.pending.remove(&time);
+
+            if let Entry::Occupied(entry) = self.timer.pending.entry(time) {
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+            }
         }
+        self.timer.now = new_now;
     }
 
     pub fn ctx(&mut self) -> Context {
@@ -274,8 +281,17 @@ mod tests {
         });
 
         let results_copy = results.clone();
-        ctx.timer.schedule_detached(Duration::from_secs(4), move |_ctx| {
+        ctx.timer.schedule_detached(Duration::from_secs(4), move |ctx| {
             results_copy.borrow_mut().push(3);
+
+            let results_copy_2 = results_copy.clone();
+            ctx.timer.schedule_detached(Duration::from_secs(0), move |_ctx| {
+                results_copy_2.borrow_mut().push(4);
+            });
+
+            ctx.timer.schedule_detached(Duration::from_secs(1), move |_ctx| {
+                results_copy.borrow_mut().push(5);
+            });
         });
 
         assert!(results.borrow().is_empty());
@@ -287,6 +303,9 @@ mod tests {
         assert_eq!(vec![1], results.borrow().clone());
 
         f.advance_time(Duration::from_secs(2));
-        assert_eq!(vec![1, 2, 3], results.borrow().clone());
+        assert_eq!(vec![1, 2, 3, 4], results.borrow().clone());
+
+        f.advance_time(Duration::from_secs(1));
+        assert_eq!(vec![1, 2, 3, 4, 5], results.borrow().clone());
     }
 }
