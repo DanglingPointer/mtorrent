@@ -147,12 +147,12 @@ impl PieceTracker {
                 self.owner_count_to_piece_indices.remove(&current_owner_count);
             }
             let new_owner_count = op(current_owner_count);
-            if let Some(indices) = self.owner_count_to_piece_indices.get_mut(&new_owner_count) {
-                indices.insert(piece_index);
-            } else {
-                self.owner_count_to_piece_indices
-                    .insert(new_owner_count, HashSet::from([piece_index]));
-            }
+            self.owner_count_to_piece_indices
+                .entry(new_owner_count)
+                .and_modify(|indices| {
+                    indices.insert(piece_index);
+                })
+                .or_insert_with(|| HashSet::from([piece_index]));
         }
     }
 
@@ -174,11 +174,12 @@ impl PieceTracker {
         };
         let new_piece_count = op(current_piece_count);
         if new_piece_count > 0 {
-            if let Some(owners) = self.piece_count_to_owners.get_mut(&new_piece_count) {
-                owners.insert(*peer);
-            } else {
-                self.piece_count_to_owners.insert(new_piece_count, HashSet::from([*peer]));
-            }
+            self.piece_count_to_owners
+                .entry(new_piece_count)
+                .and_modify(|owners| {
+                    owners.insert(*peer);
+                })
+                .or_insert_with(|| HashSet::from([*peer]));
         }
     }
 }
