@@ -1,5 +1,4 @@
 use crate::tracker::utils;
-use log::debug;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::time::{Duration, Instant};
@@ -22,7 +21,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        debug!("Sending connect request");
+        log::debug!("Sending connect request");
 
         let connect_response =
             Self::do_request(&socket, request, |data: &[u8]| -> Option<ConnectResponse> {
@@ -33,7 +32,7 @@ impl UdpTrackerConnection {
             })
             .await?;
 
-        debug!("Received connect response, connection_id={}", connect_response.connection_id);
+        log::debug!("Received connect response, connection_id={}", connect_response.connection_id);
 
         Ok(UdpTrackerConnection {
             socket,
@@ -64,7 +63,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        debug!("Sending announce request");
+        log::debug!("Sending announce request");
 
         Self::do_request(
             &self.socket,
@@ -76,7 +75,7 @@ impl UdpTrackerConnection {
 
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Announce(announce)) => {
-                        debug!("Received announce response: {:?}", announce);
+                        log::debug!("Received announce response: {:?}", announce);
                         Some(Ok(announce))
                     }
                     Ok(AnyResponse::Error(error)) => {
@@ -111,7 +110,7 @@ impl UdpTrackerConnection {
 
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Scrape(scrape)) => {
-                        debug!("Received scrape response: {:?}", scrape);
+                        log::debug!("Received scrape response: {:?}", scrape);
                         Some(Ok(scrape))
                     }
                     Ok(AnyResponse::Error(error)) => {
@@ -157,7 +156,7 @@ impl UdpTrackerConnection {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     retransmit_n += 1;
-                    debug!("Retrying request, retransmit_n={}", retransmit_n);
+                    log::debug!("Retrying request, retransmit_n={}", retransmit_n);
                 }
             }
         }
