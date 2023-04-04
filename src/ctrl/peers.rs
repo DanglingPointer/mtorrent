@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use super::handler;
 use crate::data::{BlockAccountant, PieceInfo};
 use crate::engine;
