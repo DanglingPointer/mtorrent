@@ -2,7 +2,6 @@ use crate::pwp::handshake::*;
 use crate::pwp::message::*;
 use futures::channel::mpsc;
 use futures::{select, select_biased, FutureExt, SinkExt, StreamExt};
-use log::debug;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -232,7 +231,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             sink: &mut mpsc::Sender<M>,
             source: &SocketAddr,
         ) -> io::Result<()> {
-            debug!("{} => {}", source, msg);
+            log::debug!("{} => {}", source, msg);
             sink.send(msg)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -254,7 +253,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             }
             Err(received) => received,
         };
-        debug!("{} => IGNORED {:?}", self.remote_ip, received);
+        log::debug!("{} => IGNORED {:?}", self.remote_ip, received);
         Ok(())
     }
 }
@@ -285,7 +284,7 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             S: AsyncWriteExt + Unpin,
         {
             let first = msg.expect("First msg must be non-None");
-            debug!("{} <= {}", dest, first);
+            log::debug!("{} <= {}", dest, first);
             first.into().write_to(sink).await?;
             let second = source.next().await.ok_or_else(new_channel_closed_error)?;
             assert!(second.is_none(), "Second msg must be None");
@@ -303,7 +302,7 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {
                 let ping_msg = PeerMessage::KeepAlive;
-                debug!("{} <= {:?}", self.remote_ip, &ping_msg);
+                log::debug!("{} <= {:?}", self.remote_ip, &ping_msg);
                 ping_msg.write_to(&mut self.sink).await?;
             }
         };

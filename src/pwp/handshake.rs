@@ -1,5 +1,4 @@
 use bitvec::prelude::*;
-use log::debug;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
@@ -32,7 +31,7 @@ pub(super) async fn do_handshake_incoming(
     // then send entire local handshake (with either local info_hash or remote one),
     // then read remote peer id.
     let remote_ip = socket.peer_addr()?;
-    debug!("Receiving incoming handshake from {}", remote_ip);
+    log::debug!("Receiving incoming handshake from {}", remote_ip);
 
     let mut remote_handshake = Handshake::default();
 
@@ -52,7 +51,7 @@ pub(super) async fn do_handshake_incoming(
     let mut socket = writer.into_inner();
     socket.read_exact(&mut remote_handshake.peer_id).await?;
 
-    debug!(
+    log::debug!(
         "Incoming handshake with {} DONE. Peer id: {}",
         remote_ip,
         String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
@@ -69,7 +68,7 @@ pub(super) async fn do_handshake_outgoing(
     // then wait for the entire remote handshake,
     // then send local peer id.
     let remote_ip = socket.peer_addr()?;
-    debug!("Starting outgoing handshake with {}", remote_ip);
+    log::debug!("Starting outgoing handshake with {}", remote_ip);
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
@@ -93,7 +92,7 @@ pub(super) async fn do_handshake_outgoing(
 
     socket.write_all(&local_handshake.peer_id).await?;
 
-    debug!(
+    log::debug!(
         "Outgoing handshake with {} DONE. Peer id: {}",
         remote_ip,
         String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
