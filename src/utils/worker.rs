@@ -89,6 +89,7 @@ pub fn without_runtime<F: FnOnce() + Send + 'static>(
     let name = config.name.clone();
     let th_handle = thread::Builder::new()
         .stack_size(config.stack_size)
+        .name(name.clone())
         .spawn(move || {
             log::debug!("Worker '{name}' started");
             f();
