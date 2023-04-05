@@ -37,6 +37,8 @@ pub(super) enum PeerMessage {
     },
 }
 
+const MAX_MSG_LEN: usize = 1024 * 32 + 9;
+
 impl PeerMessage {
     pub(super) async fn read_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<PeerMessage> {
         use PeerMessage::*;
@@ -45,6 +47,13 @@ impl PeerMessage {
 
         if msg_len == 0 {
             return Ok(KeepAlive);
+        }
+
+        if msg_len > MAX_MSG_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                format!("Too long message received: {msg_len} bytes"),
+            ));
         }
 
         let id = {
