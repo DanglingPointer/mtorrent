@@ -179,11 +179,29 @@ mod tests {
     }
 
     /// ```
+    ///   o  o
+    ///    \/
+    ///    /\
+    ///   o  o
+    /// ```
+    #[test]
+    fn test_simple_2l_2r_vertices() {
+        let input = TestInput {
+            l_to_r_edges: vec![vec![1u16], vec![0u16]],
+            r_vertices_count: 2,
+        };
+
+        let m = MaxBipartiteMatching::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 1u16), (1u16, 0u16)], m.output());
+    }
+
+    /// ```
     ///   o--o
     ///   o--o
     /// ```
     #[test]
-    fn test_simple_2l_2r_vertices() {
+    fn test_very_simple_2l_2r_vertices() {
         let input = TestInput {
             l_to_r_edges: vec![vec![0u16], vec![1u16]],
             r_vertices_count: 2,
@@ -204,6 +222,24 @@ mod tests {
     fn test_2l_2r_vertices() {
         let input = TestInput {
             l_to_r_edges: vec![vec![0u16, 1u16], vec![0u16]],
+            r_vertices_count: 2,
+        };
+
+        let m = MaxBipartiteMatching::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 1u16), (1u16, 0u16)], m.output());
+    }
+
+    /// ```
+    ///   o  o
+    ///    \/
+    ///    /\
+    ///   o--o
+    /// ```
+    #[test]
+    fn test_2l_2r_vertices_upside_down() {
+        let input = TestInput {
+            l_to_r_edges: vec![vec![1u16], vec![0u16, 1u16]],
             r_vertices_count: 2,
         };
 
@@ -260,5 +296,43 @@ mod tests {
         let m = MaxBipartiteMatching::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 0u16), (1u16, 2u16), (2u16, 1u16)], m.output());
+    }
+
+    /// "Introduction to Algorithms" by Thomas H. Corman, Figure 26.8 ROTATED
+    #[test]
+    fn test_5l_4r_vertices_rotated() {
+        let input = TestInput {
+            l_to_r_edges: vec![
+                vec![2u16],
+                vec![2u16],
+                vec![1u16, 2u16, 3u16],
+                vec![0u16, 2u16],
+                vec![0u16],
+            ],
+            r_vertices_count: 4,
+        };
+
+        let m = MaxBipartiteMatching::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 2u16), (2u16, 1u16), (3u16, 0u16)], m.output());
+    }
+
+    /// "Introduction to Algorithms" by Thomas H. Corman, Figure 26.8 UPSIDE DOWN
+    #[test]
+    fn test_5l_4r_vertices_upside_down() {
+        let input = TestInput {
+            l_to_r_edges: vec![
+                vec![1u16],
+                vec![1u16],
+                vec![0u16, 1u16, 2u16],
+                vec![1u16, 3u16],
+                vec![3u16],
+            ],
+            r_vertices_count: 4,
+        };
+
+        let m = MaxBipartiteMatching::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 1u16), (2u16, 0u16), (3u16, 3u16)], m.output());
     }
 }
