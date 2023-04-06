@@ -231,7 +231,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             sink: &mut mpsc::Sender<M>,
             source: &SocketAddr,
         ) -> io::Result<()> {
-            log::debug!("{} => {}", source, msg);
+            log::trace!("{} => {}", source, msg);
             sink.send(msg)
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -253,7 +253,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             }
             Err(received) => received,
         };
-        log::debug!("{} => IGNORED {:?}", self.remote_ip, received);
+        log::trace!("{} => IGNORED {:?}", self.remote_ip, received);
         Ok(())
     }
 }
@@ -284,7 +284,7 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             S: AsyncWriteExt + Unpin,
         {
             let first = msg.expect("First msg must be non-None");
-            log::debug!("{} <= {}", dest, first);
+            log::trace!("{} <= {}", dest, first);
             first.into().write_to(sink).await?;
             let second = source.next().await.ok_or_else(new_channel_closed_error)?;
             assert!(second.is_none(), "Second msg must be None");
@@ -302,7 +302,7 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {
                 let ping_msg = PeerMessage::KeepAlive;
-                log::debug!("{} <= {:?}", self.remote_ip, &ping_msg);
+                log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
                 ping_msg.write_to(&mut self.sink).await?;
             }
         };

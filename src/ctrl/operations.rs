@@ -74,10 +74,11 @@ impl Action {
         info_hash: [u8; 20],
         remote_ip: SocketAddr,
     ) -> Self {
-        let mut attempts_left = 3;
+        const MAX_RETRY_COUNT: usize = 3;
+        debug!("Connecting to {remote_ip}");
+        let mut attempts_left = MAX_RETRY_COUNT;
         let mut reconnect_interval = Duration::from_secs(2);
         loop {
-            debug!("Connecting to {remote_ip}, attempts left: {attempts_left}");
             match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
                 Ok(channels) => {
                     info!("Successfully established an outgoing connection to {remote_ip} (attempts_left={attempts_left})");
@@ -92,7 +93,8 @@ impl Action {
                         reconnect_interval *= 2;
                     }
                     _ => {
-                        error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
+                        let attempts_done = 1 + MAX_RETRY_COUNT - attempts_left;
+                        error!("Failed to establish an outgoing connection to {remote_ip} (after {attempts_done} attempts): {e}");
                         return Action::PeerConnectivity(Err(remote_ip));
                     }
                 },

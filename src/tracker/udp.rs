@@ -21,7 +21,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        log::debug!("Sending connect request");
+        log::trace!("Sending connect request");
 
         let connect_response =
             Self::do_request(&socket, request, |data: &[u8]| -> Option<ConnectResponse> {
@@ -32,7 +32,7 @@ impl UdpTrackerConnection {
             })
             .await?;
 
-        log::debug!("Received connect response, connection_id={}", connect_response.connection_id);
+        log::trace!("Received connect response, connection_id={}", connect_response.connection_id);
 
         Ok(UdpTrackerConnection {
             socket,
@@ -63,7 +63,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        log::debug!("Sending announce request");
+        log::trace!("Sending announce request");
 
         Self::do_request(
             &self.socket,
@@ -156,7 +156,7 @@ impl UdpTrackerConnection {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     retransmit_n += 1;
-                    log::debug!("Retrying request, retransmit_n={}", retransmit_n);
+                    log::trace!("Retrying request, retransmit_n={}", retransmit_n);
                 }
             }
         }

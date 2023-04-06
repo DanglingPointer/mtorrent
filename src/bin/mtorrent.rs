@@ -1,4 +1,4 @@
-use log::{error, info, Level};
+use log::{error, info, LevelFilter};
 use mtorrent::ctrl::OperationHandler;
 use mtorrent::data;
 use mtorrent::tracker::utils;
@@ -40,7 +40,7 @@ fn start_storage(storage: data::Storage) -> (data::StorageClient, worker::simple
 
     let handle = worker::without_runtime(
         worker::simple::Config {
-            name: "Storage".to_string(),
+            name: "storage".to_string(),
             ..Default::default()
         },
         move || {
@@ -55,13 +55,17 @@ fn start_pwp() -> worker::rt::Handle {
     worker::with_runtime(worker::rt::Config {
         io_enabled: true,
         time_enabled: true,
-        name: "PWP".to_string(),
+        name: "pwp".to_string(),
         ..Default::default()
     })
 }
 
 fn main() -> io::Result<()> {
-    simple_logger::init_with_level(Level::Debug)
+    simple_logger::SimpleLogger::new()
+        .with_threads(true)
+        .with_level(LevelFilter::Off)
+        .with_module_level("mtorrent", LevelFilter::Trace)
+        .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
     let metainfo = read_metainfo(if let Some(arg) = env::args().nth(1) {
