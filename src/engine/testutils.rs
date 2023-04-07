@@ -43,6 +43,11 @@ impl listeners::DownloadChannelMonitor for FakeDownloadMonitor {
     }
 
     fn submit_outbound(&self, msg: DownloaderMessage) {
+        match &msg {
+            DownloaderMessage::Interested => self.am_interested.set(true),
+            DownloaderMessage::NotInterested => self.am_interested.set(false),
+            _ => (),
+        }
         self.submitted_msgs.borrow_mut().push_back(msg);
     }
 }
@@ -79,6 +84,11 @@ impl listeners::UploadChannelMonitor for FakeUploadMonitor {
     }
 
     fn submit_outbound(&self, msg: UploaderMessage) {
+        match &msg {
+            UploaderMessage::Choke => self.am_choking.set(true),
+            UploaderMessage::Unchoke => self.am_choking.set(false),
+            _ => (),
+        }
         self.submitted_msgs.borrow_mut().push_back(msg)
     }
 }

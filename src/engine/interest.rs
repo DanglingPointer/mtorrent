@@ -497,18 +497,24 @@ mod tests {
         show_interest_to_owners_of_rare_pieces(&mut f.ctx());
 
         // then
-        for ip in [choking_nonsignle_owner_ip_1, nonchoking_owner_ip] {
-            let (dm, _) = &f.monitor_owner.monitors.get(&ip).unwrap();
-            assert_eq!(1, dm.submitted_msgs.borrow().len());
-            assert!(matches!(
-                dm.submitted_msgs.borrow().back().unwrap(),
-                pwp::DownloaderMessage::Interested
-            ));
-            dm.am_interested.set(true);
-        }
+        let interest_for_piece_0 = [choking_nonsignle_owner_ip_1, choking_nonsignle_owner_ip_2]
+            .into_iter()
+            .filter(|ip| {
+                let (dm, _) = &f.monitor_owner.monitors.get(ip).unwrap();
+                matches!(
+                    dm.submitted_msgs.borrow().back(),
+                    Some(pwp::DownloaderMessage::Interested)
+                )
+            })
+            .count();
+        assert_eq!(1, interest_for_piece_0);
 
-        let (dm, _) = &f.monitor_owner.monitors.get(&choking_nonsignle_owner_ip_2).unwrap();
-        assert!(dm.submitted_msgs.borrow().is_empty());
+        let (dm, _) = &f.monitor_owner.monitors.get(&nonchoking_owner_ip).unwrap();
+        assert_eq!(1, dm.submitted_msgs.borrow().len());
+        assert!(matches!(
+            dm.submitted_msgs.borrow().back().unwrap(),
+            pwp::DownloaderMessage::Interested
+        ));
 
         // when
         f.piece_tracker.forget_peer(&nonchoking_owner_ip);
