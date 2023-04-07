@@ -62,16 +62,13 @@ impl BlockAccountant {
     }
 
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
-        if piece_index >= self.pieces.piece_count() {
-            return false;
-        }
         let piece_length = self.pieces.piece_len();
-        let offset = self
-            .pieces
-            .global_offset(piece_index, 0, piece_length)
-            .expect("This should never happen");
-        self.submit_block_internal(offset, piece_length);
-        true
+        if let Ok(offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
+            self.submit_block_internal(offset, piece_length);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn submit_bitfield(&mut self, bitfield: &Bitfield) -> bool {
