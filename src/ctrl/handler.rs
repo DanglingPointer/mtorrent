@@ -460,11 +460,11 @@ impl<'h> OperationHandler {
             }
             UploaderMessage::Bitfield(bitfield) => {
                 // temp
-                self.ctx.piece_tracker.add_bitfield_record(remote_ip, &bitfield);
+                self.ctx.piece_tracker.add_bitfield_record(&remote_ip, &bitfield);
             }
             UploaderMessage::Have { piece_index } => {
                 // temp
-                self.ctx.piece_tracker.add_single_record(remote_ip, piece_index);
+                self.ctx.piece_tracker.add_single_record(&remote_ip, piece_index);
             }
             _ => (),
         }
@@ -592,7 +592,7 @@ impl OperationHandler {
     fn erase_peer(&mut self, remote_ip: &SocketAddr) {
         self.ctx.peermgr.remove_peer(remote_ip);
         self.stored_channels.remove(remote_ip);
-        self.ctx.piece_tracker.forget_peer(*remote_ip);
+        self.ctx.piece_tracker.forget_peer(remote_ip);
     }
 
     fn run_engine(&mut self, ops: &mut Vec<Operation<'_>>) {

@@ -55,23 +55,23 @@ impl PieceTracker {
         self.owners_to_piece_indices.get(peer).map(|pieces| pieces.iter().map(|i| i.0))
     }
 
-    pub fn add_single_record(&mut self, piece_owner: SocketAddr, piece_index: usize) -> bool {
+    pub fn add_single_record(&mut self, piece_owner: &SocketAddr, piece_index: usize) -> bool {
         let piece_count = self.piece_index_to_owners.len();
         let piece_index = piece_index.into();
 
         if let Some(piece_owners) = self.piece_index_to_owners.get_mut(&piece_index) {
             let peer_pieces = self
                 .owners_to_piece_indices
-                .entry(piece_owner)
+                .entry(*piece_owner)
                 .or_insert_with(|| HashSet::with_capacity(piece_count));
-            match (piece_owners.insert(piece_owner), peer_pieces.insert(piece_index)) {
+            match (piece_owners.insert(*piece_owner), peer_pieces.insert(piece_index)) {
                 (true, true) => {
                     self.change_owner_count_for_piece(piece_index, |prev_count| prev_count + 1);
-                    self.change_piece_count_for_owner(&piece_owner, |prev_count| prev_count + 1);
+                    self.change_piece_count_for_owner(piece_owner, |prev_count| prev_count + 1);
                     true
                 }
                 _ => {
-                    piece_owners.remove(&piece_owner);
+                    piece_owners.remove(piece_owner);
                     peer_pieces.remove(&piece_index);
                     false
                 }
@@ -81,7 +81,7 @@ impl PieceTracker {
         }
     }
 
-    pub fn add_bitfield_record(&mut self, peer: SocketAddr, bitfield: &Bitfield) {
+    pub fn add_bitfield_record(&mut self, peer: &SocketAddr, bitfield: &Bitfield) {
         for (piece_index, is_available) in bitfield.iter().enumerate() {
             if *is_available {
                 self.add_single_record(peer, piece_index);
@@ -89,14 +89,14 @@ impl PieceTracker {
         }
     }
 
-    pub fn forget_peer(&mut self, peer: SocketAddr) {
-        if let Some(pieces) = self.owners_to_piece_indices.remove(&peer) {
+    pub fn forget_peer(&mut self, peer: &SocketAddr) {
+        if let Some(pieces) = self.owners_to_piece_indices.remove(peer) {
             for piece_index in pieces {
                 let owners = self
                     .piece_index_to_owners
                     .get_mut(&piece_index)
                     .expect("Invalid internal state");
-                owners.remove(&peer);
+                owners.remove(peer);
                 self.change_owner_count_for_piece(piece_index, |prev_count| {
                     prev_count.saturating_sub(1)
                 });
@@ -104,7 +104,7 @@ impl PieceTracker {
             let removed =
                 self.piece_count_to_owners.iter_mut().find_map(|(piece_count, owners)| {
                     let owner_count = owners.len();
-                    owners.remove(&peer).then_some((piece_count, owner_count - 1))
+                    owners.remove(peer).then_some((piece_count, owner_count - 1))
                 });
             if let Some((&piece_count, 0)) = removed {
                 self.piece_count_to_owners.remove(&piece_count);
@@ -203,24 +203,24 @@ mod tests {
         assert_eq!(0, pa.get_piece_owners(2).unwrap().count());
         assert_eq!(0, pa.get_piece_owners(3).unwrap().count());
 
-        let added = pa.add_single_record(ip(6000), 3);
+        let added = pa.add_single_record(&ip(6000), 3);
         assert!(added);
         assert_eq!(0, pa.get_piece_owners(0).unwrap().count());
         assert_eq!(0, pa.get_piece_owners(1).unwrap().count());
         assert_eq!(0, pa.get_piece_owners(2).unwrap().count());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(3).unwrap().collect());
 
-        let added = pa.add_single_record(ip(6666), 4);
+        let added = pa.add_single_record(&ip(6666), 4);
         assert!(!added);
 
-        let added = pa.add_single_record(ip(6000), 2);
+        let added = pa.add_single_record(&ip(6000), 2);
         assert!(added);
         assert_eq!(0, pa.get_piece_owners(0).unwrap().count());
         assert_eq!(0, pa.get_piece_owners(1).unwrap().count());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(2).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(3).unwrap().collect());
 
-        pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 0, 0, 1]));
+        pa.add_bitfield_record(&ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 0, 0, 1]));
         assert_eq!(HashSet::from([&ip(6001)]), pa.get_piece_owners(0).unwrap().collect());
         assert_eq!(0, pa.get_piece_owners(1).unwrap().count());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(2).unwrap().collect());
@@ -229,7 +229,7 @@ mod tests {
             pa.get_piece_owners(3).unwrap().collect()
         );
 
-        pa.add_bitfield_record(ip(6002), &BitVec::repeat(true, 8));
+        pa.add_bitfield_record(&ip(6002), &BitVec::repeat(true, 8));
         assert_eq!(
             HashSet::from([&ip(6001), &ip(6002)]),
             pa.get_piece_owners(0).unwrap().collect()
@@ -250,9 +250,9 @@ mod tests {
         let mut pa = PieceTracker::new(4);
         assert!(pa.get_rarest_pieces().next().is_none());
 
-        pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
-        pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
-        pa.add_bitfield_record(ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 0, 0, 0]));
+        pa.add_bitfield_record(&ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
+        pa.add_bitfield_record(&ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
+        pa.add_bitfield_record(&ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 0, 0, 0]));
         {
             let mut rarest = pa.get_rarest_pieces();
             assert_eq!(2, rarest.next().unwrap());
@@ -268,7 +268,7 @@ mod tests {
             assert!(poorest.next().is_none());
         }
 
-        pa.add_bitfield_record(ip(6003), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
+        pa.add_bitfield_record(&ip(6003), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
         {
             let mut rarest = pa.get_rarest_pieces();
             assert_eq!(3, rarest.next().unwrap());
@@ -286,7 +286,7 @@ mod tests {
             assert!(poorest.next().is_none());
         }
 
-        pa.add_single_record(ip(6002), 1);
+        pa.add_single_record(&ip(6002), 1);
         {
             let mut rarest = pa.get_rarest_pieces();
             assert_eq!(3, rarest.next().unwrap());
@@ -304,10 +304,10 @@ mod tests {
     #[test]
     fn test_add_records_and_forget_piece() {
         let mut pa = PieceTracker::new(4);
-        pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
-        pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
-        pa.add_bitfield_record(ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
-        pa.add_single_record(ip(6003), 0);
+        pa.add_bitfield_record(&ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
+        pa.add_bitfield_record(&ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
+        pa.add_bitfield_record(&ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
+        pa.add_single_record(&ip(6003), 0);
 
         pa.forget_piece(0);
         assert!(pa.get_piece_owners(0).is_none());
@@ -350,12 +350,12 @@ mod tests {
     #[test]
     fn test_add_records_and_forget_peer() {
         let mut pa = PieceTracker::new(4);
-        pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
-        pa.add_bitfield_record(ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
-        pa.add_bitfield_record(ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
-        pa.add_single_record(ip(6003), 0);
+        pa.add_bitfield_record(&ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
+        pa.add_bitfield_record(&ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
+        pa.add_bitfield_record(&ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
+        pa.add_single_record(&ip(6003), 0);
 
-        pa.forget_peer(ip(6000));
+        pa.forget_peer(&ip(6000));
         assert!(pa.get_peer_pieces(&ip(6000)).is_none());
         assert_eq!(HashSet::new(), pa.get_piece_owners(3).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6001)]), pa.get_piece_owners(2).unwrap().collect());
@@ -381,7 +381,7 @@ mod tests {
             assert!(poorest.next().is_none());
         }
 
-        pa.forget_peer(ip(6003));
+        pa.forget_peer(&ip(6003));
         assert!(pa.get_peer_pieces(&ip(6003)).is_none());
         assert_eq!(HashSet::new(), pa.get_piece_owners(3).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6001)]), pa.get_piece_owners(2).unwrap().collect());
@@ -410,13 +410,13 @@ mod tests {
         let mut pa = PieceTracker::new(4);
         assert_eq!(1, pa.owner_count_to_piece_indices.len());
 
-        pa.add_single_record(ip(6000), 0);
+        pa.add_single_record(&ip(6000), 0);
         let mut keys = pa.owner_count_to_piece_indices.keys().cloned();
         assert_eq!(0, keys.next().unwrap());
         assert_eq!(1, keys.next().unwrap());
         assert!(keys.next().is_none());
 
-        pa.add_single_record(ip(6001), 0);
+        pa.add_single_record(&ip(6001), 0);
         let mut keys = pa.owner_count_to_piece_indices.keys().cloned();
         assert_eq!(0, keys.next().unwrap());
         assert_eq!(2, keys.next().unwrap());
@@ -433,17 +433,17 @@ mod tests {
         let mut pa = PieceTracker::new(4);
         assert_eq!(0, pa.piece_count_to_owners.len());
 
-        pa.add_single_record(ip(6000), 0);
+        pa.add_single_record(&ip(6000), 0);
         let mut keys = pa.piece_count_to_owners.keys().cloned();
         assert_eq!(1, keys.next().unwrap());
         assert!(keys.next().is_none());
 
-        pa.add_single_record(ip(6000), 1);
+        pa.add_single_record(&ip(6000), 1);
         let mut keys = pa.piece_count_to_owners.keys().cloned();
         assert_eq!(2, keys.next().unwrap());
         assert!(keys.next().is_none());
 
-        pa.forget_peer(ip(6000));
+        pa.forget_peer(&ip(6000));
         assert!(pa.piece_count_to_owners.is_empty());
     }
 
@@ -452,7 +452,7 @@ mod tests {
         let mut pa = PieceTracker::new(4);
         pa.forget_piece(0);
 
-        pa.add_bitfield_record(ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
+        pa.add_bitfield_record(&ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
         assert!(pa.get_piece_owners(0).is_none());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(1).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(2).unwrap().collect());

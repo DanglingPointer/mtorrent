@@ -293,12 +293,12 @@ mod tests {
         dm.am_interested.set(true);
         dm.peer_choking.set(false);
         f.state.interest.seeders += 1;
-        f.piece_tracker.add_single_record(ip, 0);
+        f.piece_tracker.add_single_record(&ip, 0);
 
         let (ip, dm, _um) = f.monitor_owner.add_peer();
         dm.am_interested.set(true);
         dm.peer_choking.set(true);
-        f.piece_tracker.add_single_record(ip, 0);
+        f.piece_tracker.add_single_record(&ip, 0);
 
         // when
         remove_unneeded_interest(&mut f.ctx());
@@ -323,23 +323,23 @@ mod tests {
 
         // given
         let (choking_single_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_single_owner_ip, 0);
+        f.piece_tracker.add_single_record(&choking_single_owner_ip, 0);
 
         let (nonchoking_single_owner_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_single_owner_ip, 1);
+        f.piece_tracker.add_single_record(&nonchoking_single_owner_ip, 1);
 
         let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, 2);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip, 2);
 
         let (only_nonchoking_owner_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(only_nonchoking_owner_ip, 2);
+        f.piece_tracker.add_single_record(&only_nonchoking_owner_ip, 2);
 
         let (single_owner_seeder_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
         dm.am_interested.set(true);
-        f.piece_tracker.add_single_record(single_owner_seeder_ip, 3);
+        f.piece_tracker.add_single_record(&single_owner_seeder_ip, 3);
 
         f.state.interest.seeders = 1;
 
@@ -371,25 +371,25 @@ mod tests {
         let piece_index = 0;
 
         let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, piece_index);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip, piece_index);
 
         let (nonchoking_nonsignle_owner_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip, piece_index);
 
         let piece_index = 1;
 
         let (choking_nonsignle_owner_ip_2, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_2, piece_index);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip_2, piece_index);
 
         let (seeder_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
         dm.am_interested.set(true);
-        f.piece_tracker.add_single_record(seeder_ip, piece_index);
+        f.piece_tracker.add_single_record(&seeder_ip, piece_index);
 
         let (nonchoking_nonsignle_owner_ip_2, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip_2, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip_2, piece_index);
 
         f.state.interest.seeders = 1;
 
@@ -424,29 +424,29 @@ mod tests {
 
         let (nonchoking_nonsignle_owner_ip_1, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip_1, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip_1, piece_index);
 
         let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, piece_index);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip, piece_index);
 
         let (nonchoking_nonsignle_owner_ip_2, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip_2, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip_2, piece_index);
 
         let piece_index = 1;
 
         let (nonchoking_nonsignle_owner_ip_3, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip_3, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip_3, piece_index);
 
         let (nonchoking_nonsignle_owner_ip_4, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_nonsignle_owner_ip_4, piece_index);
+        f.piece_tracker.add_single_record(&nonchoking_nonsignle_owner_ip_4, piece_index);
 
         let (seeder_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
         dm.am_interested.set(true);
-        f.piece_tracker.add_single_record(seeder_ip, piece_index);
+        f.piece_tracker.add_single_record(&seeder_ip, piece_index);
 
         // when
         show_interest_to_any_nonchoking_owners(&mut f.ctx());
@@ -484,14 +484,14 @@ mod tests {
 
         // given
         let (choking_nonsignle_owner_ip_1, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_1, 0);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip_1, 0);
 
         let (choking_nonsignle_owner_ip_2, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_2, 0);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip_2, 0);
 
         let (nonchoking_owner_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
-        f.piece_tracker.add_single_record(nonchoking_owner_ip, 1);
+        f.piece_tracker.add_single_record(&nonchoking_owner_ip, 1);
 
         // when
         show_interest_to_owners_of_rare_pieces(&mut f.ctx());
@@ -511,9 +511,9 @@ mod tests {
         assert!(dm.submitted_msgs.borrow().is_empty());
 
         // when
-        f.piece_tracker.forget_peer(nonchoking_owner_ip);
+        f.piece_tracker.forget_peer(&nonchoking_owner_ip);
         f.monitor_owner.monitors.remove(&nonchoking_owner_ip);
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_2, 1);
+        f.piece_tracker.add_single_record(&choking_nonsignle_owner_ip_2, 1);
         show_interest_to_owners_of_rare_pieces(&mut f.ctx());
 
         // then
