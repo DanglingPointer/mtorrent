@@ -44,7 +44,8 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn is_cancellation_requested(&self) -> bool {
+    #[must_use]
+    pub fn is_cancellation_requested(self) -> bool {
         self.state.cancelled.get()
     }
 }
@@ -82,6 +83,12 @@ mod tests {
 
         drop(token);
         assert!(!handle.is_active());
+
+        let (handle, token) = new_detaching();
+        assert!(handle.is_active());
+
+        let _ = token.is_cancellation_requested();
+        assert!(!handle.is_active());
     }
 
     #[test]
@@ -91,22 +98,30 @@ mod tests {
 
         drop(token);
         assert!(!handle.is_active());
+
+        let (handle, token) = new_owning();
+        assert!(handle.is_active());
+
+        let _ = token.is_cancellation_requested();
+        assert!(!handle.is_active());
     }
 
     #[test]
     fn test_detached_canceller_cancels() {
-        let (handle, token) = new_detaching();
+        let (_handle, token) = new_detaching();
         assert!(!token.is_cancellation_requested());
 
+        let (handle, token) = new_detaching();
         handle.cancel();
         assert!(token.is_cancellation_requested());
     }
 
     #[test]
     fn test_owning_canceller_cancels() {
-        let (handle, token) = new_owning();
+        let (_handle, token) = new_owning();
         assert!(!token.is_cancellation_requested());
 
+        let (handle, token) = new_owning();
         drop(handle);
         assert!(token.is_cancellation_requested());
     }
