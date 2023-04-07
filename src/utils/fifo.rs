@@ -44,6 +44,15 @@ impl<T> Queue<T> {
         inner.retain(|e| !pred(e));
         inner.len() != initial_len
     }
+
+    pub fn len(&self) -> usize {
+        let inner = unsafe { &*self.0.get() };
+        inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<T> Default for Queue<T> {
