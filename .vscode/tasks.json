@@ -5,6 +5,7 @@
 			"type": "cargo",
 			"command": "build",
 			"args": [
+				"--release",
 				"--all-targets",
 				"--all-features",
 				"--verbose"
