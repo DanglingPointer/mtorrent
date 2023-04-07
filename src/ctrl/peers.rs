@@ -7,20 +7,20 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-pub struct PeerManager {
+pub(super) struct PeerManager {
     pieces: Rc<PieceInfo>,
     channel_states: HashMap<SocketAddr, (DownloadChannelState, UploadChannelState)>,
 }
 
 impl PeerManager {
-    pub fn new(pieces: Rc<PieceInfo>) -> Self {
+    pub(super) fn new(pieces: Rc<PieceInfo>) -> Self {
         Self {
             pieces,
             channel_states: HashMap::new(),
         }
     }
 
-    pub fn add_peer(&mut self, remote_ip: &SocketAddr) {
+    pub(super) fn add_peer(&mut self, remote_ip: &SocketAddr) {
         let download = DownloadChannelState {
             am_interested: false,
             peer_choking: true,
@@ -38,7 +38,7 @@ impl PeerManager {
         self.channel_states.insert(*remote_ip, (download, upload));
     }
 
-    pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
+    pub(super) fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         self.channel_states.remove(remote_ip);
     }
 }

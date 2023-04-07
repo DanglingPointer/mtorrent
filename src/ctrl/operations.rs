@@ -12,7 +12,7 @@ use std::{io, mem};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::sleep;
 
-pub type DelayedFn = Box<dyn FnOnce(&mut dyn Any) -> Option<Vec<Operation<'static>>>>;
+pub(super) type DelayedFn = Box<dyn FnOnce(&mut dyn Any) -> Option<Vec<Operation<'static>>>>;
 
 pub enum Action {
     DownloadMsgSent(Result<DownloadTxChannel, SocketAddr>),

@@ -4,7 +4,7 @@ use std::cmp;
 const MAX_BLOCK_SIZE: usize = 16384;
 
 #[allow(dead_code)]
-pub fn divide_piece_into_blocks(
+pub(crate) fn divide_piece_into_blocks(
     piece_index: usize,
     piece_len: usize,
 ) -> impl Iterator<Item = BlockInfo> {
