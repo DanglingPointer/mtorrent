@@ -149,13 +149,7 @@ impl fmt::Display for DownloadChannelState {
             "am_interested={:<5} peer_choking={:<5} bytes_recv={}",
             self.am_interested, self.peer_choking, self.bytes_received
         )?;
-        let piece_count = self
-            .availability
-            .generate_bitfield()
-            .into_iter()
-            .filter(|&piece_present| piece_present)
-            .count();
-        write!(f, " pieces_owned={piece_count}")?;
+        write!(f, " {}", self.availability)?;
 
         let pending_msgs_count = self.pending_tx_msgs.len();
         if pending_msgs_count > 0 {
