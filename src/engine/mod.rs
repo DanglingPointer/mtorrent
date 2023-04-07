@@ -1,6 +1,6 @@
 mod interest;
 mod listeners;
-mod matching;
+mod matcher;
 #[cfg(test)]
 mod testutils;
 

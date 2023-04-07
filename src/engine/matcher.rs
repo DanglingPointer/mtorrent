@@ -1,9 +1,11 @@
 use std::cell::Cell;
 
 pub(super) trait Input {
+    type Output;
     fn l_vertices_count(&self) -> u16;
     fn r_vertices_count(&self) -> u16;
     fn r_vertices_reachable_from(&self, l_vertex: u16) -> &Vec<u16>;
+    fn process_output(self, out: impl Iterator<Item = (u16, u16)>) -> Self::Output;
 }
 
 #[derive(Clone, Copy)]
@@ -87,13 +89,13 @@ mod graph {
 
 use graph::*;
 
-pub(super) struct MaxBipartiteMatching<I: Input> {
+pub(super) struct MaxBipartiteMatcher<I: Input> {
     input: I,
     state: GraphHolder,
 }
 
 #[allow(dead_code)]
-impl<I: Input> MaxBipartiteMatching<I> {
+impl<I: Input> MaxBipartiteMatcher<I> {
     pub(super) fn new(input: I) -> Self {
         let state =
             GraphHolder::new(input.l_vertices_count() as usize, input.r_vertices_count() as usize);
@@ -107,8 +109,8 @@ impl<I: Input> MaxBipartiteMatching<I> {
         }
     }
 
-    pub(super) fn output(self) -> Vec<(u16, u16)> {
-        self.state.connected_vertex_pairs().collect()
+    pub(super) fn output(self) -> I::Output {
+        self.input.process_output(self.state.connected_vertex_pairs())
     }
 
     fn try_add_l_vertex(&self, l_vertex: LVertexIndex) -> bool {
@@ -165,6 +167,8 @@ mod tests {
     }
 
     impl Input for TestInput {
+        type Output = Vec<(u16, u16)>;
+
         fn l_vertices_count(&self) -> u16 {
             self.l_to_r_edges.len() as u16
         }
@@ -175,6 +179,10 @@ mod tests {
 
         fn r_vertices_reachable_from(&self, l_vertex: u16) -> &Vec<u16> {
             &self.l_to_r_edges[l_vertex as usize]
+        }
+
+        fn process_output(self, out: impl Iterator<Item = (u16, u16)>) -> Self::Output {
+            out.collect()
         }
     }
 
@@ -191,7 +199,7 @@ mod tests {
             r_vertices_count: 2,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 1u16), (1u16, 0u16)], m.output());
     }
@@ -207,7 +215,7 @@ mod tests {
             r_vertices_count: 2,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 0u16), (1u16, 1u16)], m.output());
     }
@@ -225,7 +233,7 @@ mod tests {
             r_vertices_count: 2,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 1u16), (1u16, 0u16)], m.output());
     }
@@ -243,7 +251,7 @@ mod tests {
             r_vertices_count: 2,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 1u16), (1u16, 0u16)], m.output());
     }
@@ -256,7 +264,7 @@ mod tests {
             r_vertices_count: 3,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 2u16), (1u16, 1u16), (2u16, 0u16)], m.output());
     }
@@ -275,7 +283,7 @@ mod tests {
             r_vertices_count: 4,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 0u16), (1u16, 2u16), (2u16, 1u16)], m.output());
     }
@@ -293,7 +301,7 @@ mod tests {
             r_vertices_count: 5,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 0u16), (1u16, 2u16), (2u16, 1u16)], m.output());
     }
@@ -312,7 +320,7 @@ mod tests {
             r_vertices_count: 4,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 2u16), (2u16, 1u16), (3u16, 0u16)], m.output());
     }
@@ -331,7 +339,7 @@ mod tests {
             r_vertices_count: 4,
         };
 
-        let m = MaxBipartiteMatching::new(input);
+        let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 1u16), (2u16, 0u16), (3u16, 3u16)], m.output());
     }
