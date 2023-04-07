@@ -136,6 +136,7 @@ impl<'h> Handler<'h> for OperationHandler {
             self.create_http_announce_ops(Some(http::AnnounceEvent::Started), http_trackers),
             self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
+            self.periodic_peer_state_dump(),
             vec![
                 Action::new_timer(Duration::from_secs(60), |ctx: &mut Self| {
                     ctx.debug_finished = true;
@@ -331,6 +332,16 @@ impl<'h> OperationHandler {
                 Vec::new()
             }
         }
+    }
+
+    fn periodic_peer_state_dump(&self) -> Vec<Operation<'h>> {
+        self.ctx.peermgr.dump();
+        vec![
+            Action::new_timer(Duration::from_secs(10), |this: &mut Self| {
+                Some(this.periodic_peer_state_dump())
+            })
+            .boxed_local(),
+        ]
     }
 
     fn process_timeout(&mut self, f: DelayedFn) -> Option<Vec<Operation<'h>>> {

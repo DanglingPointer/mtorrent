@@ -3,6 +3,7 @@ use crate::data::{BlockAccountant, PieceInfo};
 use crate::engine;
 use crate::pwp::{BlockInfo, DownloaderMessage, UploaderMessage};
 use crate::utils::fifo;
+use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -40,6 +41,27 @@ impl PeerManager {
 
     pub(super) fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         self.channel_states.remove(remote_ip);
+    }
+
+    pub(super) fn dump(&self) {
+        if self.channel_states.is_empty() {
+            return;
+        }
+        log::info!("{}", ChannelStatesDumper { mgr: self });
+    }
+}
+
+struct ChannelStatesDumper<'m> {
+    mgr: &'m PeerManager,
+}
+
+impl<'m> fmt::Display for ChannelStatesDumper<'m> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected peers:")?;
+        for (ip, (download, upload)) in &self.mgr.channel_states {
+            write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, download, " ", upload)?;
+        }
+        Ok(())
     }
 }
 
@@ -118,6 +140,33 @@ struct DownloadChannelState {
     bytes_received: usize,
     pending_tx_msgs: fifo::Queue<DownloaderMessage>,
     requested_blocks: HashSet<BlockInfo>,
+}
+
+impl fmt::Display for DownloadChannelState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "am_interested={:<5} peer_choking={:<5} bytes_recv={}",
+            self.am_interested, self.peer_choking, self.bytes_received
+        )?;
+        let piece_count = self
+            .availability
+            .generate_bitfield()
+            .into_iter()
+            .filter(|&piece_present| piece_present)
+            .count();
+        write!(f, " pieces_owned={piece_count}")?;
+
+        let pending_msgs_count = self.pending_tx_msgs.len();
+        if pending_msgs_count > 0 {
+            write!(f, " pending_down_msgs={pending_msgs_count}")?;
+        }
+        let outstanding_requests = self.requested_blocks.len();
+        if outstanding_requests > 0 {
+            write!(f, " outstanding_reqs={outstanding_requests}")?;
+        }
+        Ok(())
+    }
 }
 
 impl handler::DownloadChannelHandler for DownloadChannelState {
@@ -216,6 +265,21 @@ struct UploadChannelState {
     am_choking: bool,
     bytes_sent: usize,
     pending_tx_msgs: fifo::Queue<UploaderMessage>,
+}
+
+impl fmt::Display for UploadChannelState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "peer_interested={:<5} am_choking={:<5} bytes_sent={}",
+            self.peer_interested, self.am_choking, self.bytes_sent
+        )?;
+        let pending_msgs_count = self.pending_tx_msgs.len();
+        if pending_msgs_count > 0 {
+            write!(f, " pending_up_msgs={}", pending_msgs_count)?;
+        }
+        Ok(())
+    }
 }
 
 impl handler::UploadChannelHandler for UploadChannelState {
