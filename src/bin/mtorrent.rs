@@ -8,7 +8,6 @@ use mtorrent::utils::{benc, upnp, worker};
 use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
 use std::{env, fs, io, iter};
 use tokio::runtime;
 
@@ -102,42 +101,48 @@ fn main() -> io::Result<()> {
         )?
     };
 
-    let port_opener_result = upnp::PortOpener::new(
-        local_internal_ip,
-        igd::PortMappingProtocol::TCP,
-        Duration::from_secs(60),
-    );
-    let local_external_ip = match &port_opener_result {
-        Ok(port_opener) => {
-            info!("UPnP succeeded, public ip: {}", port_opener.external_ip());
-            port_opener.external_ip()
-        }
-        Err(e) => {
-            error!("UPnP failed: {}", e);
-            local_internal_ip
-        }
-    };
-
     let local_peer_id = generate_local_peer_id();
     info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
 
     let pwp_worker_handle = start_pwp();
     let (storage, _storage_handle) = start_storage(filekeeper);
 
-    let ctrl = OperationHandler::new(
-        metainfo,
-        storage,
-        local_internal_ip,
-        local_external_ip,
-        local_peer_id,
-        pwp_worker_handle.runtime_handle(),
-    )
-    .unwrap();
-
     runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(async move {
+            let pwp_rt_handle = pwp_worker_handle.runtime_handle();
+
+            let port_opener_result =
+                upnp::PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP).await;
+
+            let local_external_ip = match port_opener_result {
+                Ok(port_opener) => {
+                    let public_ip = port_opener.external_ip();
+                    info!("UPnP succeeded, public ip: {}", public_ip);
+                    pwp_rt_handle.spawn(async move {
+                        if let Err(e) = port_opener.do_continuous_renewal().await {
+                            error!("UPnP port renewal failed: {e}");
+                        }
+                    });
+                    public_ip
+                }
+                Err(e) => {
+                    error!("UPnP failed: {}", e);
+                    local_internal_ip
+                }
+            };
+
+            let ctrl = OperationHandler::new(
+                metainfo,
+                storage,
+                local_internal_ip,
+                local_external_ip,
+                local_peer_id,
+                pwp_rt_handle,
+            )
+            .unwrap();
+
             let mut dispatcher = Dispatcher::new(ctrl);
             while dispatcher.dispatch_one().await {}
         });
