@@ -1,5 +1,6 @@
-use super::Context;
-use crate::pwp;
+use super::{matcher, Context};
+use crate::{data, pwp};
+use std::{collections::HashSet, net::SocketAddr};
 
 #[derive(Default)]
 pub struct State {
@@ -16,7 +17,7 @@ pub fn update_interest(ctx: &mut Context) {
     show_interest_to_nonchoking_single_owners(ctx);
     show_interest_to_only_nonchoking_owners(ctx);
     show_interest_to_any_nonchoking_owners(ctx);
-    show_desperate_interest(ctx);
+    show_interest_to_owners_of_rare_pieces(ctx);
     let end = std::time::Instant::now();
     let running_time_ms = (end - start).as_millis();
     if running_time_ms > 0 {
@@ -143,27 +144,81 @@ fn show_interest_to_any_nonchoking_owners(ctx: &mut Context) {
     }
 }
 
-fn show_desperate_interest(ctx: &mut Context) {
-    let non_choking_peer_that_owns = |piece_index: usize| {
-        let owners_ips = ctx.piece_tracker.get_piece_owners(piece_index)?;
-        owners_ips
-            .filter_map(|ip| ctx.monitor_owner.download_monitor(ip))
-            .find(|dm| !dm.peer_choking())
-    };
-    let has_non_choking_relevant_peers = ctx
-        .piece_tracker
-        .get_rarest_pieces()
-        .any(|piece_index| non_choking_peer_that_owns(piece_index).is_some());
-    if has_non_choking_relevant_peers {
-        return;
+mod mapper {
+    use super::*;
+
+    pub(super) struct MapRarestPiecesToMostOwners {
+        pieces: Vec<usize>,
+        peers: Vec<SocketAddr>,
+        piece_owners_indices: Vec<Vec<u16>>,
     }
-    for missing_piece in ctx.piece_tracker.get_rarest_pieces() {
-        if let Some(piece_owners_it) = ctx.piece_tracker.get_piece_owners(missing_piece) {
-            for dm in piece_owners_it.filter_map(|ip| ctx.monitor_owner.download_monitor(ip)) {
-                debug_assert!(dm.peer_choking());
-                if !dm.am_interested() {
-                    dm.submit_outbound(pwp::DownloaderMessage::Interested);
+
+    impl MapRarestPiecesToMostOwners {
+        pub(super) fn new(piece_tracker: &data::PieceTracker, max_piece_count: usize) -> Self {
+            let pieces =
+                piece_tracker.get_rarest_pieces().take(max_piece_count).collect::<Vec<usize>>();
+            let peers = {
+                let mut peers = HashSet::new();
+                for &piece in &pieces {
+                    for owner in piece_tracker.get_piece_owners(piece).unwrap() {
+                        peers.insert(*owner);
+                    }
                 }
+                peers.into_iter().collect::<Vec<SocketAddr>>()
+            };
+            let piece_owners_indices = {
+                let mut piece_owners_indices = vec![Vec::<u16>::new(); pieces.len()];
+                for (piece_index, &piece) in pieces.iter().enumerate() {
+                    for owner in piece_tracker.get_piece_owners(piece).unwrap() {
+                        let owner_index = peers
+                            .iter()
+                            .enumerate()
+                            .find_map(|(index, peer)| (peer == owner).then_some(index));
+                        piece_owners_indices[piece_index].push(owner_index.unwrap() as u16);
+                    }
+                }
+                piece_owners_indices
+            };
+            Self {
+                pieces,
+                peers,
+                piece_owners_indices,
+            }
+        }
+    }
+
+    impl matcher::Input for MapRarestPiecesToMostOwners {
+        type Output = Vec<SocketAddr>;
+
+        fn l_vertices_count(&self) -> u16 {
+            self.pieces.len() as u16
+        }
+
+        fn r_vertices_count(&self) -> u16 {
+            self.peers.len() as u16
+        }
+
+        fn r_vertices_reachable_from(&self, piece_index: u16) -> &Vec<u16> {
+            &self.piece_owners_indices[piece_index as usize]
+        }
+
+        fn process_output(self, out: impl Iterator<Item = (u16, u16)>) -> Self::Output {
+            out.map(|(_piece_index, peer_index)| self.peers[peer_index as usize]).collect()
+        }
+    }
+}
+
+fn show_interest_to_owners_of_rare_pieces(ctx: &mut Context) {
+    let input = mapper::MapRarestPiecesToMostOwners::new(ctx.piece_tracker, 20);
+    let matcher = matcher::MaxBipartiteMatcher::new(input);
+    matcher.calculate_max_matching();
+    let interesting_peers = matcher.output();
+    for peer_ip in interesting_peers {
+        let dm = ctx.monitor_owner.download_monitor(&peer_ip).unwrap();
+        if !dm.am_interested() {
+            dm.submit_outbound(pwp::DownloaderMessage::Interested);
+            if !dm.peer_choking() {
+                ctx.state.interest.seeders += 1;
             }
         }
     }
@@ -428,28 +483,38 @@ mod tests {
         let mut f = Fixture::new(10, 1024);
 
         // given
-        let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, 0);
+        let (choking_nonsignle_owner_ip_1, _, _) = f.monitor_owner.add_peer();
+        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_1, 0);
 
-        let (choking_nonsignle_owner_ip, _, _) = f.monitor_owner.add_peer();
-        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip, 0);
+        let (choking_nonsignle_owner_ip_2, _, _) = f.monitor_owner.add_peer();
+        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_2, 0);
 
         let (nonchoking_owner_ip, dm, _) = f.monitor_owner.add_peer();
         dm.peer_choking.set(false);
         f.piece_tracker.add_single_record(nonchoking_owner_ip, 1);
 
         // when
-        show_desperate_interest(&mut f.ctx());
+        show_interest_to_owners_of_rare_pieces(&mut f.ctx());
 
         // then
-        for (ip, (dm, _um)) in &f.monitor_owner.monitors {
-            assert!(dm.submitted_msgs.borrow().is_empty(), "{ip}");
+        for ip in [choking_nonsignle_owner_ip_1, nonchoking_owner_ip] {
+            let (dm, _) = &f.monitor_owner.monitors.get(&ip).unwrap();
+            assert_eq!(1, dm.submitted_msgs.borrow().len());
+            assert!(matches!(
+                dm.submitted_msgs.borrow().back().unwrap(),
+                pwp::DownloaderMessage::Interested
+            ));
+            dm.am_interested.set(true);
         }
+
+        let (dm, _) = &f.monitor_owner.monitors.get(&choking_nonsignle_owner_ip_2).unwrap();
+        assert!(dm.submitted_msgs.borrow().is_empty());
 
         // when
         f.piece_tracker.forget_peer(nonchoking_owner_ip);
         f.monitor_owner.monitors.remove(&nonchoking_owner_ip);
-        show_desperate_interest(&mut f.ctx());
+        f.piece_tracker.add_single_record(choking_nonsignle_owner_ip_2, 1);
+        show_interest_to_owners_of_rare_pieces(&mut f.ctx());
 
         // then
         for (ip, (dm, _um)) in &f.monitor_owner.monitors {
@@ -468,7 +533,7 @@ mod tests {
             dm.am_interested.set(true);
             dm.submitted_msgs.borrow_mut().clear();
         }
-        show_desperate_interest(&mut f.ctx());
+        show_interest_to_owners_of_rare_pieces(&mut f.ctx());
 
         // then
         for (ip, (dm, _um)) in &f.monitor_owner.monitors {
