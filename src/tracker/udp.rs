@@ -2,10 +2,9 @@ use super::utils;
 use crate::sec;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
-use std::time::Instant;
 use std::{io, str};
 use tokio::net::UdpSocket;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 
 pub struct UdpTrackerConnection {
     socket: UdpSocket,

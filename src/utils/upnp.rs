@@ -2,7 +2,7 @@ use crate::sec;
 use igd::{aio, Error, Gateway, PortMappingProtocol, SearchOptions};
 use std::io;
 use std::net::SocketAddrV4;
-use std::time::Instant;
+use tokio::time::Instant;
 
 fn to_blocking_gateway(gw: aio::Gateway) -> Gateway {
     Gateway {
@@ -50,7 +50,7 @@ impl PortOpener {
 
     pub async fn do_continuous_renewal(mut self) -> io::Result<()> {
         loop {
-            tokio::time::sleep_until(self.autoclose_at.into()).await;
+            tokio::time::sleep_until(self.autoclose_at).await;
             self.gateway
                 .as_ref()
                 .ok_or(io::Error::new(io::ErrorKind::Other, "no gateway"))?
