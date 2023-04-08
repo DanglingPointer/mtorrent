@@ -1,0 +1,13 @@
+#[macro_export]
+macro_rules! sec {
+    ($arg:expr) => {{
+        std::time::Duration::from_secs($arg)
+    }};
+}
+
+#[macro_export]
+macro_rules! millisec {
+    ($arg:expr) => {{
+        std::time::Duration::from_micros($arg * 1000)
+    }};
+}

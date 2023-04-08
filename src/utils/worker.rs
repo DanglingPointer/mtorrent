@@ -132,11 +132,12 @@ pub fn with_runtime(config: rt::Config) -> rt::Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use crate::sec;
+    use std::time::Instant;
 
     #[test]
     fn test_rt_worker_handle_doesnt_block_forever() {
-        let max_end_time = Instant::now() + Duration::from_secs(10);
+        let max_end_time = Instant::now() + sec!(10);
         let handle = thread::spawn(move || {
             let _worker_hnd = with_runtime(Default::default());
         });

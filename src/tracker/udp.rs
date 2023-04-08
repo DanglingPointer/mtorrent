@@ -1,7 +1,8 @@
-use crate::tracker::utils;
+use super::utils;
+use crate::sec;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{io, str};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
@@ -37,7 +38,7 @@ impl UdpTrackerConnection {
         Ok(UdpTrackerConnection {
             socket,
             connection_id: connect_response.connection_id,
-            connection_eof: Instant::now() + Duration::from_secs(60),
+            connection_eof: Instant::now() + sec!(60),
         })
     }
 
@@ -144,7 +145,7 @@ impl UdpTrackerConnection {
             let mut recv_buf = [0u8; 1024];
             let receive_fut = async { socket.recv(&mut recv_buf).await };
 
-            match timeout(Duration::from_secs(timeout_sec), receive_fut).await {
+            match timeout(sec!(timeout_sec), receive_fut).await {
                 Ok(read_res) => {
                     let bytes_read = read_res?;
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {

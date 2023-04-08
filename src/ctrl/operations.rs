@@ -1,7 +1,7 @@
 use crate::data::{PieceInfo, StorageClient};
-use crate::pwp::*;
 use crate::tracker::{http, udp};
 use crate::utils::meta::Metainfo;
+use crate::{pwp::*, sec};
 use futures::future::LocalBoxFuture;
 use log::{debug, error, info, warn};
 use std::any::Any;
@@ -77,7 +77,7 @@ impl Action {
         const MAX_RETRY_COUNT: usize = 3;
         debug!("Connecting to {remote_ip}");
         let mut attempts_left = MAX_RETRY_COUNT;
-        let mut reconnect_interval = Duration::from_secs(2);
+        let mut reconnect_interval = sec!(2);
         loop {
             match channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
                 Ok(channels) => {

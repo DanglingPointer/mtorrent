@@ -4,5 +4,6 @@ pub mod dispatch;
 pub mod fifo;
 pub mod meta;
 pub mod stopwatch;
+pub mod time;
 pub mod upnp;
 pub mod worker;

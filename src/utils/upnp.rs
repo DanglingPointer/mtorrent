@@ -1,7 +1,8 @@
+use crate::sec;
 use igd::{aio, Error, Gateway, PortMappingProtocol, SearchOptions};
 use std::io;
 use std::net::SocketAddrV4;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 fn to_blocking_gateway(gw: aio::Gateway) -> Gateway {
     Gateway {
@@ -22,11 +23,11 @@ pub struct PortOpener {
 }
 
 impl PortOpener {
-    const LEASE_DURATION: Duration = Duration::from_secs(300);
+    const LEASE_DURATION: std::time::Duration = sec!(300);
 
     pub async fn new(internal_ip: SocketAddrV4, proto: PortMappingProtocol) -> Result<Self, Error> {
         let gateway = aio::search_gateway(SearchOptions {
-            timeout: Some(Duration::from_secs(5)),
+            timeout: Some(sec!(5)),
             ..Default::default()
         })
         .await?;

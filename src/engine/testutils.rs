@@ -256,6 +256,7 @@ impl Fixture {
 mod tests {
     use super::listeners::TimerExt;
     use super::*;
+    use crate::sec;
 
     #[test]
     fn test_peers_stored_in_the_order_of_creation() {
@@ -281,41 +282,41 @@ mod tests {
         let ctx = f.ctx();
 
         let results_copy = results.clone();
-        ctx.timer.schedule_detached(Duration::from_secs(2), move |_ctx| {
+        ctx.timer.schedule_detached(sec!(2), move |_ctx| {
             results_copy.borrow_mut().push(1);
         });
 
         let results_copy = results.clone();
-        ctx.timer.schedule_detached(Duration::from_secs(3), move |_ctx| {
+        ctx.timer.schedule_detached(sec!(3), move |_ctx| {
             results_copy.borrow_mut().push(2);
         });
 
         let results_copy = results.clone();
-        ctx.timer.schedule_detached(Duration::from_secs(4), move |ctx| {
+        ctx.timer.schedule_detached(sec!(4), move |ctx| {
             results_copy.borrow_mut().push(3);
 
             let results_copy_2 = results_copy.clone();
-            ctx.timer.schedule_detached(Duration::from_secs(0), move |_ctx| {
+            ctx.timer.schedule_detached(sec!(0), move |_ctx| {
                 results_copy_2.borrow_mut().push(4);
             });
 
-            ctx.timer.schedule_detached(Duration::from_secs(1), move |_ctx| {
+            ctx.timer.schedule_detached(sec!(1), move |_ctx| {
                 results_copy.borrow_mut().push(5);
             });
         });
 
         assert!(results.borrow().is_empty());
 
-        f.advance_time(Duration::from_secs(1));
+        f.advance_time(sec!(1));
         assert!(results.borrow().is_empty());
 
-        f.advance_time(Duration::from_secs(1));
+        f.advance_time(sec!(1));
         assert_eq!(vec![1], results.borrow().clone());
 
-        f.advance_time(Duration::from_secs(2));
+        f.advance_time(sec!(2));
         assert_eq!(vec![1, 2, 3, 4], results.borrow().clone());
 
-        f.advance_time(Duration::from_secs(1));
+        f.advance_time(sec!(1));
         assert_eq!(vec![1, 2, 3, 4, 5], results.borrow().clone());
     }
 }

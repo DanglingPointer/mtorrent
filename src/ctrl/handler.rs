@@ -2,10 +2,10 @@ use crate::ctrl::operations::*;
 use crate::ctrl::peers::*;
 use crate::data;
 use crate::engine::{self, MonitorOwner};
-use crate::pwp::*;
 use crate::tracker::{http, udp, utils};
 use crate::utils::dispatch::Handler;
 use crate::utils::meta::Metainfo;
+use crate::{pwp::*, sec};
 use futures::prelude::*;
 use log::{error, info};
 use std::any::Any;
@@ -137,13 +137,11 @@ impl<'h> Handler<'h> for OperationHandler {
             self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
             self.periodic_state_dump(),
-            vec![
-                Action::new_timer(Duration::from_secs(60), |ctx: &mut Self| {
-                    ctx.debug_finished = true;
-                    None
-                })
-                .boxed_local(),
-            ],
+            vec![Action::new_timer(sec!(60), |ctx: &mut Self| {
+                ctx.debug_finished = true;
+                None
+            })
+            .boxed_local()],
         ]
         .into_iter()
         .flatten()
@@ -271,15 +269,11 @@ impl<'h> OperationHandler {
             })
             .collect::<Vec<_>>();
         ops.push(
-            Action::new_timer(
-                Duration::from_secs(response.interval as u64),
-                move |ctx: &mut Self| {
-                    Some(ctx.create_udp_announce_ops(
-                        udp::AnnounceEvent::None,
-                        iter::once(tracker_addr),
-                    ))
-                },
-            )
+            Action::new_timer(sec!(response.interval as u64), move |ctx: &mut Self| {
+                Some(
+                    ctx.create_udp_announce_ops(udp::AnnounceEvent::None, iter::once(tracker_addr)),
+                )
+            })
             .boxed_local(),
         );
         Some(ops)
@@ -308,7 +302,7 @@ impl<'h> OperationHandler {
             .collect::<Vec<_>>();
         ops.push(
             Action::new_timer(
-                Duration::from_secs(response.interval().unwrap_or(900) as u64),
+                sec!(response.interval().unwrap_or(900) as u64),
                 move |ctx: &mut Self| {
                     Some(ctx.create_http_announce_ops(None, iter::once(tracker_url)))
                 },
@@ -341,10 +335,8 @@ impl<'h> OperationHandler {
             self.ctx.peermgr
         );
         vec![
-            Action::new_timer(Duration::from_secs(10), |this: &mut Self| {
-                Some(this.periodic_state_dump())
-            })
-            .boxed_local(),
+            Action::new_timer(sec!(10), |this: &mut Self| Some(this.periodic_state_dump()))
+                .boxed_local(),
         ]
     }
 

@@ -1,9 +1,9 @@
+use crate::sec;
 use crate::tracker::utils;
 use crate::utils::benc;
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
 use std::{fmt, str};
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ impl From<benc::ParseError> for Error {
 pub async fn do_announce_request(
     request_builder: TrackerRequestBuilder,
 ) -> Result<AnnounceResponseContent, Error> {
-    let client = reqwest::Client::builder().gzip(true).timeout(Duration::from_secs(30)).build()?;
+    let client = reqwest::Client::builder().gzip(true).timeout(sec!(30)).build()?;
     let announce_url = request_builder.build_announce();
     log::debug!("Sending announce request to {}", announce_url);
 
@@ -58,7 +58,7 @@ pub async fn do_announce_request(
 }
 
 pub async fn do_scrape_request(request_builder: TrackerRequestBuilder) -> Result<String, Error> {
-    let client = reqwest::Client::builder().gzip(true).timeout(Duration::from_secs(30)).build()?;
+    let client = reqwest::Client::builder().gzip(true).timeout(sec!(30)).build()?;
     let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
     log::debug!("Sending scrape request to {}", scrape_url);
 

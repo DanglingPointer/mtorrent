@@ -1,5 +1,6 @@
 use crate::pwp::handshake::*;
 use crate::pwp::message::*;
+use crate::sec;
 use futures::channel::mpsc;
 use futures::{select, select_biased, FutureExt, SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -223,7 +224,7 @@ struct IngressStream<S: AsyncReadExt> {
 }
 
 impl<S: AsyncReadExt + Unpin> IngressStream<S> {
-    const RECV_TIMEOUT: Duration = Duration::from_secs(120);
+    const RECV_TIMEOUT: Duration = sec!(120);
 
     async fn read_one_message(&mut self) -> io::Result<()> {
         async fn forward_msg<M: fmt::Display>(
@@ -266,7 +267,7 @@ struct EgressStream<S: AsyncWriteExt> {
 }
 
 impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
-    const PING_INTERVAL: Duration = Duration::from_secs(30);
+    const PING_INTERVAL: Duration = sec!(30);
 
     async fn write_one_message(&mut self) -> io::Result<()> {
         fn new_channel_closed_error() -> io::Error {
@@ -713,7 +714,7 @@ mod tests {
                     let _ = runner.run().await;
                 });
 
-                time::sleep(Duration::from_secs(30)).await;
+                time::sleep(sec!(30)).await;
                 assert!(reader.try_next().is_err());
 
                 task::yield_now().await;
@@ -723,7 +724,7 @@ mod tests {
                 assert_eq!(4, buf.len());
                 assert_eq!(&[0u8; 4], &buf[..4]);
 
-                time::sleep(Duration::from_secs(30)).await;
+                time::sleep(sec!(30)).await;
                 assert!(reader.try_next().is_err());
 
                 task::yield_now().await;
@@ -754,7 +755,7 @@ mod tests {
                     result_sender.try_send(result).unwrap();
                 });
 
-                time::sleep(Duration::from_secs(120)).await;
+                time::sleep(sec!(120)).await;
                 assert!(result_receiver.try_next().is_err());
 
                 task::yield_now().await;
@@ -771,7 +772,7 @@ mod tests {
     async fn test_channel_send_timeout() {
         task::LocalSet::new()
             .run_until(async {
-                const TIMEOUT: Duration = Duration::from_secs(10);
+                const TIMEOUT: Duration = sec!(10);
 
                 let (mut download, mut _upload, _runner) = setup_channels(
                     PendingStream {},
@@ -806,7 +807,7 @@ mod tests {
     async fn test_channel_receive_timeout() {
         task::LocalSet::new()
             .run_until(async {
-                const TIMEOUT: Duration = Duration::from_secs(10);
+                const TIMEOUT: Duration = sec!(10);
 
                 let (mut _download, mut upload, _runner) = setup_channels(
                     PendingStream {},

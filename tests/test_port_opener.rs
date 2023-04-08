@@ -1,8 +1,8 @@
 use log::{info, Level};
+use mtorrent::sec;
 use mtorrent::tracker::utils;
 use mtorrent::utils::upnp;
 use std::net::SocketAddrV4;
-use std::time::Duration;
 use tokio::time;
 
 #[ignore]
@@ -16,7 +16,7 @@ async fn test_async_port_opener() {
         .await
         .unwrap();
     info!("port opener created, external ip: {}", port_opener.external_ip());
-    time::sleep(Duration::from_secs(1)).await;
+    time::sleep(sec!(1)).await;
     drop(port_opener);
     info!("port opener dropped");
 }
