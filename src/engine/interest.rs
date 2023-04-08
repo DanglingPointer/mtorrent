@@ -1,5 +1,5 @@
 use super::{matcher, Context};
-use crate::{data, pwp};
+use crate::{data, debug_stopwatch, pwp};
 use std::{collections::HashSet, net::SocketAddr};
 
 #[derive(Default)]
@@ -11,18 +11,13 @@ pub struct State {
 const MAX_SEEDERS_COUNT: usize = 30;
 
 pub fn update_interest(ctx: &mut Context) {
-    let start = std::time::Instant::now();
+    let _sw = debug_stopwatch!("Updating interest");
     update_state(ctx);
     remove_unneeded_interest(ctx);
     show_interest_to_nonchoking_single_owners(ctx);
     show_interest_to_only_nonchoking_owners(ctx);
     show_interest_to_any_nonchoking_owners(ctx);
     show_interest_to_owners_of_rare_pieces(ctx);
-    let end = std::time::Instant::now();
-    let running_time_ms = (end - start).as_millis();
-    if running_time_ms > 0 {
-        log::debug!("Engine spent {}ms running", running_time_ms);
-    }
 }
 
 fn update_state(ctx: &mut Context) {
