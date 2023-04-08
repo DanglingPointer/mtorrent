@@ -42,23 +42,12 @@ impl PeerManager {
     pub(super) fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         self.channel_states.remove(remote_ip);
     }
-
-    pub(super) fn dump(&self) {
-        if self.channel_states.is_empty() {
-            return;
-        }
-        log::info!("{}", ChannelStatesDumper { mgr: self });
-    }
 }
 
-struct ChannelStatesDumper<'m> {
-    mgr: &'m PeerManager,
-}
-
-impl<'m> fmt::Display for ChannelStatesDumper<'m> {
+impl fmt::Display for PeerManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected peers:")?;
-        for (ip, (download, upload)) in &self.mgr.channel_states {
+        for (ip, (download, upload)) in &self.channel_states {
             write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, download, " ", upload)?;
         }
         Ok(())

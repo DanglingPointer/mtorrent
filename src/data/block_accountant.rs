@@ -168,10 +168,6 @@ impl BlockAccountant {
     pub fn missing_bytes(&self) -> usize {
         self.pieces.piece_count() * self.pieces.piece_len() - self.total_bytes
     }
-
-    pub fn dump(&self) {
-        log::info!("BlockAccountant: {}", self);
-    }
 }
 
 impl fmt::Display for BlockAccountant {

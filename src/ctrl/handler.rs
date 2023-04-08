@@ -335,8 +335,11 @@ impl<'h> OperationHandler {
     }
 
     fn periodic_state_dump(&self) -> Vec<Operation<'h>> {
-        self.ctx.local_availability.dump();
-        self.ctx.peermgr.dump();
+        log::info!(
+            "Periodic state dump:\nLocal availability: {}\n{}",
+            self.ctx.local_availability,
+            self.ctx.peermgr
+        );
         vec![
             Action::new_timer(Duration::from_secs(10), |this: &mut Self| {
                 Some(this.periodic_state_dump())
