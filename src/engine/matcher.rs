@@ -224,6 +224,24 @@ mod tests {
     ///   o--o
     ///    \/
     ///    /\
+    ///   o--o
+    /// ```
+    #[test]
+    fn test_2l_2r_prioritize_earlier_vertices() {
+        let input = TestInput {
+            l_to_r_edges: vec![vec![0u16, 1u16], vec![0u16, 1u16]],
+            r_vertices_count: 2,
+        };
+
+        let m = MaxBipartiteMatcher::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 0u16), (1u16, 1u16)], m.output());
+    }
+
+    /// ```
+    ///   o--o
+    ///    \/
+    ///    /\
     ///   o  o
     /// ```
     #[test]
