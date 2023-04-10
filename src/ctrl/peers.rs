@@ -183,7 +183,10 @@ impl handler::DownloadChannelHandler for DownloadChannelState {
             DownloaderMessage::Cancel(block) => {
                 self.requested_blocks.remove(block);
             }
-            DownloaderMessage::NotInterested => self.am_interested = false,
+            DownloaderMessage::NotInterested => {
+                self.am_interested = false;
+                self.requested_blocks.clear();
+            }
             DownloaderMessage::Interested => self.am_interested = true,
         }
         Some(msg)
