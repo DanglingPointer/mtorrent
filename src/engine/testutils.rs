@@ -1,7 +1,8 @@
 use super::{listeners, Context, State};
 use crate::data::{BlockAccountant, PieceInfo, PieceTracker};
-use crate::pwp::{DownloaderMessage, UploaderMessage};
+use crate::pwp::{BlockInfo, DownloaderMessage, UploaderMessage};
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
@@ -11,6 +12,7 @@ pub struct FakeDownloadMonitor {
     pub am_interested: Cell<bool>,
     pub peer_choking: Cell<bool>,
     pub bytes_received: Cell<usize>,
+    pub requested_blocks: HashSet<BlockInfo>,
     pub submitted_msgs: RefCell<VecDeque<DownloaderMessage>>,
 }
 
@@ -20,6 +22,7 @@ impl Default for FakeDownloadMonitor {
             am_interested: Cell::new(false),
             peer_choking: Cell::new(true),
             bytes_received: Cell::new(0),
+            requested_blocks: Default::default(),
             submitted_msgs: Default::default(),
         }
     }
@@ -42,6 +45,10 @@ impl listeners::DownloadChannelMonitor for FakeDownloadMonitor {
         self.bytes_received.get()
     }
 
+    fn requested_blocks(&self) -> Box<dyn Iterator<Item = &BlockInfo> + '_> {
+        Box::new(self.requested_blocks.iter())
+    }
+
     fn submit_outbound(&self, msg: DownloaderMessage) {
         match &msg {
             DownloaderMessage::Interested => self.am_interested.set(true),
@@ -49,6 +56,10 @@ impl listeners::DownloadChannelMonitor for FakeDownloadMonitor {
             _ => (),
         }
         self.submitted_msgs.borrow_mut().push_back(msg);
+    }
+
+    fn pending_outbound_count(&self) -> usize {
+        self.submitted_msgs.borrow().len()
     }
 }
 
@@ -191,6 +202,7 @@ impl listeners::Timer for FakeTimer {
 }
 
 pub struct Fixture {
+    pub piece_info: Rc<PieceInfo>,
     pub block_accountant: BlockAccountant,
     pub piece_tracker: PieceTracker,
     pub monitor_owner: FakeMonitorOwner,
@@ -205,13 +217,14 @@ impl Fixture {
             piece_len,
         ));
 
-        let block_accountant = BlockAccountant::new(piece_info);
+        let block_accountant = BlockAccountant::new(piece_info.clone());
         let piece_tracker = PieceTracker::new(piece_count);
         let monitor_owner = FakeMonitorOwner::default();
         let state = State::default();
         let timer = FakeTimer::default();
 
         Self {
+            piece_info,
             block_accountant,
             piece_tracker,
             monitor_owner,
@@ -244,6 +257,7 @@ impl Fixture {
 
     pub fn ctx(&mut self) -> Context {
         Context {
+            piece_info: &self.piece_info,
             local_availability: &self.block_accountant,
             piece_tracker: &self.piece_tracker,
             monitor_owner: &self.monitor_owner,

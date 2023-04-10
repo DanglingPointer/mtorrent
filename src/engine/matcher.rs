@@ -92,6 +92,7 @@ use graph::*;
 pub(super) struct MaxBipartiteMatcher<I: Input> {
     input: I,
     state: GraphHolder,
+    done: Cell<bool>,
 }
 
 #[allow(dead_code)]
@@ -99,17 +100,24 @@ impl<I: Input> MaxBipartiteMatcher<I> {
     pub(super) fn new(input: I) -> Self {
         let state =
             GraphHolder::new(input.l_vertices_count() as usize, input.r_vertices_count() as usize);
-        Self { input, state }
+        Self {
+            input,
+            state,
+            done: Cell::new(false),
+        }
     }
 
     pub(super) fn calculate_max_matching(&self) {
+        assert!(!self.done.get());
         for l_vertex in self.state.all_l_vertices() {
             self.state.mark_all_as_uninspected();
             self.try_add_l_vertex(l_vertex);
         }
+        self.done.set(true);
     }
 
     pub(super) fn output(self) -> I::Output {
+        assert!(self.done.get());
         self.input.process_output(self.state.connected_vertex_pairs())
     }
 
@@ -360,5 +368,36 @@ mod tests {
         let m = MaxBipartiteMatcher::new(input);
         m.calculate_max_matching();
         assert_eq!(vec![(0u16, 1u16), (2u16, 0u16), (3u16, 3u16)], m.output());
+    }
+
+    #[test]
+    fn test_real_input() {
+        let input = TestInput {
+            l_to_r_edges: vec![
+                vec![
+                    4, 2, 9, 15, 6, 10, 11, 18, 3, 0, 19, 16, 1, 8, 12, 17, 14, 13, 7, 5,
+                ],
+                vec![
+                    17, 16, 4, 19, 18, 3, 6, 14, 9, 0, 10, 2, 15, 8, 13, 5, 7, 12, 11, 1,
+                ],
+            ],
+            r_vertices_count: 20,
+        };
+
+        assert_eq!(
+            &vec![4, 2, 9, 15, 6, 10, 11, 18, 3, 0, 19, 16, 1, 8, 12, 17, 14, 13, 7, 5,],
+            input.r_vertices_reachable_from(0)
+        );
+
+        assert_eq!(
+            &vec![17, 16, 4, 19, 18, 3, 6, 14, 9, 0, 10, 2, 15, 8, 13, 5, 7, 12, 11, 1],
+            input.r_vertices_reachable_from(1)
+        );
+        assert_eq!(2, input.l_vertices_count());
+        assert_eq!(20, input.r_vertices_count());
+
+        let m = MaxBipartiteMatcher::new(input);
+        m.calculate_max_matching();
+        assert_eq!(vec![(0u16, 4u16), (1u16, 17u16)], m.output());
     }
 }

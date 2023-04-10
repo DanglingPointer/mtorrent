@@ -63,6 +63,7 @@ impl<'a, 'o> engine::Timer for Timer<'a, 'o> {
 }
 
 struct Context {
+    pieces: Rc<data::PieceInfo>,
     local_availability: data::BlockAccountant,
     piece_tracker: data::PieceTracker,
     peermgr: PeerManager,
@@ -71,6 +72,7 @@ struct Context {
 
 fn engine_context<'a>(ctx: &'a mut Context, timer: &'a mut Timer<'a, '_>) -> engine::Context<'a> {
     engine::Context {
+        piece_info: &ctx.pieces,
         local_availability: &ctx.local_availability,
         piece_tracker: &ctx.piece_tracker,
         monitor_owner: &ctx.peermgr,
@@ -89,7 +91,6 @@ pub struct OperationHandler {
     filekeeper: Rc<data::StorageClient>,
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
-    pieces: Rc<data::PieceInfo>,
     ctx: Context,
     debug_finished: bool,
     pwp_worker_handle: runtime::Handle,
@@ -106,6 +107,7 @@ impl OperationHandler {
     ) -> Option<Self> {
         let pieces = Rc::new(data::PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
         let ctx = Context {
+            pieces: pieces.clone(),
             local_availability: data::BlockAccountant::new(pieces.clone()),
             piece_tracker: data::PieceTracker::new(pieces.piece_count()),
             peermgr: PeerManager::new(pieces.clone()),
@@ -119,7 +121,6 @@ impl OperationHandler {
             filekeeper: Rc::new(filekeeper),
             known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
             stored_channels: HashMap::new(),
-            pieces,
             ctx,
             debug_finished: false,
             pwp_worker_handle,
@@ -459,7 +460,7 @@ impl<'h> OperationHandler {
                         ops.push(
                             Action::from_piece_verification(
                                 info.piece_index,
-                                self.pieces.clone(),
+                                self.ctx.pieces.clone(),
                                 self.filekeeper.clone(),
                                 self.metainfo.clone(),
                             )
@@ -528,7 +529,7 @@ impl<'h> OperationHandler {
             Some(vec![Action::from_upload_tx_channel(
                 tx_channel,
                 msg,
-                self.pieces.clone(),
+                self.ctx.pieces.clone(),
                 self.filekeeper.clone(),
             )
             .boxed_local()])
@@ -587,7 +588,7 @@ impl<'h> OperationHandler {
                         Action::from_upload_tx_channel(
                             channel,
                             msg,
-                            self.pieces.clone(),
+                            self.ctx.pieces.clone(),
                             self.filekeeper.clone(),
                         )
                         .boxed_local(),
@@ -610,7 +611,7 @@ impl OperationHandler {
     fn run_engine(&mut self, ops: &mut Vec<Operation<'_>>) {
         let mut timer = Timer::new(ops);
         let mut ctx = engine_context(&mut self.ctx, &mut timer);
-        engine::update_interest(&mut ctx);
+        engine::run(&mut ctx);
 
         self.fill_tx_channels(ops);
     }

@@ -214,6 +214,10 @@ impl engine::DownloadChannelMonitor for DownloadChannelState {
         self.bytes_received
     }
 
+    fn requested_blocks(&self) -> Box<dyn Iterator<Item = &BlockInfo> + '_> {
+        Box::new(self.requested_blocks.iter())
+    }
+
     fn submit_outbound(&self, msg: DownloaderMessage) {
         if self.pending_tx_msgs.contains(&msg) {
             return;
@@ -246,6 +250,10 @@ impl engine::DownloadChannelMonitor for DownloadChannelState {
         if should_enqueue {
             self.pending_tx_msgs.push(msg);
         }
+    }
+
+    fn pending_outbound_count(&self) -> usize {
+        self.pending_tx_msgs.len()
     }
 }
 

@@ -6,7 +6,9 @@ pub trait DownloadChannelMonitor {
     fn peer_choking(&self) -> bool;
     fn remote_availability(&self) -> &data::BlockAccountant;
     fn bytes_received(&self) -> usize;
+    fn requested_blocks(&self) -> Box<dyn Iterator<Item = &pwp::BlockInfo> + '_>;
     fn submit_outbound(&self, msg: pwp::DownloaderMessage);
+    fn pending_outbound_count(&self) -> usize;
 }
 
 pub trait UploadChannelMonitor {
