@@ -46,7 +46,7 @@ impl PeerManager {
 
 impl fmt::Display for PeerManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Connected peers:")?;
+        write!(f, "Connected peers ({}):", self.channel_states.len())?;
         for (ip, (download, upload)) in &self.channel_states {
             write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, download, " ", upload)?;
         }
@@ -156,7 +156,10 @@ impl handler::DownloadChannelHandler for DownloadChannelState {
     fn update_state(&mut self, inbound: &UploaderMessage) {
         match inbound {
             UploaderMessage::Unchoke => self.peer_choking = false,
-            UploaderMessage::Choke => self.peer_choking = true,
+            UploaderMessage::Choke => {
+                self.peer_choking = true;
+                self.requested_blocks.clear();
+            }
             UploaderMessage::Bitfield(bitfield) => {
                 let _ = self.availability.submit_bitfield(bitfield);
             }
