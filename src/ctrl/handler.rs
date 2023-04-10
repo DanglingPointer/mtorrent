@@ -9,6 +9,7 @@ use crate::{pwp::*, sec};
 use futures::prelude::*;
 use log::{error, info};
 use std::any::Any;
+use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
@@ -201,7 +202,7 @@ impl<'h> OperationHandler {
             .enumerate()
             .map(|(index, tracker_addr)| {
                 let mut addr = self.internal_local_ip;
-                addr.set_port(addr.port() + index as u16);
+                addr.set_port(addr.port() + index as u16); // TODO: 0 for everyone after initial announce
                 Action::new_udp_announce(addr, tracker_addr, announce_request.clone()).boxed_local()
             })
             .collect()
@@ -269,11 +270,15 @@ impl<'h> OperationHandler {
             })
             .collect::<Vec<_>>();
         ops.push(
-            Action::new_timer(sec!(response.interval as u64), move |ctx: &mut Self| {
-                Some(
-                    ctx.create_udp_announce_ops(udp::AnnounceEvent::None, iter::once(tracker_addr)),
-                )
-            })
+            Action::new_timer(
+                cmp::min(sec!(response.interval as u64), sec!(300)),
+                move |ctx: &mut Self| {
+                    Some(ctx.create_udp_announce_ops(
+                        udp::AnnounceEvent::None,
+                        iter::once(tracker_addr),
+                    ))
+                },
+            )
             .boxed_local(),
         );
         Some(ops)
@@ -302,7 +307,7 @@ impl<'h> OperationHandler {
             .collect::<Vec<_>>();
         ops.push(
             Action::new_timer(
-                sec!(response.interval().unwrap_or(900) as u64),
+                cmp::min(sec!(response.interval().unwrap_or(300) as u64), sec!(300)),
                 move |ctx: &mut Self| {
                     Some(ctx.create_http_announce_ops(None, iter::once(tracker_url)))
                 },
