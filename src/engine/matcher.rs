@@ -95,7 +95,6 @@ pub(super) struct MaxBipartiteMatcher<I: Input> {
     done: Cell<bool>,
 }
 
-#[allow(dead_code)]
 impl<I: Input> MaxBipartiteMatcher<I> {
     pub(super) fn new(input: I) -> Self {
         let state =
