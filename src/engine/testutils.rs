@@ -196,7 +196,7 @@ impl Default for FakeTimer {
 impl listeners::Timer for FakeTimer {
     fn schedule(&mut self, delay: std::time::Duration, f: DelayedOperation) {
         let time = self.now + delay;
-        let ops = self.pending.entry(time).or_insert_with(|| Vec::new());
+        let ops = self.pending.entry(time).or_default();
         ops.push(f);
     }
 }

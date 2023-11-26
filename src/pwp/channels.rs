@@ -629,6 +629,7 @@ mod tests {
         drop(upload);
     }
 
+    #[allow(clippy::await_holding_refcell_ref)]
     #[tokio::test]
     async fn test_writing_downloader_messages_takes_priority_over_uploader_messages() {
         let (mut download, mut upload, runner) = setup_channels(
