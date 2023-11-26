@@ -105,28 +105,41 @@ mod mapper {
             monitors: &dyn MonitorOwner,
             is_piece_requested: impl Fn(usize) -> bool,
         ) -> Self {
-            let relevant_seeders = monitors
-                .all_download_monitors()
-                .filter_map(|(ip, dm)| {
-                    (dm.am_interested()
-                        && !dm.peer_choking()
-                        && dm.requested_blocks().count() < 2
-                        && !irrelevant_peers.contains(ip))
-                    .then_some(*ip)
-                })
-                .collect::<Vec<_>>();
+            let relevant_seeders = {
+                let mut relevant_peers = monitors
+                    .all_download_monitors()
+                    .filter_map(|(ip, dm)| {
+                        (dm.am_interested()
+                            && !dm.peer_choking()
+                            && dm.requested_blocks().count() < 2
+                            && !irrelevant_peers.contains(ip))
+                        .then_some((ip, dm))
+                    })
+                    .collect::<Vec<_>>();
+                relevant_peers
+                    .sort_by(|(_, dm1), (_, dm2)| dm2.bytes_received().cmp(&dm1.bytes_received()));
+                relevant_peers.into_iter().map(|(ip, _dm)| *ip).collect::<Vec<_>>()
+            };
 
-            let relevant_pieces = relevant_seeders
-                .iter()
-                .flat_map(|ip| piece_tracker.get_peer_pieces(ip).unwrap())
-                .filter(|piece| {
-                    !local_availability.has_piece(*piece)
-                        && !is_piece_requested(*piece)
-                        && !irrelevant_pieces.contains(piece)
-                })
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
+            let relevant_pieces = {
+                let mut pieces = relevant_seeders
+                    .iter()
+                    .flat_map(|ip| piece_tracker.get_peer_pieces(ip).unwrap())
+                    .filter(|piece| {
+                        !local_availability.has_piece(*piece)
+                            && !is_piece_requested(*piece)
+                            && !irrelevant_pieces.contains(piece)
+                    })
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let mut i = 0usize;
+                while pieces.len() < relevant_seeders.len() {
+                    pieces.push(pieces[i % pieces.len()]);
+                    i += 1;
+                }
+                pieces
+            };
 
             let piece_indices_owned_by_seeder =
                 Self::peers_to_piece_indices(&relevant_seeders, &relevant_pieces, piece_tracker);
@@ -145,26 +158,41 @@ mod mapper {
             monitors: &dyn MonitorOwner,
             is_piece_requested: impl Fn(usize) -> bool,
         ) -> Self {
-            let relevant_seeders = monitors
-                .all_download_monitors()
-                .filter_map(|(ip, dm)| {
-                    (dm.am_interested() && !dm.peer_choking() && dm.requested_blocks().count() < 2)
-                        .then_some(*ip)
-                })
-                .collect::<Vec<_>>();
+            let relevant_seeders = {
+                let mut relevant_peers = monitors
+                    .all_download_monitors()
+                    .filter_map(|(ip, dm)| {
+                        (dm.am_interested()
+                            && !dm.peer_choking()
+                            && dm.requested_blocks().count() < 2)
+                            .then_some((ip, dm))
+                    })
+                    .collect::<Vec<_>>();
+                relevant_peers
+                    .sort_by(|(_, dm1), (_, dm2)| dm2.bytes_received().cmp(&dm1.bytes_received()));
+                relevant_peers.into_iter().map(|(ip, _dm)| *ip).collect::<Vec<_>>()
+            };
 
-            let relevant_pieces = piece_tracker
-                .get_rarest_pieces()
-                .filter(|&piece| {
-                    !local_availability.has_piece(piece)
-                        && !is_piece_requested(piece)
-                        && piece_tracker
-                            .get_piece_owners(piece)
-                            .unwrap()
-                            .any(|ip| relevant_seeders.contains(ip))
-                })
-                .take(max_piece_count)
-                .collect::<Vec<_>>();
+            let relevant_pieces = {
+                let mut pieces = piece_tracker
+                    .get_rarest_pieces()
+                    .filter(|&piece| {
+                        !local_availability.has_piece(piece)
+                            && !is_piece_requested(piece)
+                            && piece_tracker
+                                .get_piece_owners(piece)
+                                .unwrap()
+                                .any(|ip| relevant_seeders.contains(ip))
+                    })
+                    .take(max_piece_count)
+                    .collect::<Vec<_>>();
+                let mut i = 0usize;
+                while pieces.len() < relevant_seeders.len() {
+                    pieces.push(pieces[i % pieces.len()]);
+                    i += 1;
+                }
+                pieces
+            };
 
             let piece_indices_owned_by_seeder =
                 Self::peers_to_piece_indices(&relevant_seeders, &relevant_pieces, piece_tracker);
@@ -183,15 +211,14 @@ mod mapper {
         ) -> Vec<Vec<u16>> {
             let mut piece_indices_owned_by_peer = Vec::with_capacity(peers.len());
             for peer_ip in peers {
-                let owned_pieces_indices = piece_tracker
-                    .get_peer_pieces(peer_ip)
-                    .unwrap()
-                    .filter_map(|piece_owned_by_seeder| {
-                        pieces.iter().enumerate().find_map(|(i, piece)| {
-                            (*piece == piece_owned_by_seeder).then_some(i as u16)
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let mut owned_pieces_indices = Vec::new();
+                for owned_piece in piece_tracker.get_peer_pieces(peer_ip).unwrap() {
+                    for (i, &piece) in pieces.iter().enumerate() {
+                        if piece == owned_piece {
+                            owned_pieces_indices.push(i as u16);
+                        }
+                    }
+                }
                 piece_indices_owned_by_peer.push(owned_pieces_indices);
             }
             piece_indices_owned_by_peer
@@ -227,12 +254,23 @@ mod utils {
     use super::*;
 
     pub(super) fn is_piece_requested(ctx: &Context, piece: usize) -> bool {
-        let piece_len = ctx.piece_info.piece_len();
-        let piece_blocks = divide_piece_into_blocks(piece, piece_len).collect::<HashSet<_>>();
-        ctx.monitor_owner
+        let seeders_count = ctx
+            .monitor_owner
             .all_download_monitors()
-            .flat_map(|(_, dm)| dm.requested_blocks())
-            .any(|block| piece_blocks.contains(block))
+            .filter(|(_, dm)| dm.am_interested() && !dm.peer_choking())
+            .count();
+        let piece_count = ctx.piece_tracker.get_rarest_pieces().count();
+
+        if piece_count < seeders_count {
+            false
+        } else {
+            let piece_len = ctx.piece_info.piece_len();
+            let piece_blocks = divide_piece_into_blocks(piece, piece_len).collect::<HashSet<_>>();
+            ctx.monitor_owner
+                .all_download_monitors()
+                .flat_map(|(_, dm)| dm.requested_blocks())
+                .any(|block| piece_blocks.contains(block))
+        }
     }
 
     pub(super) const MAX_BLOCK_SIZE: usize = 16384;

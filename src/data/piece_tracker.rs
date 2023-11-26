@@ -345,6 +345,14 @@ mod tests {
             assert_eq!(&ip(6002), poorest.next().unwrap());
             assert_eq!(HashSet::from([&ip(6001), &ip(6000)]), poorest.collect());
         }
+
+        pa.forget_piece(1);
+        pa.forget_piece(2);
+        assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6003)).unwrap().collect());
+        assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6002)).unwrap().collect());
+        assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6001)).unwrap().collect());
+        assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6000)).unwrap().collect());
+        assert!(pa.get_rarest_pieces().next().is_none());
     }
 
     #[test]
