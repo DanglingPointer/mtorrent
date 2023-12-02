@@ -19,3 +19,7 @@ Simple lightweight Bittorrent client in Rust. Uses Tokio, no threadpool, current
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
 - [ ] [Extension Protocol](https://www.bittorrent.org/beps/bep_0010.html)
 - [ ] [PEX](https://www.bittorrent.org/beps/bep_0011.html)
+
+## Building
+
+Requires Docker. To build release version run `./build.sh`. When using VS Code, open the root folder, not the workspace file. Then, when prompted, build and open the dev container (requires Dev Containers extension).
