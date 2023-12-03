@@ -1,8 +1,6 @@
 use crate::utils::meta::Metainfo;
-use std::{
-    io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-};
+use std::io;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = SocketAddr> + '_ {
     fn to_addr_and_port(src: &[u8]) -> Option<SocketAddr> {
@@ -48,6 +46,7 @@ pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> Vec<String> {
     }
 }
 
+#[cfg(target_family = "unix")]
 pub fn get_local_ip() -> io::Result<Ipv4Addr> {
     let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
     let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
@@ -60,4 +59,19 @@ pub fn get_local_ip() -> io::Result<Ipv4Addr> {
     ipv4_string
         .parse::<Ipv4Addr>()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+}
+
+#[cfg(target_family = "windows")]
+pub fn get_local_ip() -> io::Result<Ipv4Addr> {
+    // naively uses first connected adapter
+    ipconfig::get_adapters()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?
+        .iter()
+        .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
+        .flat_map(ipconfig::Adapter::ip_addresses)
+        .find_map(|addr| match *addr {
+            IpAddr::V4(ipv4) => Some(ipv4),
+            _ => None,
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
 }
