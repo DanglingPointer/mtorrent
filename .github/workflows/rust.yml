@@ -16,13 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Build dev container
-      run: docker build -t mybuilder .
     - name: Build release
-      run: docker run mybuilder build --release --all-targets --verbose
+      run: ./builder.sh build --release --all-targets --verbose
     - name: Run tests
-      run: docker run mybuilder test --all-targets
+      run: ./builder.sh test --all-targets
     - name: Lint
-      run: docker run mybuilder clippy --all-targets --all-features -- -D warnings
+      run: ./builder.sh clippy --all-targets --all-features -- -D warnings
     - name: Check formatting
-      run: docker run mybuilder fmt --check --verbose
+      run: ./builder.sh fmt --check --verbose

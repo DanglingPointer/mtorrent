@@ -8,9 +8,9 @@
 		// Update the 'dockerFile' property if you aren't using the standard 'Dockerfile' filename.
 		"dockerfile": "../Dockerfile"
 	},
-	"workspaceMount": "source=${localWorkspaceFolder},target=/home/builder/src/mtorrent,type=bind",
-	"workspaceFolder": "/home/builder/src/mtorrent",
-	// "remoteUser": "builder", // unnecessary if we set USER in Dockerfile
+	"workspaceMount": "source=${localWorkspaceFolder},target=/usr/src/mtorrent,type=bind",
+	"workspaceFolder": "/usr/src/mtorrent",
+	"remoteUser": "builder", // unnecessary if we set USER in Dockerfile
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
