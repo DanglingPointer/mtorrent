@@ -87,6 +87,7 @@ pub struct OperationHandler {
     metainfo: Rc<Metainfo>,
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
+    listener_failures: usize,
     local_peer_id: [u8; 20],
     filekeeper: Rc<data::StorageClient>,
     known_peers: HashSet<SocketAddr>,
@@ -117,6 +118,7 @@ impl OperationHandler {
             metainfo,
             internal_local_ip,
             external_local_ip,
+            listener_failures: 0,
             local_peer_id,
             filekeeper: Rc::new(filekeeper),
             known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
@@ -172,6 +174,8 @@ impl<'h> Handler<'h> for OperationHandler {
 }
 
 impl<'h> OperationHandler {
+    const MAX_TCP_LISTENER_FAILURES: usize = 5;
+
     fn create_udp_announce_ops(
         &mut self,
         event: udp::AnnounceEvent,
@@ -366,10 +370,17 @@ impl<'h> OperationHandler {
                     .boxed_local(),
                 );
             }
+            self.listener_failures = 0;
             ops
         } else {
             // error
-            self.create_listener_ops()
+            self.listener_failures += 1;
+            if self.listener_failures < Self::MAX_TCP_LISTENER_FAILURES {
+                self.create_listener_ops()
+            } else {
+                log::error!("TCP Listener giving up!");
+                Vec::new()
+            }
         }
     }
 
