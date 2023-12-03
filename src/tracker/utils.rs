@@ -69,8 +69,8 @@ pub fn get_local_ip() -> io::Result<Ipv4Addr> {
         .iter()
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)
-        .find_map(|addr| match *addr {
-            IpAddr::V4(ipv4) => Some(ipv4),
+        .find_map(|addr| match addr {
+            IpAddr::V4(ipv4) => Some(*ipv4),
             _ => None,
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
