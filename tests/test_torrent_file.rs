@@ -1,3 +1,4 @@
+#![cfg(not(target_family = "windows"))]
 use mtorrent::data;
 use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
