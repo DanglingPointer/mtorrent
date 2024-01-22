@@ -93,7 +93,6 @@ pub struct OperationHandler {
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
     ctx: Context,
-    debug_finished: bool,
     pwp_worker_handle: runtime::Handle,
 }
 
@@ -138,7 +137,6 @@ impl OperationHandler {
             known_peers: HashSet::from([SocketAddr::V4(external_local_ip)]),
             stored_channels: HashMap::new(),
             ctx,
-            debug_finished: false,
             pwp_worker_handle,
         })
     }
@@ -155,19 +153,7 @@ impl<'h> Handler<'h> for OperationHandler {
             self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
             self.periodic_state_dump(),
-            vec![
-                Action::new_timer(sec!(60), |ctx: &mut Self| {
-                    ctx.debug_finished = true;
-                    None
-                })
-                .boxed_local(),
-                Action::new_outgoing_connect(
-                    self.local_peer_id,
-                    *self.metainfo.info_hash(),
-                    SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 12345)),
-                )
-                .boxed_local(),
-            ],
+            self.debug_operations(),
         ]
         .into_iter()
         .flatten()
@@ -191,7 +177,7 @@ impl<'h> Handler<'h> for OperationHandler {
     }
 
     fn finished(&self) -> bool {
-        self.ctx.local_availability.missing_bytes() == 0 || self.debug_finished
+        self.ctx.local_availability.missing_bytes() == 0
     }
 }
 
@@ -370,6 +356,33 @@ impl<'h> OperationHandler {
             Action::new_timer(sec!(10), |this: &mut Self| Some(this.periodic_state_dump()))
                 .boxed_local(),
         ]
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_operations(&self) -> Vec<Operation<'h>> {
+        let mut ops = [12345, 23456]
+            .into_iter()
+            .map(|port| {
+                Action::new_outgoing_connect(
+                    self.local_peer_id,
+                    *self.metainfo.info_hash(),
+                    SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port)),
+                )
+                .boxed_local()
+            })
+            .collect::<Vec<_>>();
+        ops.push(
+            Action::new_timer(sec!(120), |_ctx: &mut Self| {
+                panic!("Debug timeout (120s)");
+            })
+            .boxed_local(),
+        );
+        ops
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn debug_operations(&self) -> Vec<Operation<'h>> {
+        Vec::new()
     }
 
     fn process_timeout(&mut self, f: DelayedFn) -> Option<Vec<Operation<'h>>> {
