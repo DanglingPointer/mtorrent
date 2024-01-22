@@ -116,8 +116,7 @@ fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(true)
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent", log::LevelFilter::Debug)
-        .with_module_level("seeders", log::LevelFilter::Debug)
+        .with_module_level("seeders", log::LevelFilter::Info)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
