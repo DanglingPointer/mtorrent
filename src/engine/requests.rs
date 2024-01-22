@@ -44,9 +44,9 @@ fn request_pieces_from_seeders(ctx: &mut Context) {
     let matcher = matcher::MaxBipartiteMatcher::new(input);
     matcher.calculate_max_matching();
     let seeder_piece_pairs = matcher.output();
-    let piece_len = ctx.piece_info.piece_len();
     for (ip, piece) in &seeder_piece_pairs {
         let dm = ctx.monitor_owner.download_monitor(ip).unwrap();
+        let piece_len = ctx.piece_info.piece_len(*piece);
         for block in utils::divide_piece_into_blocks(*piece, piece_len) {
             dm.submit_outbound(pwp::DownloaderMessage::Request(block));
         }
@@ -66,8 +66,8 @@ fn request_pieces_from_seeders(ctx: &mut Context) {
     let matcher = matcher::MaxBipartiteMatcher::new(input);
     matcher.calculate_max_matching();
     let seeder_piece_pairs = matcher.output();
-    let piece_len = ctx.piece_info.piece_len();
     for (ip, piece) in &seeder_piece_pairs {
+        let piece_len = ctx.piece_info.piece_len(*piece);
         let dm = ctx.monitor_owner.download_monitor(ip).unwrap();
         for block in utils::divide_piece_into_blocks(*piece, piece_len) {
             dm.submit_outbound(pwp::DownloaderMessage::Request(block));
@@ -264,7 +264,7 @@ mod utils {
         if piece_count < seeders_count {
             false
         } else {
-            let piece_len = ctx.piece_info.piece_len();
+            let piece_len = ctx.piece_info.piece_len(piece);
             let piece_blocks = divide_piece_into_blocks(piece, piece_len).collect::<HashSet<_>>();
             ctx.monitor_owner
                 .all_download_monitors()

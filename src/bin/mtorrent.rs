@@ -63,7 +63,7 @@ fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(true)
         .with_level(LevelFilter::Off)
-        .with_module_level("mtorrent", LevelFilter::Trace)
+        .with_module_level("mtorrent", LevelFilter::Debug)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 

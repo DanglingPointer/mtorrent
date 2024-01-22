@@ -215,6 +215,7 @@ impl Fixture {
         let piece_info = Rc::new(PieceInfo::new(
             iter::repeat_with(|| [0u8; 20].as_slice()).take(piece_count),
             piece_len,
+            piece_len * piece_count,
         ));
 
         let block_accountant = BlockAccountant::new(piece_info.clone());

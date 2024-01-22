@@ -13,6 +13,7 @@ pub struct GenericStorageServer<F: RandomAccessReadWrite> {
     storage: GenericStorage<F>,
 }
 
+#[derive(Clone)]
 pub struct StorageClient {
     channel: mpsc::UnboundedSender<Command>,
 }
@@ -187,7 +188,7 @@ impl Storage {
             if let Some(prefix) = path.parent() {
                 fs::create_dir_all(prefix)?;
             }
-            let file = fs::OpenOptions::new().write(true).read(true).create_new(true).open(path)?;
+            let file = fs::OpenOptions::new().write(true).read(true).create(true).open(path)?;
             file.set_len(length as u64)?;
             Ok((length, file))
         };

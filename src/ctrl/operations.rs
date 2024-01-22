@@ -201,7 +201,7 @@ impl Action {
         metainfo: Rc<Metainfo>,
     ) -> Self {
         let inner_fut = async {
-            let piece_length = pieces.piece_len();
+            let piece_length = pieces.piece_len(piece_index);
             let global_offset = pieces.global_offset(piece_index, 0, piece_length).ok()?;
             let expected_sha1 = {
                 let mut buf = [0u8; 20];

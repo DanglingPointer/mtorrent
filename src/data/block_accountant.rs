@@ -63,7 +63,7 @@ impl BlockAccountant {
     }
 
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
-        let piece_length = self.pieces.piece_len();
+        let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
             self.submit_block_internal(offset, piece_length);
             true
@@ -85,7 +85,7 @@ impl BlockAccountant {
     }
 
     pub fn remove_piece(&mut self, piece_index: usize) {
-        let piece_length = self.pieces.piece_len();
+        let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
             self.remove_block_internal(global_offset, piece_length);
         }
@@ -143,7 +143,7 @@ impl BlockAccountant {
     }
 
     pub fn has_piece(&self, piece_index: usize) -> bool {
-        let piece_len = self.pieces.piece_len();
+        let piece_len = self.pieces.piece_len(piece_index);
         if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_len) {
             self.has_exact_block_at(global_offset, piece_len)
         } else {
@@ -166,7 +166,7 @@ impl BlockAccountant {
     }
 
     pub fn missing_bytes(&self) -> usize {
-        self.pieces.piece_count() * self.pieces.piece_len() - self.total_bytes
+        self.pieces.total_len() - self.total_bytes
     }
 }
 
@@ -191,9 +191,13 @@ mod tests {
     use super::*;
     use std::iter;
 
+    fn piece_info() -> Rc<PieceInfo> {
+        Rc::new(PieceInfo::new(iter::empty(), 3, 256))
+    }
+
     #[test]
     fn test_accountant_submit_one_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
 
@@ -204,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_into_preceding_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(20, 10);
@@ -216,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_overlapping_into_preceding_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(15, 15);
@@ -228,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_into_following_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(0, 10);
@@ -240,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_overlapping_into_following_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(0, 15);
@@ -252,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_accountant_replace_overlapping_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(5, 20);
@@ -264,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_accountant_ignore_overlapping_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(5, 20);
         a.submit_block_internal(10, 10);
@@ -276,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_with_following_and_preceding_blocks() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 5);
         a.submit_block_internal(0, 5);
@@ -295,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_accountant_merge_with_overlapping_following_and_preceding_blocks() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 5);
         a.submit_block_internal(0, 5);
@@ -309,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_accountant_block_length_with_one_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
 
@@ -322,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_accountant_block_length_with_two_blocks() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
         a.submit_block_internal(30, 10);
@@ -339,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_accountant_has_exact_block_with_one_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
         a.submit_block_internal(10, 10);
 
@@ -356,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_accountant_remove_exact_block() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given
@@ -377,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_accountant_shrink_block_from_tail_end() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given
@@ -395,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_accountant_shrink_block_from_head_end() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given
@@ -413,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_accountant_split_block_into_two() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given
@@ -432,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_accountant_remove_multiple_nonadjacent_blocks() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given
@@ -454,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_accountant_remove_multiple_nonadjacent_blocks_and_shrink() {
-        let p = Rc::new(PieceInfo::new(iter::empty(), 3));
+        let p = piece_info();
         let mut a = BlockAccountant::new(p);
 
         // given

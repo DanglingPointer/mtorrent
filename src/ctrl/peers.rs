@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_manager_adds_and_removes_peers() {
         let ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
-        let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+        let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3, 128)));
 
         assert_eq!(0, mgr.all_monitors().count());
         assert_eq!(0, mgr.all_upload_monitors().count());
@@ -394,7 +394,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
-            let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+            let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3, 128)));
             mgr.add_peer(&ip);
             Self { ip, mgr }
         }
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn test_peer_has_correct_initial_state() {
         let ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
-        let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3)));
+        let mut mgr = PeerManager::new(Rc::new(PieceInfo::new(iter::empty(), 3, 128)));
         mgr.add_peer(&ip);
 
         let down_mon = mgr.download_monitor(&ip).unwrap();

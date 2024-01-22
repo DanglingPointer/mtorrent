@@ -62,13 +62,17 @@ fn test_read_example_torrent_file() {
     );
 
     let piece_length = info.piece_length().unwrap();
-    assert_eq!(2097152, piece_length, "piece length: {}", piece_length);
+    assert_eq!(2_097_152, piece_length, "piece length: {}", piece_length);
 
-    let pieces = info.pieces().unwrap();
-    assert_eq!(13360 / 20, pieces.count());
+    let piece_count = info.pieces().unwrap().count();
+    assert_eq!(/* 13360 / 20 */ 668, piece_count);
 
     let length = info.length();
     assert_eq!(None, length, "length: {:?}", length);
+
+    let total_length: usize = info.files().unwrap().map(|(len, _path)| len).sum();
+    assert!(piece_length * piece_count > total_length);
+    assert_eq!(1_160_807, total_length % piece_length);
 
     {
         let mut iter = info.files().unwrap();

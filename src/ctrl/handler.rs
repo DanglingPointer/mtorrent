@@ -97,6 +97,16 @@ pub struct OperationHandler {
     pwp_worker_handle: runtime::Handle,
 }
 
+impl Drop for OperationHandler {
+    fn drop(&mut self) {
+        log::info!(
+            "Final state dump:\nLocal availability: {}\n{}",
+            self.ctx.local_availability,
+            self.ctx.peermgr
+        );
+    }
+}
+
 impl OperationHandler {
     pub fn new(
         metainfo: Rc<Metainfo>,
@@ -106,7 +116,11 @@ impl OperationHandler {
         local_peer_id: [u8; 20],
         pwp_worker_handle: runtime::Handle,
     ) -> Option<Self> {
-        let pieces = Rc::new(data::PieceInfo::new(metainfo.pieces()?, metainfo.piece_length()?));
+        let pieces = Rc::new(data::PieceInfo::new(
+            metainfo.pieces()?,
+            metainfo.piece_length()?,
+            metainfo.files()?.map(|(len, _path)| len).sum(),
+        ));
         let ctx = Context {
             pieces: pieces.clone(),
             local_availability: data::BlockAccountant::new(pieces.clone()),
@@ -141,11 +155,19 @@ impl<'h> Handler<'h> for OperationHandler {
             self.create_udp_announce_ops(udp::AnnounceEvent::Started, udp_trackers),
             self.create_listener_ops(),
             self.periodic_state_dump(),
-            vec![Action::new_timer(sec!(60), |ctx: &mut Self| {
-                ctx.debug_finished = true;
-                None
-            })
-            .boxed_local()],
+            vec![
+                Action::new_timer(sec!(60), |ctx: &mut Self| {
+                    ctx.debug_finished = true;
+                    None
+                })
+                .boxed_local(),
+                Action::new_outgoing_connect(
+                    self.local_peer_id,
+                    *self.metainfo.info_hash(),
+                    SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 12345)),
+                )
+                .boxed_local(),
+            ],
         ]
         .into_iter()
         .flatten()
