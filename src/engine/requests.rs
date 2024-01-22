@@ -133,10 +133,12 @@ mod mapper {
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
-                let mut i = 0usize;
-                while pieces.len() < relevant_seeders.len() {
-                    pieces.push(pieces[i % pieces.len()]);
-                    i += 1;
+                if !pieces.is_empty() {
+                    let mut i = 0usize;
+                    while pieces.len() < relevant_seeders.len() {
+                        pieces.push(pieces[i % pieces.len()]);
+                        i += 1;
+                    }
                 }
                 pieces
             };
@@ -186,10 +188,12 @@ mod mapper {
                     })
                     .take(max_piece_count)
                     .collect::<Vec<_>>();
-                let mut i = 0usize;
-                while pieces.len() < relevant_seeders.len() {
-                    pieces.push(pieces[i % pieces.len()]);
-                    i += 1;
+                if !pieces.is_empty() {
+                    let mut i = 0usize;
+                    while pieces.len() < relevant_seeders.len() {
+                        pieces.push(pieces[i % pieces.len()]);
+                        i += 1;
+                    }
                 }
                 pieces
             };
