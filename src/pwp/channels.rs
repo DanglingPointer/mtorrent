@@ -154,6 +154,8 @@ struct PeerInfo {
     remote_addr: SocketAddr,
 }
 
+const MAX_INCOMING_QUEUE: usize = 20;
+
 fn setup_channels<I, E>(
     ingress: I,
     egress: E,
@@ -174,9 +176,10 @@ where
     let (local_downloader_msg_in, local_downloader_msg_out) =
         mpsc::channel::<Option<DownloaderMessage>>(0);
 
-    let (remote_uploader_msg_in, remote_uploader_msg_out) = mpsc::channel::<UploaderMessage>(0);
+    let (remote_uploader_msg_in, remote_uploader_msg_out) =
+        mpsc::channel::<UploaderMessage>(MAX_INCOMING_QUEUE);
     let (remote_downloader_msg_in, remote_downloader_msg_out) =
-        mpsc::channel::<DownloaderMessage>(0);
+        mpsc::channel::<DownloaderMessage>(MAX_INCOMING_QUEUE);
 
     let receiver = IngressStream {
         source: ingress,
