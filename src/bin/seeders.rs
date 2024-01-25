@@ -89,6 +89,7 @@ async fn run_one_seeder(
 }
 
 fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Rc<Metainfo>> {
+    log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let file_content = fs::read(metainfo_filepath)?;
     let root_entity = benc::Element::from_bytes(&file_content)?;
     let metainfo = Metainfo::try_from(root_entity)
@@ -120,16 +121,22 @@ fn main() -> io::Result<()> {
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
-    let metainfo = read_metainfo("tests/example.torrent")?;
+    let mut env_args = env::args();
+    let metainfo = read_metainfo(env_args.nth(1).expect("no torrent file specified"))?;
+
+    let total_length = metainfo
+        .length()
+        .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no length in metainfo"))?;
 
     let pieces = Rc::new(data::PieceInfo::new(
-        metainfo.pieces().ok_or_else(|| io::Error::from(io::ErrorKind::Other))?,
-        metainfo.piece_length().ok_or_else(|| io::Error::from(io::ErrorKind::Other))?,
         metainfo
-            .files()
-            .ok_or_else(|| io::Error::from(io::ErrorKind::Other))?
-            .map(|(len, _path)| len)
-            .sum(),
+            .pieces()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no pieces in metainfo"))?,
+        metainfo.piece_length().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no piece length in metainfo")
+        })?,
+        total_length,
     ));
 
     let (storage, _storage_handle) = {
@@ -141,22 +148,14 @@ fn main() -> io::Result<()> {
                 Some(s) => s.to_string(),
                 None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
             };
-            data::Storage::new(
-                output_dir,
-                iter::once((
-                    metainfo.length().ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::NotFound, "No 'length' in metainfo file")
-                    })?,
-                    PathBuf::from(name),
-                )),
-            )?
+            data::Storage::new(output_dir, iter::once((total_length, PathBuf::from(name))))?
         };
         start_storage(storage)
     };
 
     runtime::Builder::new_current_thread().enable_all().build()?.block_on(
         task::LocalSet::new().run_until(async move {
-            future::join_all(env::args().skip(1).filter_map(|arg| {
+            future::join_all(env_args.filter_map(|arg| {
                 let port = str::parse::<u16>(&arg).ok()?;
                 let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
                 Some(run_one_seeder(addr, storage.clone(), pieces.clone()))

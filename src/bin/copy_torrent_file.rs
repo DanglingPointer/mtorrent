@@ -1,12 +1,12 @@
 use mtorrent::utils::benc;
-use std::{env, fs};
+use std::{env, fs, str};
 
 fn print_entity(entity: &benc::Element) {
     match entity {
-        benc::Element::ByteString(data) => {
-            let text = String::from_utf8_lossy(data);
-            print!(" {} ", text)
-        }
+        benc::Element::ByteString(data) => match str::from_utf8(data) {
+            Ok(text) => print!(" {} ", text),
+            Err(_) => print!(" <{} bytes> ", data.len()),
+        },
         benc::Element::Integer(number) => print!(" {} ", number),
         benc::Element::List(elements) => {
             print!("[");

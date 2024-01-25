@@ -141,7 +141,7 @@ fn main() -> io::Result<()> {
                 local_peer_id,
                 pwp_rt_handle,
             )
-            .unwrap();
+            .unwrap_or_else(|e| panic!("Startup failed: {e}"));
 
             let mut dispatcher = Dispatcher::new(ctrl);
             while dispatcher.dispatch_one().await {}

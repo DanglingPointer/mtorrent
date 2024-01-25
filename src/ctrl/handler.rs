@@ -114,11 +114,14 @@ impl OperationHandler {
         external_local_ip: SocketAddrV4,
         local_peer_id: [u8; 20],
         pwp_worker_handle: runtime::Handle,
-    ) -> Option<Self> {
+    ) -> Result<Self, &'static str> {
         let pieces = Rc::new(data::PieceInfo::new(
-            metainfo.pieces()?,
-            metainfo.piece_length()?,
-            metainfo.files()?.map(|(len, _path)| len).sum(),
+            metainfo.pieces().ok_or("no pieces in metainfo")?,
+            metainfo.piece_length().ok_or("no piece length in metainfo")?,
+            metainfo
+                .length()
+                .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
+                .ok_or("no total length in metainfo")?,
         ));
         let ctx = Context {
             pieces: pieces.clone(),
@@ -127,7 +130,7 @@ impl OperationHandler {
             peermgr: PeerManager::new(pieces.clone()),
             state: Default::default(),
         };
-        Some(Self {
+        Ok(Self {
             metainfo,
             internal_local_ip,
             external_local_ip,
