@@ -108,12 +108,11 @@ mod mapper {
             let relevant_seeders = {
                 let mut relevant_peers = monitors
                     .all_download_monitors()
-                    .filter_map(|(ip, dm)| {
-                        (dm.am_interested()
+                    .filter(|(ip, dm)| {
+                        dm.am_interested()
                             && !dm.peer_choking()
                             && dm.requested_blocks().count() < 2
-                            && !irrelevant_peers.contains(ip))
-                        .then_some((ip, dm))
+                            && !irrelevant_peers.contains(ip)
                     })
                     .collect::<Vec<_>>();
                 relevant_peers
@@ -163,11 +162,10 @@ mod mapper {
             let relevant_seeders = {
                 let mut relevant_peers = monitors
                     .all_download_monitors()
-                    .filter_map(|(ip, dm)| {
-                        (dm.am_interested()
+                    .filter(|(_ip, dm)| {
+                        dm.am_interested()
                             && !dm.peer_choking()
-                            && dm.requested_blocks().count() < 2)
-                            .then_some((ip, dm))
+                            && dm.requested_blocks().count() < 2
                     })
                     .collect::<Vec<_>>();
                 relevant_peers
