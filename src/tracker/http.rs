@@ -3,7 +3,7 @@ use crate::tracker::utils;
 use crate::utils::benc;
 use reqwest::Url;
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::{fmt, str};
 
 #[derive(Debug)]
@@ -282,7 +282,7 @@ fn dictionary_peers(data: &[benc::Element]) -> impl Iterator<Item = SocketAddr> 
         let port = dict.get(&benc::Element::from("port"))?;
         match (ip, port) {
             (benc::Element::ByteString(ip), benc::Element::Integer(port)) => Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::from(u32::from_be_bytes(ip.as_slice().try_into().ok()?))),
+                str::from_utf8(ip).ok()?.parse().ok()?,
                 u16::try_from(*port).ok()?,
             )),
             _ => None,
@@ -344,5 +344,20 @@ mod tests {
         let uri = builder.build_scrape();
 
         assert!(uri.is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv4_and_ipv6_in_announce_response() {
+        let response_data = "d8:completei146e10:incompletei4e8:intervali1800e5:peersld2:ip14:185.125.190.597:peer id20:T03I--00RleC9iXCylpi4:porti6902eed2:ip36:2a01:e0a:352:2450:211:32ff:fed8:cacb7:peer id20:-TR2930-r6di5h9fx1t74:porti63810eed2:ip39:2600:1700:dc40:2830:c423:6cff:fe78:e2ea7:peer id20:-TR3000-j0qob7o6v6xt4:porti51413eed2:ip36:2001:9e8:f123:700:211:32ff:fe97:ebfe7:peer id20:-TR2930-3118vqmbf7b84:porti16881eeee";
+
+        let entity = benc::Element::from_bytes(response_data.as_bytes()).unwrap();
+        let response_content = AnnounceResponseContent::from_benc(entity)
+            .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".to_string())))
+            .unwrap();
+
+        let peers = response_content.peers().unwrap();
+        assert_eq!(4, peers.len());
+        assert_eq!(1, peers.iter().filter(|addr| addr.is_ipv4()).count());
+        assert_eq!(3, peers.iter().filter(|addr| addr.is_ipv6()).count());
     }
 }
