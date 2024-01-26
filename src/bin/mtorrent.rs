@@ -72,7 +72,8 @@ fn main() -> io::Result<()> {
     } else {
         "tests/example.torrent".to_string()
     })?;
-    info!("Successfully consumed metainfo file for '{}'", metainfo.name().unwrap_or("<unknown>"));
+    let name = metainfo.name().unwrap_or("<unknown>");
+    log::info!("Successfully consumed metainfo file for '{}'", name);
 
     let local_internal_ip = SocketAddrV4::new(utils::get_local_ip()?, 23015);
     info!("Local internal ip address: {}", local_internal_ip);
@@ -80,7 +81,7 @@ fn main() -> io::Result<()> {
     let output_dir = if let Some(arg) = env::args().nth(2) {
         arg
     } else {
-        "mtorrent_output".to_string()
+        format!("mtorrent_output_{}", name)
     };
     let _ = fs::remove_dir_all(&output_dir);
     let filekeeper = if let Some(files) = metainfo.files() {
