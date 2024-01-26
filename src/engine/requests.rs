@@ -1,13 +1,39 @@
 use super::{matcher, Context, MonitorOwner};
 use crate::{data, pwp};
 use std::cmp;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
+#[derive(Default)]
+pub(super) struct State {
+    requested_pieces: HashMap<usize, HashSet<SocketAddr>>,
+}
+
+const MAX_CONCURRENT_REQUESTS: usize = 30;
+
 pub(super) fn update_requests(ctx: &mut Context) {
+    update_state(ctx);
     cancel_unneeded_requests(ctx);
     request_pieces_from_seeders(ctx);
     remove_unneeded_interest(ctx);
+}
+
+fn update_state(ctx: &mut Context) {
+    let is_piece_received_and_verified =
+        |piece: usize| ctx.piece_tracker.get_piece_owners(piece).is_none();
+    ctx.state
+        .requests
+        .requested_pieces
+        .retain(|&piece, _| !is_piece_received_and_verified(piece));
+
+    let is_peer_connected = |ip: &SocketAddr| ctx.monitor_owner.download_monitor(ip).is_some();
+    for requested_from in ctx.state.requests.requested_pieces.values_mut() {
+        requested_from.retain(is_peer_connected);
+    }
+    ctx.state
+        .requests
+        .requested_pieces
+        .retain(|_, requested_from| !requested_from.is_empty());
 }
 
 fn cancel_unneeded_requests(ctx: &mut Context) {
@@ -32,25 +58,17 @@ fn cancel_unneeded_requests(ctx: &mut Context) {
 }
 
 fn request_pieces_from_seeders(ctx: &mut Context) {
-    let is_piece_requested = |piece: usize| utils::is_piece_requested(ctx, piece);
-
     let input = mapper::MapSeedersToPieces::seeders_to_n_rarest_pieces(
-        20,
+        MAX_CONCURRENT_REQUESTS,
         ctx.piece_tracker,
         ctx.local_availability,
         ctx.monitor_owner,
-        is_piece_requested,
+        |piece: usize| utils::is_piece_requested(ctx, piece),
     );
     let matcher = matcher::MaxBipartiteMatcher::new(input);
     matcher.calculate_max_matching();
     let seeder_piece_pairs = matcher.output();
-    for (ip, piece) in &seeder_piece_pairs {
-        let dm = ctx.monitor_owner.download_monitor(ip).unwrap();
-        let piece_len = ctx.piece_info.piece_len(*piece);
-        for block in utils::divide_piece_into_blocks(*piece, piece_len) {
-            dm.submit_outbound(pwp::DownloaderMessage::Request(block));
-        }
-    }
+    utils::submit_requests(ctx, seeder_piece_pairs.iter());
 
     let (matched_peers, requested_pieces): (HashSet<SocketAddr>, HashSet<usize>) =
         seeder_piece_pairs.into_iter().unzip();
@@ -61,18 +79,12 @@ fn request_pieces_from_seeders(ctx: &mut Context) {
         ctx.piece_tracker,
         ctx.local_availability,
         ctx.monitor_owner,
-        is_piece_requested,
+        |piece: usize| utils::is_piece_requested(ctx, piece),
     );
     let matcher = matcher::MaxBipartiteMatcher::new(input);
     matcher.calculate_max_matching();
     let seeder_piece_pairs = matcher.output();
-    for (ip, piece) in &seeder_piece_pairs {
-        let piece_len = ctx.piece_info.piece_len(*piece);
-        let dm = ctx.monitor_owner.download_monitor(ip).unwrap();
-        for block in utils::divide_piece_into_blocks(*piece, piece_len) {
-            dm.submit_outbound(pwp::DownloaderMessage::Request(block));
-        }
-    }
+    utils::submit_requests(ctx, seeder_piece_pairs.iter());
 }
 
 fn remove_unneeded_interest(ctx: &mut Context) {
@@ -266,12 +278,7 @@ mod utils {
         if piece_count < seeders_count {
             false
         } else {
-            let piece_len = ctx.piece_info.piece_len(piece);
-            let piece_blocks = divide_piece_into_blocks(piece, piece_len).collect::<HashSet<_>>();
-            ctx.monitor_owner
-                .all_download_monitors()
-                .flat_map(|(_, dm)| dm.requested_blocks())
-                .any(|block| piece_blocks.contains(block))
+            ctx.state.requests.requested_pieces.contains_key(&piece)
         }
     }
 
@@ -288,6 +295,20 @@ mod utils {
                 in_piece_offset,
                 block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
             })
+    }
+
+    pub(super) fn submit_requests<'a>(
+        ctx: &mut Context,
+        seeder_piece_pairs: impl Iterator<Item = &'a (SocketAddr, usize)>,
+    ) {
+        for (ip, piece) in seeder_piece_pairs {
+            let dm = ctx.monitor_owner.download_monitor(ip).unwrap();
+            let piece_len = ctx.piece_info.piece_len(*piece);
+            for block in utils::divide_piece_into_blocks(*piece, piece_len) {
+                dm.submit_outbound(pwp::DownloaderMessage::Request(block));
+            }
+            ctx.state.requests.requested_pieces.entry(*piece).or_default().insert(*ip);
+        }
     }
 }
 

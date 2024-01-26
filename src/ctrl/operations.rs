@@ -104,7 +104,7 @@ impl Action {
 
     pub async fn from_connection_runner(runner: ConnectionRunner) -> Self {
         if let Err(e) = runner.run().await {
-            warn!("Peer runner exited: {}", e);
+            log::debug!("Peer runner exited: {}", e);
         }
         Action::Void
     }

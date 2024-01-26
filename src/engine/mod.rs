@@ -10,6 +10,7 @@ pub use listeners::{DownloadChannelMonitor, MonitorOwner, Timer, UploadChannelMo
 #[derive(Default)]
 pub struct State {
     interest: interest::State,
+    requests: requests::State,
 }
 
 pub struct Context<'a> {

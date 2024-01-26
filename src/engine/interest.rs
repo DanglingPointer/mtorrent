@@ -3,14 +3,14 @@ use crate::{data, debug_stopwatch, pwp};
 use std::{collections::HashSet, net::SocketAddr};
 
 #[derive(Default)]
-pub struct State {
+pub(super) struct State {
     leechers: usize,
     seeders: usize,
 }
 
 const MAX_SEEDERS_COUNT: usize = 30;
 
-pub fn update_interest(ctx: &mut Context) {
+pub(super) fn update_interest(ctx: &mut Context) {
     let _sw = debug_stopwatch!("Updating interest");
     update_state(ctx);
     remove_unneeded_interest(ctx);
