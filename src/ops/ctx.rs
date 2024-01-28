@@ -6,7 +6,7 @@ use std::{
 use crate::{data, utils::meta};
 
 pub struct Ctx {
-    pub pieces: data::PieceInfo,
+    pub pieces: Rc<data::PieceInfo>,
     pub accountant: data::BlockAccountant,
     pub piece_tracker: data::PieceTracker,
     pub metainfo: meta::Metainfo,

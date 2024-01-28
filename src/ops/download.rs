@@ -1,5 +1,5 @@
-use super::ctx;
-use crate::{data, pwp};
+use super::{ctx, MAX_BLOCK_SIZE};
+use crate::{data, pwp, sec};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -100,13 +100,13 @@ macro_rules! inner {
     };
 }
 
-pub fn create_peer(
+pub async fn create_peer(
     handle: ctx::Handle,
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: Rc<data::StorageClient>,
-) -> IdlePeer {
-    let data = Box::new(Data {
+) -> io::Result<IdlePeer> {
+    let mut inner = Box::new(Data {
         handle,
         rx,
         tx,
@@ -115,28 +115,44 @@ pub fn create_peer(
         peer_choking: true,
         bytes_received: 0,
     });
-    // TODO: wait for bitfield?
-    IdlePeer(data)
+    // try wait for bitfield and some have's
+    const SETTLING_PERIOD: Duration = sec!(5);
+    let mut now = Instant::now();
+    let end_time = now + SETTLING_PERIOD;
+    while now < end_time {
+        match inner.rx.receive_message_timed(end_time - now).await {
+            Ok(msg) => {
+                update_state(&mut inner, &msg);
+            }
+            Err(pwp::ChannelError::Timeout) => (),
+            Err(e) => return Err(e.into()),
+        }
+        now = Instant::now();
+    }
+    Ok(IdlePeer(inner))
 }
 
-pub async fn transiotion_to_active(peer: IdlePeer) -> io::Result<SeedingPeer> {
+pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
     let mut inner = peer.0;
     debug_assert!(!inner.am_interested || inner.peer_choking);
     if !inner.am_interested {
         inner.tx.send_message(pwp::DownloaderMessage::Interested).await?;
         inner.am_interested = true;
     }
-    while inner.peer_choking {
-        let msg = inner.rx.receive_message().await?;
-        update_state(&mut inner, &msg);
-        if let pwp::UploaderMessage::Block(info, _) = &msg {
-            log::warn!("{} Received block ({}) while peer choking", inner.rx.remote_ip(), info);
+    if !inner.peer_choking {
+        Ok(SeedingPeer(inner))
+    } else {
+        let mut peer = to_enum!(inner);
+        loop {
+            peer = wait(peer, Duration::MAX).await?;
+            if let Peer::Seeder(seeder) = peer {
+                return Ok(seeder);
+            }
         }
     }
-    Ok(SeedingPeer(inner))
 }
 
-pub async fn transition_to_idle(peer: SeedingPeer) -> io::Result<IdlePeer> {
+pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     let mut inner = peer.0;
     debug_assert!(inner.am_interested && !inner.peer_choking);
     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
@@ -152,28 +168,47 @@ pub async fn remove_interest(peer: IdlePeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-pub async fn wait_for_peer_updates(peer: Peer, timeout: Duration) -> io::Result<Peer> {
+pub async fn wait(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = inner!(peer);
     let mut now = Instant::now();
     let end_time = now + timeout;
     let mut state_changed = false;
     while !state_changed && now < end_time {
-        let msg = inner.rx.receive_message_timed(end_time - now).await?;
-        state_changed = update_state(&mut inner, &msg);
-        if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
-            log::warn!("{} Received not requested block", inner.rx.remote_ip());
+        match inner.rx.receive_message_timed(end_time - now).await {
+            Ok(msg) => {
+                state_changed = update_state(&mut inner, &msg);
+                if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
+                    log::warn!("{} Received not requested block", inner.rx.remote_ip());
+                }
+            }
+            Err(pwp::ChannelError::Timeout) => (),
+            Err(e) => return Err(e.into()),
         }
         now = Instant::now();
     }
     Ok(to_enum!(inner))
 }
 
-pub async fn download_pieces_from_peer(
+pub async fn get_pieces(
     peer: SeedingPeer,
     pieces: impl Iterator<Item = usize>,
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.am_interested && !inner.peer_choking);
+
+    fn divide_piece_into_blocks(
+        piece_index: usize,
+        piece_len: usize,
+    ) -> impl Iterator<Item = pwp::BlockInfo> {
+        (0..piece_len)
+            .step_by(MAX_BLOCK_SIZE)
+            .map(move |in_piece_offset| pwp::BlockInfo {
+                piece_index,
+                in_piece_offset,
+                block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
+            })
+    }
+
     for piece_index in pieces {
         let received_and_verified = inner
             .handle
@@ -271,18 +306,4 @@ fn update_state(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
         }
         pwp::UploaderMessage::Block(_, _) => false,
     }
-}
-
-fn divide_piece_into_blocks(
-    piece_index: usize,
-    piece_len: usize,
-) -> impl Iterator<Item = pwp::BlockInfo> {
-    const MAX_BLOCK_SIZE: usize = 16384;
-    (0..piece_len)
-        .step_by(MAX_BLOCK_SIZE)
-        .map(move |in_piece_offset| pwp::BlockInfo {
-            piece_index,
-            in_piece_offset,
-            block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
-        })
 }
