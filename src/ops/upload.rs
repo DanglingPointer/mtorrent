@@ -1,13 +1,13 @@
-use tokio::time::Instant;
-
 use super::{ctx, MAX_BLOCK_SIZE};
-use crate::{data, millisec, pwp};
-use std::cell::RefCell;
-use std::collections::HashSet;
+use crate::utils::fifo;
+use crate::{data, pwp};
+use std::cell::Cell;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
+use tokio::sync;
+use tokio::time::Instant;
 
 struct Data {
     handle: ctx::UnsafeHandle,
@@ -93,14 +93,30 @@ macro_rules! to_enum {
     };
 }
 
-// macro_rules! inner {
-//     ($inner:expr) => {
-//         match $inner {
-//             Peer::Idle(IdlePeer(data)) => data,
-//             Peer::Leech(LeechingPeer(data)) => data,
-//         }
-//     };
-// }
+macro_rules! update_state {
+    ($inner:expr, $msg:expr) => {
+        match $msg {
+            pwp::DownloaderMessage::Interested => {
+                if !$inner.peer_interested {
+                    $inner.peer_interested = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            pwp::DownloaderMessage::NotInterested => {
+                if $inner.peer_interested {
+                    $inner.peer_interested = false;
+                    true
+                } else {
+                    false
+                }
+            }
+            pwp::DownloaderMessage::Request(_) => false,
+            pwp::DownloaderMessage::Cancel(_) => false,
+        }
+    };
+}
 
 pub async fn create_peer(
     handle: ctx::UnsafeHandle,
@@ -167,7 +183,7 @@ pub async fn wait(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     while !state_changed && now < end_time {
         match inner.rx.receive_message_timed(end_time - now).await {
             Ok(msg) => {
-                state_changed = update_state(&mut inner, &msg);
+                state_changed = update_state!(&mut inner, &msg);
                 match &msg {
                     pwp::DownloaderMessage::Request(info) => {
                         log::warn!(
@@ -198,95 +214,80 @@ pub async fn serve_for(peer: LeechingPeer, min_duration: Duration) -> io::Result
     let mut inner = peer.0;
     debug_assert!(!inner.am_choking && inner.peer_interested);
 
-    async fn collect_requests(
-        inner: &mut Box<Data>,
-        period: Duration,
-        requested_blocks: &mut HashSet<pwp::BlockInfo>,
-    ) -> io::Result<()> {
+    let requested_blocks = fifo::Queue::<pwp::BlockInfo>::new();
+
+    let sync = sync::Notify::new();
+    let running = Cell::new(true);
+
+    let collect_requests = async {
         let mut now = Instant::now();
-        let end_time = now + period;
+        let end_time = now + min_duration;
+        let mut ret = Ok(());
         while now < end_time {
             match inner.rx.receive_message_timed(end_time - now).await {
-                Err(pwp::ChannelError::Timeout) => (),
-                Err(e) => return Err(e.into()),
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    requested_blocks.insert(info);
+                    requested_blocks.push(info);
+                    sync.notify_one();
                 }
                 Ok(pwp::DownloaderMessage::Cancel(info)) => {
-                    requested_blocks.remove(&info);
+                    requested_blocks.remove_all(&info);
                 }
                 Ok(msg) => {
-                    update_state(inner, &msg);
+                    update_state!(inner, msg);
+                    if matches!(msg, pwp::DownloaderMessage::NotInterested) {
+                        break;
+                    }
+                }
+                Err(pwp::ChannelError::Timeout) => (),
+                Err(e) => {
+                    ret = Err(io::Error::from(e));
+                    break;
                 }
             }
             now = Instant::now();
         }
-        Ok(())
-    }
+        running.set(false);
+        sync.notify_one();
+        ret
+    };
 
-    async fn serve_one_request(inner: &mut Box<Data>, request: pwp::BlockInfo) -> io::Result<()> {
-        if request.block_length > MAX_BLOCK_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Received too big request: {request}"),
-            ));
+    let process_requests = async {
+        while running.get() || !requested_blocks.is_empty() {
+            if let Some(request) = requested_blocks.pop() {
+                if request.block_length > MAX_BLOCK_SIZE {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Received too big request: {request}"),
+                    ));
+                }
+                let global_offset = inner
+                    .handle
+                    .with_ctx(|ctx| {
+                        ctx.pieces.global_offset(
+                            request.piece_index,
+                            request.in_piece_offset,
+                            request.block_length,
+                        )
+                    })
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Received invalid request: {request}"),
+                        )
+                    })?;
+                let data = inner.storage.read_block(global_offset, request.block_length).await?;
+                let length = data.len();
+                inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
+                inner.bytes_sent += length;
+            } else {
+                sync.notified().await;
+            }
         }
-        let global_offset = inner
-            .handle
-            .with_ctx(|ctx| {
-                ctx.pieces.global_offset(
-                    request.piece_index,
-                    request.in_piece_offset,
-                    request.block_length,
-                )
-            })
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, format!("Received invalid request: {request}"))
-            })?;
-        let data = inner.storage.read_block(global_offset, request.block_length).await?;
-        inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
         Ok(())
-    }
+    };
 
-    let mut now = Instant::now();
-    let end_time = now + min_duration;
-    let mut requests = HashSet::<pwp::BlockInfo>::new();
-    while now < end_time && inner.peer_interested {
-        collect_requests(&mut inner, millisec!(50), &mut requests).await?;
-        if !inner.peer_interested {
-            return Ok(to_enum!(inner));
-        }
-        if let Some(request) = requests.iter().next().cloned() {
-            requests.remove(&request);
-            serve_one_request(&mut inner, request).await?;
-        }
-        now = Instant::now();
-    }
-    for request in requests.drain() {
-        serve_one_request(&mut inner, request).await?;
-    }
+    let (collect_result, process_result) = tokio::join!(collect_requests, process_requests);
+    process_result?;
+    collect_result?;
     Ok(to_enum!(inner))
-}
-
-fn update_state(inner: &mut Data, msg: &pwp::DownloaderMessage) -> bool {
-    match msg {
-        pwp::DownloaderMessage::Interested => {
-            if !inner.peer_interested {
-                inner.peer_interested = true;
-                true
-            } else {
-                false
-            }
-        }
-        pwp::DownloaderMessage::NotInterested => {
-            if inner.peer_interested {
-                inner.peer_interested = false;
-                true
-            } else {
-                false
-            }
-        }
-        pwp::DownloaderMessage::Request(_) => false,
-        pwp::DownloaderMessage::Cancel(_) => false,
-    }
 }
