@@ -4,6 +4,7 @@ use crate::{data, pwp};
 use std::cell::Cell;
 use std::io;
 use std::net::SocketAddr;
+use std::ops::BitXorAssign;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::sync;
@@ -17,6 +18,7 @@ struct Data {
     am_choking: bool,
     peer_interested: bool,
     bytes_sent: usize,
+    local_state_snapshot: pwp::Bitfield,
 }
 
 impl Drop for Data {
@@ -93,6 +95,15 @@ macro_rules! to_enum {
     };
 }
 
+macro_rules! inner {
+    ($inner:expr) => {
+        match $inner {
+            Peer::Idle(IdlePeer(data)) => data,
+            Peer::Leech(LeechingPeer(data)) => data,
+        }
+    };
+}
+
 macro_rules! update_state {
     ($inner:expr, $msg:expr) => {
         match $msg {
@@ -119,11 +130,12 @@ macro_rules! update_state {
 }
 
 pub async fn create_peer(
-    handle: ctx::UnsafeHandle,
+    mut handle: ctx::UnsafeHandle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
     storage: Rc<data::StorageClient>,
 ) -> io::Result<IdlePeer> {
+    let bitfield = handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
     let mut inner = Box::new(Data {
         handle,
         rx,
@@ -132,8 +144,8 @@ pub async fn create_peer(
         am_choking: true,
         peer_interested: false,
         bytes_sent: 0,
+        local_state_snapshot: bitfield.clone(),
     });
-    let bitfield = inner.handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
     inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
     Ok(IdlePeer(inner))
 }
@@ -210,7 +222,21 @@ pub async fn wait(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     Ok(to_enum!(inner))
 }
 
-pub async fn serve_for(peer: LeechingPeer, min_duration: Duration) -> io::Result<Peer> {
+pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
+    let mut inner = inner!(peer);
+    let current_state = inner.handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
+    // local pieces don't disappear, so xor yields all newly added pieces
+    inner.local_state_snapshot.bitxor_assign(&current_state);
+    for (piece_index, status_changed) in inner.local_state_snapshot.iter().enumerate() {
+        if *status_changed {
+            inner.tx.send_message(pwp::UploaderMessage::Have { piece_index }).await?;
+        }
+    }
+    inner.local_state_snapshot = current_state;
+    Ok(to_enum!(inner))
+}
+
+pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(!inner.am_choking && inner.peer_interested);
 
@@ -275,6 +301,12 @@ pub async fn serve_for(peer: LeechingPeer, min_duration: Duration) -> io::Result
                             format!("Received invalid request: {request}"),
                         )
                     })?;
+                if !inner.handle.with_ctx(|ctx| {
+                    ctx.accountant.has_exact_block_at(global_offset, request.block_length)
+                }) {
+                    log::warn!("{} requested unavailable block {}", inner.tx.remote_ip(), request);
+                    continue;
+                }
                 let data = inner.storage.read_block(global_offset, request.block_length).await?;
                 let length = data.len();
                 inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
