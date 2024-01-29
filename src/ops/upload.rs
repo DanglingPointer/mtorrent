@@ -178,12 +178,12 @@ pub async fn deactivate(peer: LeechingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-pub async fn unchoke(peer: IdlePeer) -> io::Result<IdlePeer> {
+pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.am_choking);
     inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
     inner.am_choking = false;
-    Ok(IdlePeer(inner))
+    Ok(to_enum!(inner))
 }
 
 pub async fn wait(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
