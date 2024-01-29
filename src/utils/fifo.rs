@@ -1,4 +1,7 @@
-use std::{cell::UnsafeCell, collections::VecDeque};
+use std::cell::{Cell, UnsafeCell};
+use std::future::Future;
+use std::task::{Poll, Waker};
+use std::{collections::VecDeque, rc::Rc};
 
 pub struct Queue<T>(UnsafeCell<VecDeque<T>>);
 
@@ -61,6 +64,75 @@ impl<T> Default for Queue<T> {
     }
 }
 
+struct ChannelData<T> {
+    queue: Queue<T>,
+    waker: Cell<Option<Waker>>,
+    has_sender: Cell<bool>,
+}
+
+pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+    let state = Rc::new(ChannelData {
+        queue: Default::default(),
+        waker: Cell::new(None),
+        has_sender: Cell::new(true),
+    });
+    let sender = Sender(state.clone());
+    let receiver = Receiver(state);
+    (sender, receiver)
+}
+
+pub struct Sender<T>(Rc<ChannelData<T>>);
+
+impl<T> Sender<T> {
+    pub fn send(&self, item: T) {
+        self.0.queue.push(item);
+        if let Some(waker) = self.0.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+impl<T> Drop for Sender<T> {
+    fn drop(&mut self) {
+        self.0.has_sender.set(false);
+        if let Some(waker) = self.0.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+pub struct Receiver<T>(Rc<ChannelData<T>>);
+
+impl<T> Receiver<T> {
+    pub fn receive(&self) -> Receive<'_, T> {
+        Receive {
+            inner: self.0.as_ref(),
+        }
+    }
+}
+
+pub struct Receive<'s, T> {
+    inner: &'s ChannelData<T>,
+}
+
+impl<'s, T> Future for Receive<'s, T> {
+    type Output = Option<T>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if let Some(item) = self.inner.queue.pop() {
+            Poll::Ready(Some(item))
+        } else if !self.inner.has_sender.get() {
+            Poll::Ready(None)
+        } else {
+            self.inner.waker.set(Some(cx.waker().clone()));
+            Poll::Pending
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,9 +141,51 @@ mod tests {
 
     #[test]
     fn test_queue_is_send_but_not_sync() {
-        assert_impl_all!(Queue<usize>: Send);
-        assert_not_impl_any!(Queue<Rc<usize>>: Send);
+        assert_impl_all!(Queue<usize>: std::marker::Send);
+        assert_not_impl_any!(Queue<Rc<usize>>: std::marker::Send);
         assert_not_impl_any!(Queue<Arc<usize>>: Sync);
-        assert_not_impl_any!(Arc<Queue<usize>>: Send, Sync);
+        assert_not_impl_any!(Arc<Queue<usize>>: std::marker::Send, Sync);
+    }
+
+    #[test]
+    fn test_channel_static_properties() {
+        assert_not_impl_any!(Arc<Sender<usize>>: std::marker::Send, Sync);
+        assert_not_impl_any!(Arc<Receiver<usize>>: std::marker::Send, Sync);
+        assert_not_impl_any!(Sender<usize>: std::marker::Send, Sync);
+        assert_not_impl_any!(Receiver<usize>: std::marker::Send, Sync);
+    }
+
+    #[tokio::test]
+    async fn test_channel_passes_values() {
+        let (sender1, receiver1) = channel::<i32>();
+        let (sender2, receiver2) = channel::<i32>();
+
+        let fut2 = async move {
+            for i in 0..42 {
+                sender1.send(i);
+            }
+            drop(sender1); // deadlock otherwise
+            let mut ret = Vec::new();
+            while let Some(value) = receiver2.receive().await {
+                ret.push(value);
+            }
+            ret
+        };
+
+        let fut1 = async move {
+            let mut ret = Vec::new();
+            while let Some(value) = receiver1.receive().await {
+                ret.push(value);
+            }
+            for i in 42..84 {
+                sender2.send(i);
+            }
+            drop(sender2);
+            ret
+        };
+
+        let (result1, result2) = tokio::join!(fut1, fut2);
+        assert_eq!((0..42).collect::<Vec<i32>>(), result1);
+        assert_eq!((42..84).collect::<Vec<i32>>(), result2);
     }
 }
