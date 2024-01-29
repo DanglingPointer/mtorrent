@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, io};
+use tokio::join;
 use tokio::time::Instant;
 
 struct Data {
@@ -244,33 +245,44 @@ pub async fn get_pieces(
                 }
             }
         }
-        if !requests.is_empty() {
-            // piece (or parts of it) received from another peer
-            for pending_request in requests {
-                inner.tx.send_message(pwp::DownloaderMessage::Cancel(pending_request)).await?;
+        let cancel_outstanding = async {
+            if !requests.is_empty() {
+                // piece (or parts of it) received from another peer
+                for pending_request in requests {
+                    inner.tx.send_message(pwp::DownloaderMessage::Cancel(pending_request)).await?;
+                }
             }
-        }
-        let global_offset = inner
-            .handle
-            .with_ctx(|ctx| ctx.pieces.global_offset(piece_index, 0, piece_len))
-            .expect("Requested (and received!) invalid piece index");
-        let expected_sha1 = inner
-            .handle
-            .with_ctx(|ctx| -> Option<[u8; 20]> {
-                let mut buf = [0u8; 20];
-                buf.copy_from_slice(ctx.metainfo.pieces()?.nth(piece_index)?);
-                Some(buf)
-            })
-            .expect("Requested (and received!) invalid piece index");
-        let verification_success =
-            inner.storage.verify_block(global_offset, piece_len, &expected_sha1).await?;
-        if verification_success {
-            log::debug!("Piece verified successfully, piece_index={piece_index}");
-            inner.handle.with_ctx(|ctx| ctx.piece_tracker.forget_piece(piece_index));
-            // TODO: send Have to everyone else
-        } else {
-            inner.handle.with_ctx(|ctx| ctx.accountant.remove_piece(piece_index));
-        }
+            io::Result::Ok(())
+        };
+        let verify_piece = async {
+            let global_offset = inner
+                .handle
+                .with_ctx(|ctx| ctx.pieces.global_offset(piece_index, 0, piece_len))
+                .expect("Requested (and received!) invalid piece index");
+            let expected_sha1 = inner
+                .handle
+                .with_ctx(|ctx| -> Option<[u8; 20]> {
+                    let mut buf = [0u8; 20];
+                    buf.copy_from_slice(ctx.metainfo.pieces()?.nth(piece_index)?);
+                    Some(buf)
+                })
+                .expect("Requested (and received!) invalid piece index");
+            let verification_success =
+                inner.storage.verify_block(global_offset, piece_len, &expected_sha1).await?;
+            if verification_success {
+                log::debug!("Piece verified successfully, piece_index={piece_index}");
+                inner.handle.with_ctx(|ctx| ctx.piece_tracker.forget_piece(piece_index));
+                // TODO: send Have to everyone else
+            } else {
+                log::error!("Piece verification failed, piece_index={piece_index}");
+                inner.handle.with_ctx(|ctx| ctx.accountant.remove_piece(piece_index));
+                return Err(io::Error::new(io::ErrorKind::Other, "Piece verification failed"));
+            }
+            Ok(())
+        };
+        let (verification_result, cancel_result) = join!(verify_piece, cancel_outstanding);
+        verification_result?;
+        cancel_result?;
     }
     Ok(to_enum!(inner))
 }

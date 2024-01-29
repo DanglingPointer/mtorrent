@@ -7,8 +7,8 @@ use std::net::SocketAddr;
 use std::ops::BitXorAssign;
 use std::rc::Rc;
 use std::time::Duration;
-use tokio::sync;
 use tokio::time::Instant;
+use tokio::{join, sync};
 
 struct Data {
     handle: ctx::UnsafeHandle,
@@ -260,7 +260,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 }
                 Ok(msg) => {
                     update_state!(inner, msg);
-                    if matches!(msg, pwp::DownloaderMessage::NotInterested) {
+                    if !inner.peer_interested {
                         break;
                     }
                 }
@@ -318,7 +318,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         Ok(())
     };
 
-    let (collect_result, process_result) = tokio::join!(collect_requests, process_requests);
+    let (collect_result, process_result) = join!(collect_requests, process_requests);
     process_result?;
     collect_result?;
     Ok(to_enum!(inner))
