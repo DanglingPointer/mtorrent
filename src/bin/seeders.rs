@@ -1,10 +1,10 @@
 use futures::future;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
-use std::{collections::HashSet, fs, io, net::SocketAddr, path::Path, rc::Rc};
+use std::{collections::HashSet, io, net::SocketAddr, rc::Rc};
 use std::{env, iter};
 
-use mtorrent::utils::{benc, meta::Metainfo, worker};
+use mtorrent::utils::startup;
 use mtorrent::{data, pwp};
 use tokio::runtime;
 use tokio::{net::TcpListener, sync::mpsc, task};
@@ -88,31 +88,6 @@ async fn run_one_seeder(
     Ok(())
 }
 
-fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Rc<Metainfo>> {
-    log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
-    let file_content = fs::read(metainfo_filepath)?;
-    let root_entity = benc::Element::from_bytes(&file_content)?;
-    let metainfo = Metainfo::try_from(root_entity)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))?;
-    Ok(Rc::new(metainfo))
-}
-
-fn start_storage(storage: data::Storage) -> (data::StorageClient, worker::simple::Handle) {
-    let (client, server) = data::async_storage(storage);
-
-    let handle = worker::without_runtime(
-        worker::simple::Config {
-            name: "storage".to_string(),
-            ..Default::default()
-        },
-        move || {
-            server.run_blocking();
-        },
-    );
-
-    (client, handle)
-}
-
 fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(true)
@@ -122,7 +97,7 @@ fn main() -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
     let mut env_args = env::args();
-    let metainfo = read_metainfo(env_args.nth(1).expect("no torrent file specified"))?;
+    let metainfo = startup::read_metainfo(env_args.nth(1).expect("no torrent file specified"))?;
 
     let total_length = metainfo
         .length()
@@ -150,7 +125,7 @@ fn main() -> io::Result<()> {
             };
             data::Storage::new(output_dir, iter::once((total_length, PathBuf::from(name))))?
         };
-        start_storage(storage)
+        startup::start_storage(storage)
     };
 
     runtime::Builder::new_current_thread().enable_all().build()?.block_on(

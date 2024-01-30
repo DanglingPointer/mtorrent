@@ -1,20 +1,19 @@
 use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
-use crate::{data, pwp};
-use std::cell::Cell;
+use crate::{data, debug_stopwatch, info_stopwatch, pwp};
+use futures::prelude::*;
 use std::io;
 use std::net::SocketAddr;
 use std::ops::BitXorAssign;
-use std::rc::Rc;
 use std::time::Duration;
+use tokio::join;
 use tokio::time::Instant;
-use tokio::{join, sync};
 
 struct Data {
-    handle: ctx::UnsafeHandle,
+    handle: ctx::Handle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
-    storage: Rc<data::StorageClient>,
+    storage: data::StorageClient,
     am_choking: bool,
     peer_interested: bool,
     bytes_sent: usize,
@@ -129,11 +128,11 @@ macro_rules! update_state {
     };
 }
 
-pub async fn create_peer(
-    mut handle: ctx::UnsafeHandle,
+pub(super) async fn new_peer(
+    mut handle: ctx::Handle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
-    storage: Rc<data::StorageClient>,
+    storage: data::StorageClient,
 ) -> io::Result<IdlePeer> {
     let bitfield = handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
     let mut inner = Box::new(Data {
@@ -162,7 +161,7 @@ pub async fn activate(peer: IdlePeer) -> io::Result<LeechingPeer> {
     } else {
         let mut peer = IdlePeer(inner);
         loop {
-            match wait(peer, Duration::MAX).await? {
+            match linger(peer, Duration::MAX).await? {
                 Peer::Idle(idle) => peer = idle,
                 Peer::Leech(leech) => break Ok(leech),
             }
@@ -186,14 +185,13 @@ pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
     Ok(to_enum!(inner))
 }
 
-pub async fn wait(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
+pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.am_choking || !inner.peer_interested);
-    let mut now = Instant::now();
-    let end_time = now + timeout;
+    let start_time = Instant::now();
     let mut state_changed = false;
-    while !state_changed && now < end_time {
-        match inner.rx.receive_message_timed(end_time - now).await {
+    while !state_changed && start_time.elapsed() < timeout {
+        match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
             Ok(msg) => {
                 state_changed = update_state!(&mut inner, &msg);
                 match &msg {
@@ -217,7 +215,6 @@ pub async fn wait(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
             Err(pwp::ChannelError::Timeout) => (),
             Err(e) => return Err(e.into()),
         }
-        now = Instant::now();
     }
     Ok(to_enum!(inner))
 }
@@ -237,83 +234,71 @@ pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
 }
 
 pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Result<Peer> {
+    let _sw = info_stopwatch!("Serving pieces to {}", peer.state().ip());
     let mut inner = peer.0;
     debug_assert!(!inner.am_choking && inner.peer_interested);
 
-    let requested_blocks = fifo::Queue::<pwp::BlockInfo>::new();
-
-    let sync = sync::Notify::new();
-    let running = Cell::new(true);
+    let (request_sink, request_src) = fifo::channel::<pwp::BlockInfo>();
 
     let collect_requests = async {
-        let mut now = Instant::now();
-        let end_time = now + min_duration;
-        let mut ret = Ok(());
-        while now < end_time {
-            match inner.rx.receive_message_timed(end_time - now).await {
+        let request_sink = request_sink; // move it, so that it's dropped at the end
+        let start_time = Instant::now();
+        while start_time.elapsed() < min_duration {
+            match inner.rx.receive_message_timed(min_duration - start_time.elapsed()).await {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    requested_blocks.push(info);
-                    sync.notify_one();
+                    request_sink.send(info);
                 }
                 Ok(pwp::DownloaderMessage::Cancel(info)) => {
-                    requested_blocks.remove_all(&info);
+                    request_sink.remove_all(&info);
                 }
                 Ok(msg) => {
                     update_state!(inner, msg);
                     if !inner.peer_interested {
-                        break;
+                        return Ok(());
                     }
                 }
                 Err(pwp::ChannelError::Timeout) => (),
-                Err(e) => {
-                    ret = Err(io::Error::from(e));
-                    break;
-                }
+                Err(e) => return Err(io::Error::from(e)),
             }
-            now = Instant::now();
         }
-        running.set(false);
-        sync.notify_one();
-        ret
+        Ok(())
     };
 
     let process_requests = async {
-        while running.get() || !requested_blocks.is_empty() {
-            if let Some(request) = requested_blocks.pop() {
-                if request.block_length > MAX_BLOCK_SIZE {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Received too big request: {request}"),
-                    ));
-                }
-                let global_offset = inner
-                    .handle
-                    .with_ctx(|ctx| {
-                        ctx.pieces.global_offset(
-                            request.piece_index,
-                            request.in_piece_offset,
-                            request.block_length,
-                        )
-                    })
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("Received invalid request: {request}"),
-                        )
-                    })?;
-                if !inner.handle.with_ctx(|ctx| {
-                    ctx.accountant.has_exact_block_at(global_offset, request.block_length)
-                }) {
-                    log::warn!("{} requested unavailable block {}", inner.tx.remote_ip(), request);
-                    continue;
-                }
-                let data = inner.storage.read_block(global_offset, request.block_length).await?;
-                let length = data.len();
-                inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
-                inner.bytes_sent += length;
-            } else {
-                sync.notified().await;
+        let mut request_src = request_src;
+        while let Some(request) = request_src.next().await {
+            let _sw = debug_stopwatch!("Serving requet {} to {}", request, inner.tx.remote_ip());
+            if request.block_length > MAX_BLOCK_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Received too big request: {request}"),
+                ));
             }
+            let global_offset = inner
+                .handle
+                .with_ctx(|ctx| {
+                    ctx.pieces.global_offset(
+                        request.piece_index,
+                        request.in_piece_offset,
+                        request.block_length,
+                    )
+                })
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Received invalid request: {request}"),
+                    )
+                })?;
+            if !inner.handle.with_ctx(|ctx| {
+                ctx.accountant.has_exact_block_at(global_offset, request.block_length)
+            }) {
+                log::warn!("{} requested unavailable block {}", inner.tx.remote_ip(), request);
+                continue;
+            }
+            let data = inner.storage.read_block(global_offset, request.block_length).await?;
+            let length = data.len();
+            inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
+            inner.bytes_sent += length;
         }
         Ok(())
     };

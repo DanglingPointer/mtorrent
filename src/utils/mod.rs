@@ -3,6 +3,7 @@ pub mod canceller;
 pub mod dispatch;
 pub mod fifo;
 pub mod meta;
+pub mod startup;
 pub mod stopwatch;
 pub mod time;
 pub mod upnp;

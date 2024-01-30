@@ -1,5 +1,4 @@
 use std::cell::{Cell, UnsafeCell};
-use std::future::Future;
 use std::task::{Poll, Waker};
 use std::{collections::VecDeque, rc::Rc};
 
@@ -67,14 +66,14 @@ impl<T> Default for Queue<T> {
 struct ChannelData<T> {
     queue: Queue<T>,
     waker: Cell<Option<Waker>>,
-    has_sender: Cell<bool>,
+    sender_count: Cell<usize>,
 }
 
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let state = Rc::new(ChannelData {
         queue: Default::default(),
         waker: Cell::new(None),
-        has_sender: Cell::new(true),
+        sender_count: Cell::new(1),
     });
     let sender = Sender(state.clone());
     let receiver = Receiver(state);
@@ -90,52 +89,61 @@ impl<T> Sender<T> {
             waker.wake();
         }
     }
+
+    pub fn remove_all(&self, item: &T) -> bool
+    where
+        T: PartialEq<T>,
+    {
+        self.0.queue.remove_all(item)
+    }
 }
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        self.0.has_sender.set(false);
+        let prev_count = self.0.sender_count.get();
+        self.0.sender_count.set(prev_count - 1);
         if let Some(waker) = self.0.waker.take() {
             waker.wake();
         }
     }
 }
 
-pub struct Receiver<T>(Rc<ChannelData<T>>);
-
-impl<T> Receiver<T> {
-    pub fn receive(&self) -> Receive<'_, T> {
-        Receive {
-            inner: self.0.as_ref(),
-        }
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        let prev_count = self.0.sender_count.get();
+        self.0.sender_count.set(prev_count + 1);
+        Self(self.0.clone())
     }
 }
 
-pub struct Receive<'s, T> {
-    inner: &'s ChannelData<T>,
-}
+pub struct Receiver<T>(Rc<ChannelData<T>>);
 
-impl<'s, T> Future for Receive<'s, T> {
-    type Output = Option<T>;
+impl<T> futures::Stream for Receiver<T> {
+    type Item = T;
 
-    fn poll(
+    fn poll_next(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        if let Some(item) = self.inner.queue.pop() {
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(item) = self.0.queue.pop() {
             Poll::Ready(Some(item))
-        } else if !self.inner.has_sender.get() {
+        } else if self.0.sender_count.get() == 0 {
             Poll::Ready(None)
         } else {
-            self.inner.waker.set(Some(cx.waker().clone()));
+            self.0.waker.set(Some(cx.waker().clone()));
             Poll::Pending
         }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.0.queue.len(), Some(self.0.queue.len()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::prelude::*;
     use static_assertions::*;
     use std::{rc::Rc, sync::Arc};
 
@@ -157,8 +165,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_passes_values() {
-        let (sender1, receiver1) = channel::<i32>();
-        let (sender2, receiver2) = channel::<i32>();
+        let (sender1, mut receiver1) = channel::<i32>();
+        let (sender2, mut receiver2) = channel::<i32>();
 
         let fut2 = async move {
             for i in 0..42 {
@@ -166,7 +174,7 @@ mod tests {
             }
             drop(sender1); // deadlock otherwise
             let mut ret = Vec::new();
-            while let Some(value) = receiver2.receive().await {
+            while let Some(value) = receiver2.next().await {
                 ret.push(value);
             }
             ret
@@ -174,7 +182,7 @@ mod tests {
 
         let fut1 = async move {
             let mut ret = Vec::new();
-            while let Some(value) = receiver1.receive().await {
+            while let Some(value) = receiver1.next().await {
                 ret.push(value);
             }
             for i in 42..84 {
