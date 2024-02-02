@@ -23,11 +23,15 @@ tokio = { version = "1.25.0", features = [
     "time",
     "io-util",
     "sync",
+    "macros",
 ] }
 
 [target.'cfg(target_family = "windows")'.dependencies]
 ipconfig = "0.3.2"
 
 [dev-dependencies]
-tokio = { version = "1.25.0", features = ["macros", "test-util"] }
+tokio = { version = "1.25.0", features = ["test-util"] }
 static_assertions = "1.1.0"
+
+[profile.dev]
+opt-level = 3

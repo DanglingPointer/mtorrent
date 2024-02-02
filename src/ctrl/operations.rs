@@ -194,17 +194,6 @@ impl Action {
         Action::HttpAnnounce(Box::new(inner_fut.await))
     }
 
-    #[cfg(debug_assertions)]
-    pub async fn from_piece_verification(
-        piece_index: usize,
-        _pieces: Rc<PieceInfo>,
-        _files: Rc<StorageClient>,
-        _metainfo: Rc<Metainfo>,
-    ) -> Self {
-        Action::PieceVerification(Ok(piece_index))
-    }
-
-    #[cfg(not(debug_assertions))]
     pub async fn from_piece_verification(
         piece_index: usize,
         pieces: Rc<PieceInfo>,
@@ -225,7 +214,7 @@ impl Action {
         };
         match inner_fut.await {
             Some(true) => {
-                info!("Piece verified successfully, piece_index={piece_index}");
+                debug!("Piece verified successfully, piece_index={piece_index}");
                 Action::PieceVerification(Ok(piece_index))
             }
             Some(false) => {

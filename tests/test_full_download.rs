@@ -1,10 +1,8 @@
-#![cfg(debug_assertions)]
-
 use std::process::Command;
 
 #[test]
 fn test_download_torrent_from_two_seeders() {
-    let metainfo_file = "tests/example.torrent";
+    let metainfo_file = "tests/zeroed.torrent";
 
     let mut seeders = Command::new(env!("CARGO_BIN_EXE_seeders"))
         .arg(metainfo_file)
@@ -28,7 +26,7 @@ fn test_download_torrent_from_two_seeders() {
 #[ignore = "takes too long"]
 #[test]
 fn test_download_torrent_from_one_seeder() {
-    let metainfo_file = "tests/ubuntu-22.04.3-live-server-amd64.iso.torrent";
+    let metainfo_file = "tests/zeroed_ubuntu.torrent";
 
     let mut seeders = Command::new(env!("CARGO_BIN_EXE_seeders"))
         .arg(metainfo_file)

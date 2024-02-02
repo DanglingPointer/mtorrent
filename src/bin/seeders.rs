@@ -114,16 +114,16 @@ fn main() -> io::Result<()> {
         total_length,
     ));
 
+    let files_dir = "seeders_input";
     let (storage, _storage_handle) = {
-        let output_dir = "seeders_input";
         let storage = if let Some(files) = metainfo.files() {
-            data::Storage::new(output_dir, files)?
+            data::Storage::new(files_dir, files)?
         } else {
             let name = match metainfo.name() {
                 Some(s) => s.to_string(),
                 None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
             };
-            data::Storage::new(output_dir, iter::once((total_length, PathBuf::from(name))))?
+            data::Storage::new(files_dir, iter::once((total_length, PathBuf::from(name))))?
         };
         startup::start_storage(storage)
     };
@@ -139,5 +139,6 @@ fn main() -> io::Result<()> {
         }),
     );
 
+    std::fs::remove_dir_all(files_dir).unwrap();
     Ok(())
 }

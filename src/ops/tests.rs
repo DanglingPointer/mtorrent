@@ -66,8 +66,9 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
         }
     };
     select! {
-        _ = upload_fut => (),
+        biased;
         _ = download_fut => (),
+        _ = upload_fut => (),
     }
 
     handle.with_ctx(|ctx| {
@@ -140,6 +141,7 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
         let _ = upload::serve_pieces(peer, Duration::MAX).await;
     };
     select! {
+        biased;
         _ = upload_fut => (),
         _ = download_fut => (),
     }
@@ -154,11 +156,10 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
 #[tokio::test]
 async fn test_pass_torrent_from_seeder_to_leech() {
     simple_logger::SimpleLogger::new()
-        .with_threads(true)
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
         .init()
         .unwrap();
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43210));
-    join!(run_seeder(addr, "tests/example.torrent"), run_leech(addr, "tests/example.torrent"));
+    join!(run_seeder(addr, "tests/zeroed.torrent"), run_leech(addr, "tests/zeroed.torrent"));
 }
