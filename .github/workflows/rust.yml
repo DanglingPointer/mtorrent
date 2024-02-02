@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, async-makeover ]
   pull_request:
     branches: [ master ]
 
