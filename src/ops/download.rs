@@ -148,7 +148,7 @@ pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
         loop {
             peer = linger(peer, Duration::MAX).await?;
             if let Peer::Seeder(seeder) = peer {
-                return Ok(seeder);
+                break Ok(seeder);
             }
         }
     }

@@ -2,13 +2,14 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
-use crate::{data, utils::meta};
+use crate::{data, pwp, utils::meta};
 
 pub struct Ctx {
     pub(super) pieces: Rc<data::PieceInfo>,
     pub(super) accountant: data::BlockAccountant,
     pub(super) piece_tracker: data::PieceTracker,
     pub(super) metainfo: meta::Metainfo,
+    pub(super) peer_states: pwp::PeerStates,
 }
 
 #[derive(Clone)]
@@ -50,6 +51,7 @@ impl Owner {
             accountant,
             piece_tracker,
             metainfo,
+            peer_states: Default::default(),
         }));
         Ok(Self {
             ctx_handle: Handle { ctx },
