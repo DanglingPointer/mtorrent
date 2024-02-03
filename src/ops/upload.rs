@@ -3,69 +3,32 @@ use crate::utils::fifo;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
 use std::io;
-use std::net::SocketAddr;
 use std::ops::BitXorAssign;
 use std::time::Duration;
-use tokio::join;
 use tokio::time::Instant;
+use tokio::try_join;
 
 struct Data {
     handle: ctx::Handle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
     storage: data::StorageClient,
-    am_choking: bool,
-    peer_interested: bool,
-    bytes_sent: usize,
-    local_state_snapshot: pwp::Bitfield,
+    state: pwp::UploadState,
+    local_pieces_snapshot: pwp::Bitfield,
 }
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| ctx.piece_tracker.forget_peer(self.tx.remote_ip()));
-    }
-}
-
-pub trait State {
-    fn am_choking(&self) -> bool;
-    fn peer_interested(&self) -> bool;
-    fn bytes_sent(&self) -> usize;
-    fn ip(&self) -> &SocketAddr;
-}
-
-impl State for Data {
-    fn am_choking(&self) -> bool {
-        self.am_choking
-    }
-
-    fn peer_interested(&self) -> bool {
-        self.peer_interested
-    }
-
-    fn bytes_sent(&self) -> usize {
-        self.bytes_sent
-    }
-
-    fn ip(&self) -> &SocketAddr {
-        self.tx.remote_ip()
+        self.handle.with_ctx(|ctx| {
+            ctx.piece_tracker.forget_peer(self.tx.remote_ip());
+            ctx.peer_states.remove_peer(self.tx.remote_ip());
+        });
     }
 }
 
 pub struct IdlePeer(Box<Data>);
 
 pub struct LeechingPeer(Box<Data>);
-
-impl IdlePeer {
-    pub fn state(&self) -> &impl State {
-        self.0.as_ref()
-    }
-}
-
-impl LeechingPeer {
-    pub fn state(&self) -> &impl State {
-        self.0.as_ref()
-    }
-}
 
 pub enum Peer {
     Idle(IdlePeer),
@@ -86,7 +49,7 @@ impl From<LeechingPeer> for Peer {
 
 macro_rules! to_enum {
     ($inner:expr) => {
-        if $inner.peer_interested && !$inner.am_choking {
+        if $inner.state.peer_interested && !$inner.state.am_choking {
             LeechingPeer($inner).into()
         } else {
             IdlePeer($inner).into()
@@ -104,19 +67,27 @@ macro_rules! inner {
 }
 
 macro_rules! update_state {
+    ($inner:expr) => {
+        $inner
+            .handle
+            .with_ctx(|ctx| ctx.peer_states.update_upload($inner.tx.remote_ip(), &$inner.state));
+    };
+}
+
+macro_rules! update_state_with_msg {
     ($inner:expr, $msg:expr) => {
         match $msg {
             pwp::DownloaderMessage::Interested => {
-                if !$inner.peer_interested {
-                    $inner.peer_interested = true;
+                if !$inner.state.peer_interested {
+                    $inner.state.peer_interested = true;
                     true
                 } else {
                     false
                 }
             }
             pwp::DownloaderMessage::NotInterested => {
-                if $inner.peer_interested {
-                    $inner.peer_interested = false;
+                if $inner.state.peer_interested {
+                    $inner.state.peer_interested = false;
                     true
                 } else {
                     false
@@ -140,23 +111,23 @@ pub(super) async fn new_peer(
         rx,
         tx,
         storage,
-        am_choking: true,
-        peer_interested: false,
-        bytes_sent: 0,
-        local_state_snapshot: bitfield.clone(),
+        state: Default::default(),
+        local_pieces_snapshot: bitfield.clone(),
     });
     inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
+    update_state!(inner);
     Ok(IdlePeer(inner))
 }
 
 pub async fn activate(peer: IdlePeer) -> io::Result<LeechingPeer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_choking || !inner.peer_interested);
-    if inner.am_choking {
+    debug_assert!(inner.state.am_choking || !inner.state.peer_interested);
+    if inner.state.am_choking {
         inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
-        inner.am_choking = false;
+        inner.state.am_choking = false;
     }
-    if inner.peer_interested {
+    if inner.state.peer_interested {
+        update_state!(inner);
         Ok(LeechingPeer(inner))
     } else {
         let mut peer = IdlePeer(inner);
@@ -171,29 +142,31 @@ pub async fn activate(peer: IdlePeer) -> io::Result<LeechingPeer> {
 
 pub async fn deactivate(peer: LeechingPeer) -> io::Result<IdlePeer> {
     let mut inner = peer.0;
-    debug_assert!(inner.peer_interested && !inner.am_choking);
+    debug_assert!(inner.state.peer_interested && !inner.state.am_choking);
     inner.tx.send_message(pwp::UploaderMessage::Choke).await?;
-    inner.am_choking = true;
+    inner.state.am_choking = true;
+    update_state!(inner);
     Ok(IdlePeer(inner))
 }
 
 pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_choking);
+    debug_assert!(inner.state.am_choking);
     inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
-    inner.am_choking = false;
+    inner.state.am_choking = false;
+    update_state!(inner);
     Ok(to_enum!(inner))
 }
 
 pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_choking || !inner.peer_interested);
+    debug_assert!(inner.state.am_choking || !inner.state.peer_interested);
     let start_time = Instant::now();
     let mut state_changed = false;
     while !state_changed && start_time.elapsed() < timeout {
         match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
             Ok(msg) => {
-                state_changed = update_state!(&mut inner, &msg);
+                state_changed = update_state_with_msg!(&mut inner, &msg);
                 match &msg {
                     pwp::DownloaderMessage::Request(info) => {
                         log::warn!(
@@ -216,6 +189,7 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
             Err(e) => return Err(e.into()),
         }
     }
+    update_state!(inner);
     Ok(to_enum!(inner))
 }
 
@@ -223,22 +197,23 @@ pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
     let mut inner = inner!(peer);
     let current_state = inner.handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
     // local pieces don't disappear, so xor yields all newly added pieces
-    inner.local_state_snapshot.bitxor_assign(&current_state);
-    for (piece_index, status_changed) in inner.local_state_snapshot.iter().enumerate() {
+    inner.local_pieces_snapshot.bitxor_assign(&current_state);
+    for (piece_index, status_changed) in inner.local_pieces_snapshot.iter().enumerate() {
         if *status_changed {
             inner.tx.send_message(pwp::UploaderMessage::Have { piece_index }).await?;
         }
     }
-    inner.local_state_snapshot = current_state;
+    inner.local_pieces_snapshot = current_state;
     Ok(to_enum!(inner))
 }
 
 pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Result<Peer> {
-    let _sw = info_stopwatch!("Serving pieces to {}", peer.state().ip());
     let mut inner = peer.0;
-    debug_assert!(!inner.am_choking && inner.peer_interested);
+    let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
+    debug_assert!(!inner.state.am_choking && inner.state.peer_interested);
 
     let (request_sink, request_src) = fifo::channel::<pwp::BlockInfo>();
+    let mut initial_state = inner.state.clone();
 
     let collect_requests = async {
         let request_sink = request_sink; // move it, so that it's dropped at the end
@@ -252,8 +227,8 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                     request_sink.remove_all(&info);
                 }
                 Ok(msg) => {
-                    update_state!(inner, msg);
-                    if !inner.peer_interested {
+                    update_state_with_msg!(inner, msg);
+                    if !inner.state.peer_interested {
                         return Ok(());
                     }
                 }
@@ -266,8 +241,9 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
 
     let process_requests = async {
         let mut request_src = request_src;
+        let remote_ip = *inner.tx.remote_ip();
         while let Some(request) = request_src.next().await {
-            let _sw = debug_stopwatch!("Serving requet {} to {}", request, inner.tx.remote_ip());
+            let _sw = debug_stopwatch!("Serving requet {} to {}", request, remote_ip);
             if request.block_length > MAX_BLOCK_SIZE {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -298,13 +274,16 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
             let data = inner.storage.read_block(global_offset, request.block_length).await?;
             let length = data.len();
             inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
-            inner.bytes_sent += length;
+            inner.state.bytes_sent += length;
+            initial_state.bytes_sent += length;
+            inner
+                .handle
+                .with_ctx(|ctx| ctx.peer_states.update_upload(&remote_ip, &initial_state));
         }
         Ok(())
     };
 
-    let (collect_result, process_result) = join!(collect_requests, process_requests);
-    process_result?;
-    collect_result?;
+    try_join!(collect_requests, process_requests)?;
+    update_state!(inner);
     Ok(to_enum!(inner))
 }
