@@ -3,68 +3,31 @@ use crate::utils::fifo;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
-use std::net::SocketAddr;
 use std::time::Duration;
 use std::{cmp, io};
-use tokio::join;
 use tokio::time::Instant;
+use tokio::try_join;
 
 struct Data {
     handle: ctx::Handle,
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
-    am_interested: bool,
-    peer_choking: bool,
-    bytes_received: usize,
+    state: pwp::DownloadState,
 }
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| ctx.piece_tracker.forget_peer(self.rx.remote_ip()));
-    }
-}
-
-pub trait State {
-    fn am_interested(&self) -> bool;
-    fn peer_choking(&self) -> bool;
-    fn bytes_received(&self) -> usize;
-    fn ip(&self) -> &SocketAddr;
-}
-
-impl State for Data {
-    fn am_interested(&self) -> bool {
-        self.am_interested
-    }
-
-    fn peer_choking(&self) -> bool {
-        self.peer_choking
-    }
-
-    fn bytes_received(&self) -> usize {
-        self.bytes_received
-    }
-
-    fn ip(&self) -> &SocketAddr {
-        self.rx.remote_ip()
+        self.handle.with_ctx(|ctx| {
+            ctx.piece_tracker.forget_peer(self.rx.remote_ip());
+            ctx.peer_states.remove_peer(self.rx.remote_ip());
+        });
     }
 }
 
 pub struct IdlePeer(Box<Data>);
 
 pub struct SeedingPeer(Box<Data>);
-
-impl IdlePeer {
-    pub fn state(&self) -> &impl State {
-        self.0.as_ref()
-    }
-}
-
-impl SeedingPeer {
-    pub fn state(&self) -> &impl State {
-        self.0.as_ref()
-    }
-}
 
 pub enum Peer {
     Idle(IdlePeer),
@@ -85,7 +48,7 @@ impl From<SeedingPeer> for Peer {
 
 macro_rules! to_enum {
     ($inner:expr) => {
-        if $inner.am_interested && !$inner.peer_choking {
+        if $inner.state.am_interested && !$inner.state.peer_choking {
             SeedingPeer($inner).into()
         } else {
             IdlePeer($inner).into()
@@ -102,6 +65,14 @@ macro_rules! inner {
     };
 }
 
+macro_rules! update_state {
+    ($inner:expr) => {
+        $inner
+            .handle
+            .with_ctx(|ctx| ctx.peer_states.update_download($inner.rx.remote_ip(), &$inner.state));
+    };
+}
+
 pub(super) async fn new_peer(
     handle: ctx::Handle,
     rx: pwp::DownloadRxChannel,
@@ -113,9 +84,7 @@ pub(super) async fn new_peer(
         rx,
         tx,
         storage,
-        am_interested: false,
-        peer_choking: true,
-        bytes_received: 0,
+        state: Default::default(),
     });
     // try wait for bitfield and some have's
     const SETTLING_PERIOD: Duration = sec!(5);
@@ -124,24 +93,26 @@ pub(super) async fn new_peer(
     while now < end_time {
         match inner.rx.receive_message_timed(end_time - now).await {
             Ok(msg) => {
-                update_state(&mut inner, &msg);
+                update_state_with_msg(&mut inner, &msg);
             }
             Err(pwp::ChannelError::Timeout) => (),
             Err(e) => return Err(e.into()),
         }
         now = Instant::now();
     }
+    update_state!(inner);
     Ok(IdlePeer(inner))
 }
 
 pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
     let mut inner = peer.0;
-    debug_assert!(!inner.am_interested || inner.peer_choking);
-    if !inner.am_interested {
+    debug_assert!(!inner.state.am_interested || inner.state.peer_choking);
+    if !inner.state.am_interested {
         inner.tx.send_message(pwp::DownloaderMessage::Interested).await?;
-        inner.am_interested = true;
+        inner.state.am_interested = true;
     }
-    if !inner.peer_choking {
+    if !inner.state.peer_choking {
+        update_state!(inner);
         Ok(SeedingPeer(inner))
     } else {
         let mut peer = to_enum!(inner);
@@ -156,17 +127,19 @@ pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
 
 pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_interested && !inner.peer_choking);
+    debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
-    inner.am_interested = false;
+    inner.state.am_interested = false;
+    update_state!(inner);
     Ok(IdlePeer(inner))
 }
 
 pub async fn remove_interest(peer: IdlePeer) -> io::Result<IdlePeer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_interested);
+    debug_assert!(inner.state.am_interested);
     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
-    inner.am_interested = false;
+    inner.state.am_interested = false;
+    update_state!(inner);
     Ok(IdlePeer(inner))
 }
 
@@ -177,7 +150,7 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     while !state_changed && start_time.elapsed() < timeout {
         match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
             Ok(msg) => {
-                state_changed = update_state(&mut inner, &msg);
+                state_changed = update_state_with_msg(&mut inner, &msg);
                 if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
                     log::warn!("{} Received not requested block", inner.rx.remote_ip());
                 }
@@ -186,6 +159,7 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
             Err(e) => return Err(e.into()),
         }
     }
+    update_state!(inner);
     Ok(to_enum!(inner))
 }
 
@@ -194,7 +168,7 @@ pub async fn get_pieces(
     pieces: impl Iterator<Item = usize>,
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
-    debug_assert!(inner.am_interested && !inner.peer_choking);
+    debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
 
     fn divide_piece_into_blocks(
         piece_index: usize,
@@ -264,19 +238,20 @@ pub async fn get_pieces(
             }
             while !inner.handle.with_ctx(|ctx| ctx.accountant.has_piece(piece_index)) {
                 let msg = inner.rx.receive_message().await?;
-                update_state(&mut inner, &msg);
-                if inner.peer_choking {
+                update_state_with_msg(&mut inner, &msg);
+                if inner.state.peer_choking {
                     return io::Result::Ok(());
                 }
                 if let pwp::UploaderMessage::Block(info, data) = msg {
                     if let Ok(global_offset) =
                         inner.handle.with_ctx(|ctx| ctx.accountant.submit_block(&info))
                     {
-                        inner.bytes_received += data.len();
+                        inner.state.bytes_received += data.len();
                         inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
                             panic!("Failed to start write ({info}) to storage: {e}")
                         });
                         requests.remove(&info);
+                        update_state!(inner);
                     } else {
                         log::error!(
                             "Received invalid block ({info}) from {}",
@@ -297,19 +272,17 @@ pub async fn get_pieces(
         io::Result::Ok(())
     };
 
-    let (verification_result, cancel_result) = join!(verify_pieces, download_pieces);
-    verification_result?;
-    cancel_result?;
-
+    try_join!(verify_pieces, download_pieces)?;
+    update_state!(inner);
     Ok(to_enum!(inner))
 }
 
-fn update_state(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
+fn update_state_with_msg(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
     let ip = inner.rx.remote_ip();
     match msg {
         pwp::UploaderMessage::Unchoke => {
-            if inner.peer_choking {
-                inner.peer_choking = false;
+            if inner.state.peer_choking {
+                inner.state.peer_choking = false;
                 true
             } else {
                 false
@@ -326,8 +299,8 @@ fn update_state(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
             true
         }
         pwp::UploaderMessage::Choke => {
-            if !inner.peer_choking {
-                inner.peer_choking = true;
+            if !inner.state.peer_choking {
+                inner.state.peer_choking = true;
                 true
             } else {
                 false

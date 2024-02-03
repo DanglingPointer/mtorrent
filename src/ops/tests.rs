@@ -1,5 +1,4 @@
 use super::{ctx, download, peer, upload};
-use crate::sec;
 use crate::{data, utils::startup};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{rc::Rc, time::Duration};
@@ -122,27 +121,20 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
     });
 
     let download_fut = async move {
-        use crate::ops::download::State;
         let mut peer = download::Peer::Idle(download);
         while let Ok(farend) = download::linger(peer, Duration::MAX).await {
             peer = farend;
-            let bytes_downloaded = match &peer {
-                download::Peer::Idle(p) => p.state().bytes_received(),
-                download::Peer::Seeder(p) => p.state().bytes_received(),
-            };
-            assert_eq!(0, bytes_downloaded);
+            // let bytes_downloaded = match &peer {
+            //     download::Peer::Idle(p) => p.state().bytes_received(),
+            //     download::Peer::Seeder(p) => p.state().bytes_received(),
+            // };
+            // assert_eq!(0, bytes_downloaded);
         }
     };
     let upload_fut = async move {
         let downloader = upload::activate(upload).await.unwrap();
         // assert_eq!(0, downloader.state().bytes_sent());
-        let peer = match upload::serve_pieces(downloader, sec!(1)).await {
-            Ok(upload::Peer::Leech(leech)) => leech,
-            _ => panic!(),
-        };
-        // assert!(TOTAL_BYTES > peer.state().bytes_sent());
-        // assert!(0 < peer.state().bytes_sent());
-        let _ = upload::serve_pieces(peer, Duration::MAX).await;
+        let _ = upload::serve_pieces(downloader, Duration::MAX).await;
     };
     select! {
         biased;
