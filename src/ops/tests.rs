@@ -1,5 +1,5 @@
 use super::{ctx, download, peer, upload};
-use crate::{data, utils::startup};
+use crate::{data, pwp, utils::startup};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{rc::Rc, time::Duration};
 use tokio::{join, net::TcpListener, runtime, select};
@@ -41,25 +41,42 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
         assert_eq!(TOTAL_BYTES, ctx.accountant.missing_bytes());
         assert_eq!(0, ctx.accountant.accounted_bytes());
         assert_eq!(PIECE_COUNT, ctx.piece_tracker.get_peer_pieces(&peer_ip).unwrap().count());
-        assert!(ctx.peer_states.has_peer(&peer_ip));
         assert_eq!(0, ctx.peer_states.leeches_count());
         assert_eq!(0, ctx.peer_states.seeders_count());
+        let (dstate, ustate) = ctx.peer_states.get(&peer_ip).unwrap();
+        assert_eq!(pwp::DownloadState::default(), *dstate);
+        assert_eq!(pwp::UploadState::default(), *ustate);
     });
 
+    let mut uh = handle.clone();
     let upload_fut = async move {
         let mut peer = upload;
         while let upload::Peer::Idle(farend) = upload::linger(peer, Duration::MAX).await.unwrap() {
             peer = farend;
-            // assert_eq!(0, peer.state().bytes_sent());
+            let ustate = uh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().1.clone());
+            assert_eq!(pwp::UploadState::default(), ustate);
         }
     };
+    let mut dh = handle.clone();
     let download_fut = async move {
         let seeder = download::activate(download).await.unwrap();
-        // assert_eq!(0, seeder.state().bytes_received());
+        let dstate = dh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().0.clone());
+        assert!(dstate.am_interested);
+        assert!(!dstate.peer_choking);
+        assert_eq!(0, dstate.bytes_received);
 
         let peer = download::get_pieces(seeder, START_PIECE_INDEX..piece_count).await.unwrap();
-        if let download::Peer::Seeder(_seeder) = peer {
-            // assert_eq!(EXPECTED_BYTES_PASSED, seeder.state().bytes_received())
+        if let download::Peer::Seeder(seeder) = peer {
+            let dstate = dh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().0.clone());
+            assert!(dstate.am_interested);
+            assert!(!dstate.peer_choking);
+            assert_eq!(EXPECTED_BYTES_PASSED, dstate.bytes_received);
+
+            let _peer = download::deactivate(seeder).await.unwrap();
+            let dstate = dh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().0.clone());
+            assert!(!dstate.am_interested);
+            assert!(!dstate.peer_choking);
+            assert_eq!(EXPECTED_BYTES_PASSED, dstate.bytes_received);
         } else {
             panic!("Seeder choked prematurely");
         }
@@ -75,7 +92,7 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
         assert_eq!(EXPECTED_BYTES_PASSED, ctx.accountant.accounted_bytes());
         assert_eq!(0, ctx.piece_tracker.get_rarest_pieces().count()); // peer disconnected
         assert!(ctx.piece_tracker.get_peer_pieces(&peer_ip).is_none());
-        assert!(!ctx.peer_states.has_peer(&peer_ip));
+        assert!(ctx.peer_states.get(&peer_ip).is_none());
         assert_eq!(0, ctx.peer_states.leeches_count());
         assert_eq!(0, ctx.peer_states.seeders_count());
     });
@@ -115,26 +132,38 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
 
     handle.with_ctx(|ctx| {
         assert_eq!(0, ctx.piece_tracker.get_poorest_peers().count());
-        assert!(ctx.peer_states.has_peer(&peer_ip));
         assert_eq!(0, ctx.peer_states.leeches_count());
         assert_eq!(0, ctx.peer_states.seeders_count());
+        let (dstate, ustate) = ctx.peer_states.get(&peer_ip).unwrap();
+        assert_eq!(pwp::DownloadState::default(), *dstate);
+        assert_eq!(pwp::UploadState::default(), *ustate);
     });
 
+    let mut dh = handle.clone();
     let download_fut = async move {
         let mut peer = download::Peer::Idle(download);
         while let Ok(farend) = download::linger(peer, Duration::MAX).await {
             peer = farend;
-            // let bytes_downloaded = match &peer {
-            //     download::Peer::Idle(p) => p.state().bytes_received(),
-            //     download::Peer::Seeder(p) => p.state().bytes_received(),
-            // };
-            // assert_eq!(0, bytes_downloaded);
+            let dstate = dh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().0.clone());
+            assert_eq!(pwp::DownloadState::default(), dstate);
         }
     };
+    let mut uh = handle.clone();
     let upload_fut = async move {
         let downloader = upload::activate(upload).await.unwrap();
-        // assert_eq!(0, downloader.state().bytes_sent());
-        let _ = upload::serve_pieces(downloader, Duration::MAX).await;
+        let ustate = uh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().1.clone());
+        assert!(ustate.peer_interested);
+        assert!(!ustate.am_choking);
+        assert_eq!(0, ustate.bytes_sent);
+        let peer = upload::serve_pieces(downloader, Duration::MAX).await.unwrap();
+        if let upload::Peer::Idle(_peer) = peer {
+            let ustate = uh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().1.clone());
+            assert!(!ustate.peer_interested);
+            assert!(!ustate.am_choking);
+            assert_eq!(EXPECTED_BYTES_PASSED, ustate.bytes_sent);
+        } else {
+            panic!("Upload stopped prematurely");
+        }
     };
     select! {
         biased;
@@ -144,7 +173,7 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
 
     handle.with_ctx(|ctx| {
         assert_eq!(0, ctx.piece_tracker.get_poorest_peers().count());
-        assert!(!ctx.peer_states.has_peer(&peer_ip));
+        assert!(ctx.peer_states.get(&peer_ip).is_none());
         assert_eq!(0, ctx.peer_states.leeches_count());
         assert_eq!(0, ctx.peer_states.seeders_count());
     });

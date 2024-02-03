@@ -1,7 +1,9 @@
+use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct DownloadState {
     pub am_interested: bool,
     pub peer_choking: bool,
@@ -18,7 +20,19 @@ impl Default for DownloadState {
     }
 }
 
+impl fmt::Display for DownloadState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "am_interested={:<5} peer_choking={:<5} bytes_recv={}",
+            self.am_interested, self.peer_choking, self.bytes_received
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct UploadState {
     pub am_choking: bool,
     pub peer_interested: bool,
@@ -32,6 +46,17 @@ impl Default for UploadState {
             peer_interested: false,
             bytes_sent: 0,
         }
+    }
+}
+
+impl fmt::Display for UploadState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "peer_interested={:<5} am_choking={:<5} bytes_sent={}",
+            self.peer_interested, self.am_choking, self.bytes_sent
+        )?;
+        Ok(())
     }
 }
 
@@ -69,8 +94,8 @@ impl PeerStates {
         self.leeches.remove(remote_ip);
     }
 
-    pub fn has_peer(&self, remote_ip: &SocketAddr) -> bool {
-        self.peers.contains_key(remote_ip)
+    pub fn get(&self, peer_ip: &SocketAddr) -> Option<(&DownloadState, &UploadState)> {
+        self.peers.get(peer_ip).map(|(download, upload)| (download, upload))
     }
 
     pub fn seeders_count(&self) -> usize {
