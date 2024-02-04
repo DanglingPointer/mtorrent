@@ -142,6 +142,18 @@ impl BlockAccountant {
         }
     }
 
+    pub fn has_exact_block(&self, block_info: &BlockInfo) -> bool {
+        if let Ok(global_offset) = self.pieces.global_offset(
+            block_info.piece_index,
+            block_info.in_piece_offset,
+            block_info.block_length,
+        ) {
+            self.has_exact_block_at(global_offset, block_info.block_length)
+        } else {
+            false
+        }
+    }
+
     pub fn has_piece(&self, piece_index: usize) -> bool {
         let piece_len = self.pieces.piece_len(piece_index);
         if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_len) {

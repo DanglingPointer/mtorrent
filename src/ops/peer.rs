@@ -1,5 +1,5 @@
-use super::{ctx, download, upload};
-use crate::{data, pwp, sec};
+use super::{ctrl, ctx, download, upload};
+use crate::{data, define_with_ctx, pwp, sec};
 use std::{io, net::SocketAddr};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
@@ -84,4 +84,61 @@ pub async fn from_outgoing_connection(
 
     let (seeder, leech) = try_join!(download_fut, upload_fut)?;
     Ok((seeder, leech))
+}
+
+pub async fn run_download(
+    mut peer: download::Peer,
+    ip: SocketAddr,
+    mut ctx_handle: ctx::Handle,
+) -> io::Result<()> {
+    define_with_ctx!(ctx_handle);
+    loop {
+        match peer {
+            download::Peer::Idle(idling_peer) => {
+                if with_ctx!(|ctx| ctrl::should_activate_download(&ip, ctx)) {
+                    let seeder = download::activate(idling_peer).await?;
+                    peer = seeder.into();
+                } else {
+                    peer = download::linger(idling_peer.into(), sec!(10)).await?;
+                }
+            }
+            download::Peer::Seeder(seeding_peer) => {
+                let requests = with_ctx!(|ctx| ctrl::pieces_to_request(&ip, ctx));
+                if !requests.is_empty() {
+                    peer = download::get_pieces(seeding_peer, &requests).await?;
+                } else {
+                    peer = download::deactivate(seeding_peer).await?.into();
+                }
+            }
+        }
+    }
+}
+
+pub async fn run_upload(
+    mut peer: upload::Peer,
+    ip: SocketAddr,
+    mut ctx_handle: ctx::Handle,
+) -> io::Result<()> {
+    define_with_ctx!(ctx_handle);
+    loop {
+        peer = upload::update_peer(peer).await?;
+        match peer {
+            upload::Peer::Idle(idling_peer) => {
+                if with_ctx!(|ctx| ctrl::should_activate_upload(&ip, ctx)) {
+                    let leech = upload::activate(idling_peer).await?;
+                    peer = leech.into();
+                } else {
+                    peer = upload::linger(idling_peer, sec!(10)).await?;
+                }
+            }
+            upload::Peer::Leech(leeching_peer) => {
+                if with_ctx!(|ctx| ctrl::should_stop_upload(&ip, ctx)) {
+                    let idling_peer = upload::deactivate(leeching_peer).await?;
+                    peer = upload::linger(idling_peer, sec!(10)).await?;
+                } else {
+                    peer = upload::serve_pieces(leeching_peer, sec!(30)).await?;
+                }
+            }
+        }
+    }
 }

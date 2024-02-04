@@ -1,6 +1,6 @@
 /target
 .idea
-test_output
-test_input
+test_output*
+test_input*
 mtorrent_output*
 seeders_input

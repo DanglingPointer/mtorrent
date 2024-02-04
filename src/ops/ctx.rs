@@ -10,6 +10,7 @@ pub struct Ctx {
     pub(super) piece_tracker: data::PieceTracker,
     pub(super) metainfo: meta::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
+    pub(super) pending_requests: pwp::PendingRequests,
 }
 
 #[derive(Clone)]
@@ -25,6 +26,17 @@ impl Handle {
         let mut borrowed = self.ctx.borrow_mut();
         f(&mut borrowed)
     }
+}
+
+#[macro_export]
+macro_rules! define_with_ctx {
+    ($handle:expr) => {
+        macro_rules! with_ctx {
+            ($f:expr) => {
+                $handle.with_ctx($f)
+            };
+        }
+    };
 }
 
 pub struct Owner {
@@ -52,6 +64,7 @@ impl Owner {
             piece_tracker,
             metainfo,
             peer_states: Default::default(),
+            pending_requests: Default::default(),
         }));
         Ok(Self {
             ctx_handle: Handle { ctx },

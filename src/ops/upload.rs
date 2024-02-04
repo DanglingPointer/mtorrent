@@ -1,6 +1,6 @@
 use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
-use crate::{data, debug_stopwatch, info_stopwatch, pwp};
+use crate::{data, debug_stopwatch, define_with_ctx, info_stopwatch, pwp};
 use futures::prelude::*;
 use std::io;
 use std::ops::BitXorAssign;
@@ -99,7 +99,7 @@ macro_rules! update_state_with_msg {
     };
 }
 
-pub(super) async fn new_peer(
+pub async fn new_peer(
     mut handle: ctx::Handle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
@@ -149,14 +149,14 @@ pub async fn deactivate(peer: LeechingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
-    let mut inner = peer.0;
-    debug_assert!(inner.state.am_choking);
-    inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
-    inner.state.am_choking = false;
-    update_state!(inner);
-    Ok(to_enum!(inner))
-}
+// pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
+//     let mut inner = peer.0;
+//     debug_assert!(inner.state.am_choking);
+//     inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
+//     inner.state.am_choking = false;
+//     update_state!(inner);
+//     Ok(to_enum!(inner))
+// }
 
 pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
@@ -214,6 +214,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
 
     let (request_sink, request_src) = fifo::channel::<pwp::BlockInfo>();
     let mut initial_state = inner.state.clone();
+    define_with_ctx!(inner.handle);
 
     let collect_requests = async {
         let request_sink = request_sink; // move it, so that it's dropped at the end
@@ -250,22 +251,17 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                     format!("Received too big request: {request}"),
                 ));
             }
-            let global_offset = inner
-                .handle
-                .with_ctx(|ctx| {
-                    ctx.pieces.global_offset(
-                        request.piece_index,
-                        request.in_piece_offset,
-                        request.block_length,
-                    )
-                })
-                .map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Received invalid request: {request}"),
-                    )
-                })?;
-            if !inner.handle.with_ctx(|ctx| {
+            let global_offset = with_ctx!(|ctx| {
+                ctx.pieces.global_offset(
+                    request.piece_index,
+                    request.in_piece_offset,
+                    request.block_length,
+                )
+            })
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::Other, format!("Received invalid request: {request}"))
+            })?;
+            if !with_ctx!(|ctx| {
                 ctx.accountant.has_exact_block_at(global_offset, request.block_length)
             }) {
                 log::warn!("{} requested unavailable block {}", inner.tx.remote_ip(), request);
@@ -276,9 +272,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
             inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
             inner.state.bytes_sent += length;
             initial_state.bytes_sent += length;
-            inner
-                .handle
-                .with_ctx(|ctx| ctx.peer_states.update_upload(&remote_ip, &initial_state));
+            with_ctx!(|ctx| ctx.peer_states.update_upload(&remote_ip, &initial_state));
         }
         Ok(())
     };

@@ -1,0 +1,75 @@
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+
+#[derive(Default)]
+pub struct PendingRequests {
+    piece_to_seeders: HashMap<usize, HashSet<SocketAddr>>,
+}
+
+impl PendingRequests {
+    pub fn add(&mut self, piece: usize, peer: &SocketAddr) {
+        self.piece_to_seeders.entry(piece).or_default().insert(*peer);
+    }
+
+    pub fn piece_downloaded(&mut self, piece: usize) {
+        self.piece_to_seeders.remove(&piece);
+    }
+
+    pub fn peer_disconnected(&mut self, peer: &SocketAddr) {
+        for peers in self.piece_to_seeders.values_mut() {
+            peers.remove(peer);
+        }
+    }
+
+    pub fn is_piece_requested(&self, piece: usize) -> bool {
+        self.piece_to_seeders.get(&piece).is_some_and(|peers| !peers.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    #[test]
+    fn test_pending_requests_from_single_peer() {
+        let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
+        let mut pr = PendingRequests::default();
+
+        pr.add(42, &peer);
+        pr.add(43, &peer);
+        pr.add(44, &peer);
+        assert!(pr.is_piece_requested(42));
+        assert!(pr.is_piece_requested(43));
+        assert!(pr.is_piece_requested(44));
+
+        pr.piece_downloaded(43);
+        assert!(pr.is_piece_requested(42));
+        assert!(!pr.is_piece_requested(43));
+        assert!(pr.is_piece_requested(44));
+
+        pr.peer_disconnected(&peer);
+        assert!(!pr.is_piece_requested(42));
+        assert!(!pr.is_piece_requested(43));
+        assert!(!pr.is_piece_requested(44));
+    }
+
+    #[test]
+    fn test_pending_requests_from_multiple_peers() {
+        let peer1 = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666));
+        let peer2 = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6667));
+        let peer3 = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6668));
+        let mut pr = PendingRequests::default();
+
+        pr.add(42, &peer1);
+        pr.add(42, &peer2);
+        pr.add(42, &peer3);
+        assert!(pr.is_piece_requested(42));
+
+        pr.peer_disconnected(&peer2);
+        assert!(pr.is_piece_requested(42));
+
+        pr.piece_downloaded(42);
+        assert!(!pr.is_piece_requested(42));
+    }
+}

@@ -1,6 +1,6 @@
 use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
-use crate::{data, debug_stopwatch, info_stopwatch, pwp, sec};
+use crate::{data, debug_stopwatch, define_with_ctx, info_stopwatch, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -21,6 +21,7 @@ impl Drop for Data {
         self.handle.with_ctx(|ctx| {
             ctx.piece_tracker.forget_peer(self.rx.remote_ip());
             ctx.peer_states.remove_peer(self.rx.remote_ip());
+            ctx.pending_requests.peer_disconnected(self.rx.remote_ip());
         });
     }
 }
@@ -73,7 +74,7 @@ macro_rules! update_state {
     };
 }
 
-pub(super) async fn new_peer(
+pub async fn new_peer(
     handle: ctx::Handle,
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
@@ -134,14 +135,14 @@ pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-pub async fn remove_interest(peer: IdlePeer) -> io::Result<IdlePeer> {
-    let mut inner = peer.0;
-    debug_assert!(inner.state.am_interested);
-    inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
-    inner.state.am_interested = false;
-    update_state!(inner);
-    Ok(IdlePeer(inner))
-}
+// pub async fn remove_interest(peer: IdlePeer) -> io::Result<IdlePeer> {
+//     let mut inner = peer.0;
+//     debug_assert!(inner.state.am_interested);
+//     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
+//     inner.state.am_interested = false;
+//     update_state!(inner);
+//     Ok(IdlePeer(inner))
+// }
 
 pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = inner!(peer);
@@ -163,12 +164,10 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     Ok(to_enum!(inner))
 }
 
-pub async fn get_pieces(
-    peer: SeedingPeer,
-    pieces: impl Iterator<Item = usize>,
-) -> io::Result<Peer> {
+pub async fn get_pieces(peer: SeedingPeer, pieces: &[usize]) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
+    let _sw = info_stopwatch!("Download of {} pieces from {}", pieces.len(), inner.rx.remote_ip());
 
     fn divide_piece_into_blocks(
         piece_index: usize,
@@ -181,6 +180,12 @@ pub async fn get_pieces(
                 in_piece_offset,
                 block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
             })
+    }
+
+    define_with_ctx!(inner.handle);
+
+    for &piece in pieces {
+        with_ctx!(|ctx| ctx.pending_requests.add(piece, inner.rx.remote_ip()));
     }
 
     let (piece_sink, piece_src) = fifo::channel::<usize>();
@@ -207,7 +212,10 @@ pub async fn get_pieces(
                 storage.verify_block(global_offset, piece_len, &expected_sha1).await?;
             if verification_success {
                 log::debug!("Piece verified successfully, piece_index={piece_index}");
-                handle.with_ctx(|ctx| ctx.piece_tracker.forget_piece(piece_index));
+                handle.with_ctx(|ctx| {
+                    ctx.piece_tracker.forget_piece(piece_index);
+                    ctx.pending_requests.piece_downloaded(piece_index);
+                });
                 // TODO: send Have to everyone else
             } else {
                 log::error!("Piece verification failed, piece_index={piece_index}");
@@ -219,33 +227,32 @@ pub async fn get_pieces(
     };
 
     let download_pieces = async {
-        let mut handle = inner.handle.clone();
         let verification_channel = piece_sink; // move so that it's dropped at the end
-        for piece_index in pieces {
+        for &piece_index in pieces {
             let received_and_verified =
-                handle.with_ctx(|ctx| ctx.piece_tracker.get_piece_owners(piece_index).is_none());
+                with_ctx!(|ctx| ctx.piece_tracker.get_piece_owners(piece_index).is_none());
             if received_and_verified {
                 // piece already downloaded from another peer
                 continue;
             }
             let _sw =
-                info_stopwatch!("Download of piece {} from {}", piece_index, inner.tx.remote_ip());
-            let piece_len = inner.handle.with_ctx(|ctx| ctx.pieces.piece_len(piece_index));
+                debug_stopwatch!("Download of piece {} from {}", piece_index, inner.rx.remote_ip());
+            let piece_len = with_ctx!(|ctx| ctx.pieces.piece_len(piece_index));
             let mut requests: HashSet<pwp::BlockInfo> =
-                divide_piece_into_blocks(piece_index, piece_len).collect();
+                divide_piece_into_blocks(piece_index, piece_len)
+                    .filter(|block| with_ctx!(|ctx| !ctx.accountant.has_exact_block(block)))
+                    .collect();
             for block in &requests {
                 inner.tx.send_message(pwp::DownloaderMessage::Request(block.clone())).await?;
             }
-            while !inner.handle.with_ctx(|ctx| ctx.accountant.has_piece(piece_index)) {
+            while !with_ctx!(|ctx| ctx.accountant.has_piece(piece_index)) {
                 let msg = inner.rx.receive_message().await?;
                 update_state_with_msg(&mut inner, &msg);
                 if inner.state.peer_choking {
                     return io::Result::Ok(());
                 }
                 if let pwp::UploaderMessage::Block(info, data) = msg {
-                    if let Ok(global_offset) =
-                        inner.handle.with_ctx(|ctx| ctx.accountant.submit_block(&info))
-                    {
+                    if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
                         inner.state.bytes_received += data.len();
                         inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
                             panic!("Failed to start write ({info}) to storage: {e}")
