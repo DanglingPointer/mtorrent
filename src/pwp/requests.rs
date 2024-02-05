@@ -1,3 +1,4 @@
+use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
@@ -11,11 +12,11 @@ impl PendingRequests {
         self.piece_to_seeders.entry(piece).or_default().insert(*peer);
     }
 
-    pub fn piece_downloaded(&mut self, piece: usize) {
+    pub fn clear_requests_of(&mut self, piece: usize) {
         self.piece_to_seeders.remove(&piece);
     }
 
-    pub fn peer_disconnected(&mut self, peer: &SocketAddr) {
+    pub fn clear_requests_to(&mut self, peer: &SocketAddr) {
         for peers in self.piece_to_seeders.values_mut() {
             peers.remove(peer);
         }
@@ -23,6 +24,15 @@ impl PendingRequests {
 
     pub fn is_piece_requested(&self, piece: usize) -> bool {
         self.piece_to_seeders.get(&piece).is_some_and(|peers| !peers.is_empty())
+    }
+}
+
+impl fmt::Display for PendingRequests {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let requested_pieces =
+            self.piece_to_seeders.iter().filter(|(_, peers)| !peers.is_empty()).count();
+        let request_count = self.piece_to_seeders.values().flatten().count();
+        write!(f, "pieces/requests={requested_pieces}/{request_count}")
     }
 }
 
@@ -43,12 +53,12 @@ mod tests {
         assert!(pr.is_piece_requested(43));
         assert!(pr.is_piece_requested(44));
 
-        pr.piece_downloaded(43);
+        pr.clear_requests_of(43);
         assert!(pr.is_piece_requested(42));
         assert!(!pr.is_piece_requested(43));
         assert!(pr.is_piece_requested(44));
 
-        pr.peer_disconnected(&peer);
+        pr.clear_requests_to(&peer);
         assert!(!pr.is_piece_requested(42));
         assert!(!pr.is_piece_requested(43));
         assert!(!pr.is_piece_requested(44));
@@ -66,10 +76,10 @@ mod tests {
         pr.add(42, &peer3);
         assert!(pr.is_piece_requested(42));
 
-        pr.peer_disconnected(&peer2);
+        pr.clear_requests_to(&peer2);
         assert!(pr.is_piece_requested(42));
 
-        pr.piece_downloaded(42);
+        pr.clear_requests_of(42);
         assert!(!pr.is_piece_requested(42));
     }
 }

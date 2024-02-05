@@ -1,4 +1,4 @@
-use super::ctx;
+use super::{ctrl, ctx};
 use crate::tracker::{http, udp, utils};
 use crate::utils::peer_id::PeerId;
 use crate::{define_with_ctx, sec};
@@ -60,9 +60,9 @@ impl AnnounceData {
             uploaded: ctx.peer_states.uploaded_bytes(),
             local_peer_id: ctx.local_peer_id,
             listener_port,
-            event: if ctx.accountant.accounted_bytes() == 0 {
+            event: if ctx.accountant.accounted_bytes() == 0 && ctx.peer_states.all().count() == 0 {
                 Some(AnnounceEvent::Started)
-            } else if ctx.accountant.missing_bytes() == 0 {
+            } else if ctrl::is_finished(ctx) {
                 Some(AnnounceEvent::Completed)
             } else if ctx.peer_states.all().count() == 0 {
                 Some(AnnounceEvent::Stopped)

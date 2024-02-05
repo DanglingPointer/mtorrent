@@ -1,8 +1,12 @@
+use super::ctrl;
+use crate::sec;
 use crate::utils::peer_id::PeerId;
 use crate::{data, pwp, utils::meta};
-use std::cell::RefCell;
+use core::fmt;
 use std::io;
-use std::rc::Rc;
+use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
+use tokio::time;
 
 pub(super) struct Ctx {
     pub(super) pieces: Rc<data::PieceInfo>,
@@ -12,6 +16,22 @@ pub(super) struct Ctx {
     pub(super) peer_states: pwp::PeerStates,
     pub(super) pending_requests: pwp::PendingRequests,
     pub(super) local_peer_id: PeerId,
+}
+
+impl fmt::Display for Ctx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Local availability: {}\nOutstanding requests: {}\n{}",
+            self.accountant, self.pending_requests, self.peer_states
+        )
+    }
+}
+
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        log::info!("Final state dump:\n{}", self);
+    }
 }
 
 #[derive(Clone)]
@@ -64,6 +84,22 @@ pub fn new_ctx(metainfo: meta::Metainfo, local_peer_id: PeerId) -> io::Result<Ha
         local_peer_id,
     }));
     Ok(Handle { ctx })
+}
+
+pub async fn periodic_state_dump(mut ctx_handle: Handle) {
+    define_with_ctx!(ctx_handle);
+    const INTERVAL: Duration = sec!(10);
+
+    loop {
+        time::sleep(INTERVAL).await;
+        let finished = with_ctx!(|ctx| {
+            log::info!("Periodic state dump:\n{}", ctx);
+            ctrl::is_finished(ctx)
+        });
+        if finished {
+            break;
+        }
+    }
 }
 
 // struct ControlBlock {

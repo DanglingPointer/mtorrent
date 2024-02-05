@@ -21,7 +21,7 @@ impl Drop for Data {
         self.handle.with_ctx(|ctx| {
             ctx.piece_tracker.forget_peer(self.rx.remote_ip());
             ctx.peer_states.remove_peer(self.rx.remote_ip());
-            ctx.pending_requests.peer_disconnected(self.rx.remote_ip());
+            ctx.pending_requests.clear_requests_to(self.rx.remote_ip());
         });
     }
 }
@@ -217,7 +217,7 @@ pub async fn get_pieces(
                 log::debug!("Piece verified successfully, piece_index={piece_index}");
                 handle.with_ctx(|ctx| {
                     ctx.piece_tracker.forget_piece(piece_index);
-                    ctx.pending_requests.piece_downloaded(piece_index);
+                    ctx.pending_requests.clear_requests_of(piece_index);
                 });
                 // TODO: send Have to everyone else
             } else {
@@ -252,6 +252,7 @@ pub async fn get_pieces(
                 let msg = inner.rx.receive_message().await?;
                 update_state_with_msg(&mut inner, &msg);
                 if inner.state.peer_choking {
+                    with_ctx!(|ctx| ctx.pending_requests.clear_requests_to(inner.rx.remote_ip()));
                     return io::Result::Ok(());
                 }
                 if let pwp::UploaderMessage::Block(info, data) = msg {

@@ -68,3 +68,7 @@ pub fn should_stop_upload(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> bool {
         true
     }
 }
+
+pub fn is_finished(ctx: &ctx::Ctx) -> bool {
+    ctx.accountant.missing_bytes() == 0 /* && ctx.peer_states.leeches_count() == 0 */
+}
