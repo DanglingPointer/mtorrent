@@ -1,11 +1,11 @@
 use super::ctx;
 use crate::tracker::{http, udp, utils};
+use crate::utils::peer_id::PeerId;
 use crate::{define_with_ctx, sec};
 use futures::future;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::ops::Deref;
 use std::time::Duration;
 use std::{cmp, io, ops};
 use tokio::net::UdpSocket;
@@ -46,7 +46,7 @@ struct AnnounceData {
     downloaded: usize,
     left: usize,
     uploaded: usize,
-    local_peer_id: [u8; 20],
+    local_peer_id: PeerId,
     listener_port: u16,
     event: Option<AnnounceEvent>,
 }
@@ -58,7 +58,7 @@ impl AnnounceData {
             downloaded: ctx.accountant.accounted_bytes(),
             left: ctx.accountant.missing_bytes(),
             uploaded: ctx.peer_states.uploaded_bytes(),
-            local_peer_id: *ctx.local_peer_id.deref(),
+            local_peer_id: ctx.local_peer_id,
             listener_port,
             event: if ctx.accountant.accounted_bytes() == 0 {
                 Some(AnnounceEvent::Started)
@@ -77,7 +77,7 @@ impl From<&AnnounceData> for udp::AnnounceRequest {
     fn from(data: &AnnounceData) -> Self {
         Self {
             info_hash: data.info_hash,
-            peer_id: data.local_peer_id,
+            peer_id: *data.local_peer_id,
             downloaded: data.downloaded as u64,
             left: data.left as u64,
             uploaded: data.uploaded as u64,
@@ -95,10 +95,10 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
 
     fn try_from((url, data): (&str, &AnnounceData)) -> Result<Self, Self::Error> {
         let mut request = http::TrackerRequestBuilder::try_from(url)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e}")))?;
         request
             .info_hash(&data.info_hash)
-            .peer_id(&data.local_peer_id)
+            .peer_id(data.local_peer_id.as_slice())
             .bytes_downloaded(data.downloaded)
             .bytes_left(data.left)
             .bytes_uploaded(data.uploaded)
@@ -120,15 +120,14 @@ impl TryFrom<http::AnnounceResponseContent> for ResponseData {
     type Error = io::Error;
 
     fn try_from(response: http::AnnounceResponseContent) -> Result<Self, Self::Error> {
-        fn make_error(what: &'static str) -> io::Error {
-            io::Error::new(io::ErrorKind::Other, what.to_owned())
+        fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
+            || io::Error::new(io::ErrorKind::InvalidData, s.to_owned())
         }
         Ok(Self {
-            interval: sec!(response
-                .interval()
-                .ok_or_else(|| make_error("No interval in response"))?
-                as u64),
-            peers: response.peers().ok_or_else(|| make_error("No peers in response"))?,
+            interval: sec!(
+                response.interval().ok_or_else(make_error("No interval in response"))? as u64
+            ),
+            peers: response.peers().ok_or_else(make_error("No peers in response"))?,
         })
     }
 }

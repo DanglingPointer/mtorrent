@@ -5,6 +5,7 @@ use crate::engine::{self, MonitorOwner};
 use crate::tracker::{http, udp, utils};
 use crate::utils::dispatch::Handler;
 use crate::utils::meta::Metainfo;
+use crate::utils::peer_id::PeerId;
 use crate::{pwp::*, sec};
 use futures::prelude::*;
 use log::{error, info};
@@ -88,7 +89,7 @@ pub struct OperationHandler {
     internal_local_ip: SocketAddrV4,
     external_local_ip: SocketAddrV4,
     listener_failures: usize,
-    local_peer_id: [u8; 20],
+    local_peer_id: PeerId,
     filekeeper: Rc<data::StorageClient>,
     known_peers: HashSet<SocketAddr>,
     stored_channels: HashMap<SocketAddr, (Slot<DownloadTxChannel>, Slot<UploadTxChannel>)>,
@@ -112,7 +113,7 @@ impl OperationHandler {
         filekeeper: data::StorageClient,
         internal_local_ip: SocketAddrV4,
         external_local_ip: SocketAddrV4,
-        local_peer_id: [u8; 20],
+        local_peer_id: PeerId,
         pwp_worker_handle: runtime::Handle,
     ) -> Result<Self, &'static str> {
         let pieces = Rc::new(data::PieceInfo::new(
@@ -203,7 +204,7 @@ impl<'h> OperationHandler {
 
         let announce_request = udp::AnnounceRequest {
             info_hash: *self.metainfo.info_hash(),
-            peer_id: self.local_peer_id,
+            peer_id: *self.local_peer_id,
             downloaded: downloaded as u64,
             left: left as u64,
             uploaded: uploaded as u64,
@@ -245,7 +246,7 @@ impl<'h> OperationHandler {
                     .ok()?;
                 request
                     .info_hash(self.metainfo.info_hash())
-                    .peer_id(&self.local_peer_id)
+                    .peer_id(self.local_peer_id.as_slice())
                     .bytes_downloaded(downloaded)
                     .bytes_left(left)
                     .bytes_uploaded(uploaded)
@@ -277,7 +278,7 @@ impl<'h> OperationHandler {
             .filter_map(|ip| {
                 self.known_peers.insert(ip).then_some(
                     Action::new_outgoing_connect(
-                        self.local_peer_id,
+                        *self.local_peer_id,
                         *self.metainfo.info_hash(),
                         ip,
                     )
@@ -313,7 +314,7 @@ impl<'h> OperationHandler {
             .filter_map(|ip| {
                 self.known_peers.insert(ip).then_some(
                     Action::new_outgoing_connect(
-                        self.local_peer_id,
+                        *self.local_peer_id,
                         *self.metainfo.info_hash(),
                         ip,
                     )
@@ -367,7 +368,7 @@ impl<'h> OperationHandler {
             .into_iter()
             .map(|port| {
                 Action::new_outgoing_connect(
-                    self.local_peer_id,
+                    *self.local_peer_id,
                     *self.metainfo.info_hash(),
                     SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port)),
                 )
@@ -400,7 +401,7 @@ impl<'h> OperationHandler {
                 self.known_peers.insert(remote_ip);
                 ops.push(
                     Action::new_incoming_connect(
-                        self.local_peer_id,
+                        *self.local_peer_id,
                         *self.metainfo.info_hash(),
                         stream,
                         remote_ip,

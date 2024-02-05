@@ -1,4 +1,5 @@
 use super::{ctx, download, peer, upload};
+use crate::utils::peer_id::PeerId;
 use crate::utils::{startup, worker::simple};
 use crate::{data, define_with_ctx, pwp, sec};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -26,8 +27,7 @@ async fn connecting_peer(
     let mut local_id = [0u8; 20];
     local_id[..5].copy_from_slice("leech".as_bytes());
 
-    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap(), &local_id).unwrap();
-    let handle = ctx.create_handle();
+    let handle = ctx::new_ctx(Rc::into_inner(metainfo).unwrap(), PeerId::from(&local_id)).unwrap();
 
     let (download, upload) = peer::from_outgoing_connection(
         peer_ip,
@@ -53,8 +53,8 @@ async fn listening_peer(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap(), &local_id).unwrap();
-    let mut handle = ctx.create_handle();
+    let mut handle =
+        ctx::new_ctx(Rc::into_inner(metainfo).unwrap(), PeerId::from(&local_id)).unwrap();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));

@@ -3,6 +3,7 @@ use mtorrent::ctrl::OperationHandler;
 use mtorrent::data;
 use mtorrent::tracker::utils;
 use mtorrent::utils::dispatch::Dispatcher;
+use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::startup::*;
 use mtorrent::utils::upnp;
 use std::net::SocketAddrV4;
@@ -53,8 +54,8 @@ fn main() -> io::Result<()> {
         )?
     };
 
-    let local_peer_id = generate_local_peer_id();
-    info!("Local peer id: {}", String::from_utf8_lossy(&local_peer_id));
+    let local_peer_id = PeerId::generate_new();
+    info!("Local peer id: {}", local_peer_id);
 
     let pwp_worker_handle = start_pwp();
     let (storage, _storage_handle) = start_storage(filekeeper);
