@@ -23,15 +23,14 @@ async fn connecting_peer(
     let storage = data::Storage::new(files_dir, metainfo.files().unwrap()).unwrap();
     let (storage, storage_handle) = startup::start_storage(storage);
 
-    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap()).unwrap();
-    let handle = ctx.create_handle();
-
     let mut local_id = [0u8; 20];
     local_id[..5].copy_from_slice("leech".as_bytes());
 
+    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap(), &local_id).unwrap();
+    let handle = ctx.create_handle();
+
     let (download, upload) = peer::from_outgoing_connection(
         peer_ip,
-        [b'l'; 20],
         storage,
         handle.clone(),
         runtime::Handle::current(),
@@ -51,7 +50,10 @@ async fn listening_peer(
     let (storage, storage_handle) = startup::start_storage(storage);
 
     let piece_count = metainfo.pieces().unwrap().count();
-    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap()).unwrap();
+    let mut local_id = [0u8; 20];
+    local_id[..6].copy_from_slice("seeder".as_bytes());
+
+    let ctx = ctx::Owner::new(Rc::into_inner(metainfo).unwrap(), &local_id).unwrap();
     let mut handle = ctx.create_handle();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
@@ -60,20 +62,12 @@ async fn listening_peer(
         }
     });
 
-    let mut local_id = [0u8; 20];
-    local_id[..6].copy_from_slice("seeder".as_bytes());
-
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    let (download, upload) = peer::from_incoming_connection(
-        stream,
-        local_id,
-        storage,
-        handle.clone(),
-        runtime::Handle::current(),
-    )
-    .await
-    .unwrap();
+    let (download, upload) =
+        peer::from_incoming_connection(stream, storage, handle.clone(), runtime::Handle::current())
+            .await
+            .unwrap();
     (download, upload, handle, peer_ip, storage_handle)
 }
 
@@ -114,10 +108,12 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
         assert!(!dstate.peer_choking);
         assert_eq!(0, dstate.bytes_received);
 
-        let peer =
-            download::get_pieces(seeder, &(START_PIECE_INDEX..piece_count).collect::<Vec<_>>())
-                .await
-                .unwrap();
+        let peer = download::get_pieces(
+            seeder,
+            (START_PIECE_INDEX..piece_count).collect::<Vec<_>>().iter(),
+        )
+        .await
+        .unwrap();
         if let download::Peer::Seeder(seeder) = peer {
             let dstate = dh.with_ctx(|ctx| ctx.peer_states.get(&peer_ip).unwrap().0.clone());
             assert!(dstate.am_interested);

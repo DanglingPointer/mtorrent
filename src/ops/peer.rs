@@ -1,18 +1,20 @@
 use super::{ctrl, ctx, download, upload};
 use crate::{data, define_with_ctx, pwp, sec};
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, ops::Deref};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
-pub async fn from_incoming_connection(
+pub(super) async fn from_incoming_connection(
     stream: TcpStream,
-    local_peer_id: [u8; 20],
     storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
-    let remote_ip = stream.peer_addr()?;
+    define_with_ctx!(ctx_handle);
 
-    let info_hash: [u8; 20] = ctx_handle.with_ctx(|ctx| *ctx.metainfo.info_hash());
+    let remote_ip = stream.peer_addr()?;
+    let (info_hash, local_peer_id) =
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
+
     let (download_chans, upload_chans, runner) =
         pwp::channels_from_incoming(&local_peer_id, Some(&info_hash), stream)
             .await
@@ -38,18 +40,20 @@ pub async fn from_incoming_connection(
     Ok((seeder, leech))
 }
 
-pub async fn from_outgoing_connection(
+pub(super) async fn from_outgoing_connection(
     remote_ip: SocketAddr,
-    local_peer_id: [u8; 20],
     storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
+    define_with_ctx!(ctx_handle);
+
+    let (info_hash, local_peer_id) =
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
+
     const MAX_RETRY_COUNT: usize = 3;
     let mut attempts_left = MAX_RETRY_COUNT;
     let mut reconnect_interval = sec!(2);
-
-    let info_hash: [u8; 20] = ctx_handle.with_ctx(|ctx| *ctx.metainfo.info_hash());
     let (download_chans, upload_chans, runner) = loop {
         match pwp::channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
             Ok(channels) => break channels,
@@ -86,16 +90,16 @@ pub async fn from_outgoing_connection(
     Ok((seeder, leech))
 }
 
-pub async fn run_download(
+pub(super) async fn run_download(
     mut peer: download::Peer,
-    ip: SocketAddr,
+    remote_ip: SocketAddr,
     mut ctx_handle: ctx::Handle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
         match peer {
             download::Peer::Idle(idling_peer) => {
-                if with_ctx!(|ctx| ctrl::should_activate_download(&ip, ctx)) {
+                if with_ctx!(|ctx| ctrl::should_activate_download(&remote_ip, ctx)) {
                     let seeder = download::activate(idling_peer).await?;
                     peer = seeder.into();
                 } else {
@@ -103,9 +107,9 @@ pub async fn run_download(
                 }
             }
             download::Peer::Seeder(seeding_peer) => {
-                let requests = with_ctx!(|ctx| ctrl::pieces_to_request(&ip, ctx));
+                let requests = with_ctx!(|ctx| ctrl::pieces_to_request(&remote_ip, ctx));
                 if !requests.is_empty() {
-                    peer = download::get_pieces(seeding_peer, &requests).await?;
+                    peer = download::get_pieces(seeding_peer, requests.iter()).await?;
                 } else {
                     peer = download::deactivate(seeding_peer).await?.into();
                 }
@@ -114,9 +118,9 @@ pub async fn run_download(
     }
 }
 
-pub async fn run_upload(
+pub(super) async fn run_upload(
     mut peer: upload::Peer,
-    ip: SocketAddr,
+    remote_ip: SocketAddr,
     mut ctx_handle: ctx::Handle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
@@ -124,7 +128,7 @@ pub async fn run_upload(
         peer = upload::update_peer(peer).await?;
         match peer {
             upload::Peer::Idle(idling_peer) => {
-                if with_ctx!(|ctx| ctrl::should_activate_upload(&ip, ctx)) {
+                if with_ctx!(|ctx| ctrl::should_activate_upload(&remote_ip, ctx)) {
                     let leech = upload::activate(idling_peer).await?;
                     peer = leech.into();
                 } else {
@@ -132,7 +136,7 @@ pub async fn run_upload(
                 }
             }
             upload::Peer::Leech(leeching_peer) => {
-                if with_ctx!(|ctx| ctrl::should_stop_upload(&ip, ctx)) {
+                if with_ctx!(|ctx| ctrl::should_stop_upload(&remote_ip, ctx)) {
                     let idling_peer = upload::deactivate(leeching_peer).await?;
                     peer = upload::linger(idling_peer, sec!(10)).await?;
                 } else {
@@ -141,4 +145,35 @@ pub async fn run_upload(
             }
         }
     }
+}
+
+pub async fn outgoing_pwp_connection(
+    remote_ip: SocketAddr,
+    storage: data::StorageClient,
+    ctx_handle: ctx::Handle,
+    pwp_worker_handle: runtime::Handle,
+) -> io::Result<()> {
+    let (download, upload) =
+        from_outgoing_connection(remote_ip, storage, ctx_handle.clone(), pwp_worker_handle).await?;
+    try_join!(
+        run_download(download.into(), remote_ip, ctx_handle.clone()),
+        run_upload(upload.into(), remote_ip, ctx_handle.clone())
+    )?;
+    Ok(())
+}
+
+pub async fn incoming_pwp_connection(
+    stream: TcpStream,
+    storage: data::StorageClient,
+    ctx_handle: ctx::Handle,
+    pwp_worker_handle: runtime::Handle,
+) -> io::Result<()> {
+    let remote_ip = stream.peer_addr()?;
+    let (download, upload) =
+        from_incoming_connection(stream, storage, ctx_handle.clone(), pwp_worker_handle).await?;
+    try_join!(
+        run_download(download.into(), remote_ip, ctx_handle.clone()),
+        run_upload(upload.into(), remote_ip, ctx_handle.clone())
+    )?;
+    Ok(())
 }

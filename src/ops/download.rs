@@ -164,7 +164,10 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     Ok(to_enum!(inner))
 }
 
-pub async fn get_pieces(peer: SeedingPeer, pieces: &[usize]) -> io::Result<Peer> {
+pub async fn get_pieces(
+    peer: SeedingPeer,
+    pieces: impl ExactSizeIterator<Item = &usize> + Clone,
+) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
     let _sw = info_stopwatch!("Download of {} pieces from {}", pieces.len(), inner.rx.remote_ip());
@@ -184,7 +187,7 @@ pub async fn get_pieces(peer: SeedingPeer, pieces: &[usize]) -> io::Result<Peer>
 
     define_with_ctx!(inner.handle);
 
-    for &piece in pieces {
+    for &piece in pieces.clone() {
         with_ctx!(|ctx| ctx.pending_requests.add(piece, inner.rx.remote_ip()));
     }
 

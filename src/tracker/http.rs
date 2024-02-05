@@ -4,7 +4,7 @@ use crate::utils::benc;
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::{fmt, str};
+use std::{fmt, io, str};
 
 #[derive(Debug)]
 pub enum Error {
@@ -34,6 +34,12 @@ impl From<reqwest::Error> for Error {
 impl From<benc::ParseError> for Error {
     fn from(value: benc::ParseError) -> Self {
         Error::Benc(value)
+    }
+}
+
+impl From<Error> for io::Error {
+    fn from(e: Error) -> Self {
+        io::Error::new(io::ErrorKind::Other, format!("{e}"))
     }
 }
 

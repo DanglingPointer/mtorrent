@@ -65,6 +65,7 @@ pub struct PeerStates {
     peers: HashMap<SocketAddr, (DownloadState, UploadState)>,
     seeders: HashSet<SocketAddr>,
     leeches: HashSet<SocketAddr>,
+    previously_uploaded_bytes: usize,
 }
 
 impl PeerStates {
@@ -89,9 +90,12 @@ impl PeerStates {
     }
 
     pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
-        self.peers.remove(remote_ip);
-        self.seeders.remove(remote_ip);
-        self.leeches.remove(remote_ip);
+        if let Some((_download, upload)) = self.peers.get(remote_ip) {
+            self.previously_uploaded_bytes += upload.bytes_sent;
+            self.peers.remove(remote_ip);
+            self.seeders.remove(remote_ip);
+            self.leeches.remove(remote_ip);
+        }
     }
 
     pub fn get(&self, peer_ip: &SocketAddr) -> Option<(&DownloadState, &UploadState)> {
@@ -104,5 +108,24 @@ impl PeerStates {
 
     pub fn leeches_count(&self) -> usize {
         self.leeches.len()
+    }
+
+    pub fn all(&self) -> impl Iterator<Item = (&SocketAddr, &DownloadState, &UploadState)> {
+        self.peers.iter().map(|(addr, (download, upload))| (addr, download, upload))
+    }
+
+    pub fn uploaded_bytes(&self) -> usize {
+        self.previously_uploaded_bytes
+            + self.peers.values().map(|(_, upload)| upload.bytes_sent).sum::<usize>()
+    }
+}
+
+impl fmt::Display for PeerStates {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Connected peers ({}):", self.peers.len())?;
+        for (ip, (download, upload)) in &self.peers {
+            write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, download, " ", upload)?;
+        }
+        Ok(())
     }
 }

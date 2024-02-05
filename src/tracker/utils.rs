@@ -1,4 +1,5 @@
 use crate::utils::meta::Metainfo;
+use std::collections::HashSet;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -13,7 +14,7 @@ pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = Socke
     data.chunks_exact(6).filter_map(to_addr_and_port)
 }
 
-pub fn get_udp_tracker_addrs(metainfo: &Metainfo) -> Vec<String> {
+pub fn get_udp_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
     match metainfo.announce_list() {
         Some(announce_list) => announce_list
             .flatten()
@@ -26,11 +27,11 @@ pub fn get_udp_tracker_addrs(metainfo: &Metainfo) -> Vec<String> {
                 }
             })
             .collect(),
-        None => Vec::new(),
+        None => Default::default(),
     }
 }
 
-pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> Vec<String> {
+pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
     match metainfo.announce_list() {
         Some(announce_list) => announce_list
             .flatten()
@@ -42,7 +43,7 @@ pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> Vec<String> {
                 }
             })
             .collect(),
-        None => Vec::new(),
+        None => Default::default(),
     }
 }
 
