@@ -1,5 +1,6 @@
-mod ctrl;
+#[macro_use]
 mod ctx;
+mod ctrl;
 mod download;
 mod peer;
 mod tracker;

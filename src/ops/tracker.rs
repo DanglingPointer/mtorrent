@@ -1,7 +1,7 @@
 use super::{ctrl, ctx};
+use crate::sec;
 use crate::tracker::{http, udp, utils};
 use crate::utils::peer_id::PeerId;
-use crate::{define_with_ctx, sec};
 use futures::future;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

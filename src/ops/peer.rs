@@ -1,5 +1,5 @@
 use super::{ctrl, ctx, download, upload};
-use crate::{data, define_with_ctx, pwp, sec};
+use crate::{data, pwp, sec};
 use std::{io, net::SocketAddr, ops::Deref};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 

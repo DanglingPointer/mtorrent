@@ -1,6 +1,6 @@
 use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
-use crate::{data, debug_stopwatch, define_with_ctx, info_stopwatch, pwp};
+use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
 use std::io;
 use std::ops::BitXorAssign;

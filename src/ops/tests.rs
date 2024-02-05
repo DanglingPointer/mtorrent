@@ -1,7 +1,7 @@
 use super::{ctx, download, peer, upload};
 use crate::utils::peer_id::PeerId;
 use crate::utils::{startup, worker::simple};
-use crate::{data, define_with_ctx, pwp, sec};
+use crate::{data, pwp, sec};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{rc::Rc, time::Duration};
 use tokio::{join, net::TcpListener, runtime, select, time};

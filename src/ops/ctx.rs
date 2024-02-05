@@ -40,6 +40,7 @@ pub struct Handle {
 }
 
 impl Handle {
+    #[inline(always)]
     pub(super) fn with_ctx<R, F>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Ctx) -> R,
@@ -49,12 +50,14 @@ impl Handle {
     }
 }
 
-#[macro_export]
 macro_rules! define_with_ctx {
     ($handle:expr) => {
         macro_rules! with_ctx {
             ($f:expr) => {
-                $handle.with_ctx($f)
+                $handle.with_ctx(
+                    #[inline(always)]
+                    $f,
+                )
             };
         }
     };
