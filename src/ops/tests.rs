@@ -40,7 +40,7 @@ async fn connecting_peer(
     (download, upload, handle, peer_ip, storage_handle)
 }
 
-async fn listening_peer(
+async fn listening_seeder(
     listener_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
@@ -154,7 +154,7 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
 async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
     let files_dir = "test_input";
     let (download, upload, mut handle, peer_ip, _storage) =
-        listening_peer(listener_ip, metainfo_path, files_dir).await;
+        listening_seeder(listener_ip, metainfo_path, files_dir).await;
 
     handle.with_ctx(|ctx| {
         assert_eq!(0, ctx.piece_tracker.get_poorest_peers().count());
@@ -233,7 +233,7 @@ async fn run_peer(
         handle.with_ctx(|ctx| {
             log::info!("Download from {} finished: {}", ip, ctx.accountant);
             assert_eq!(0, ctx.accountant.missing_bytes());
-            assert_eq!(TOTAL_BYTES, ctx.accountant.accounted_bytes());
+            assert_eq!(5364053, ctx.accountant.accounted_bytes());
         });
     };
     join!(download_fut, upload_fut);
@@ -248,7 +248,7 @@ async fn test_pass_torrent_from_peer_to_peer() {
         .init();
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43211));
-    let metainfo = "tests/zeroed.torrent";
+    let metainfo = "tests/zeroed_test.torrent";
 
     let connecting_peer = async {
         let (download, upload, mut handle, peer_ip, storage) =
@@ -269,7 +269,7 @@ async fn test_pass_torrent_from_peer_to_peer() {
     };
     let listening_peer = async {
         let (download, upload, handle, peer_ip, storage) =
-            listening_peer(addr, metainfo, "test_input2").await;
+            listening_seeder(addr, metainfo, "test_input2").await;
         run_peer(download, upload, handle, peer_ip, storage).await;
     };
     join!(listening_peer, connecting_peer);

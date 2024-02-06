@@ -14,6 +14,7 @@ pub async fn single_torrent_main(
     output_filedir: impl AsRef<Path>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
+    extra_peers: impl Iterator<Item = SocketAddr>,
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(metainfo_filepath)?;
 
@@ -78,6 +79,26 @@ pub async fn single_torrent_main(
             Err(e) => log::error!("TCP listener exited: {e}"),
         }
     });
+
+    for peer_ip in extra_peers {
+        let extra_peer_storage = storage.clone();
+        let extra_peer_pwp_runtime = pwp_runtime.clone();
+        let extra_peer_ctx = ctx.clone();
+        local_task.spawn_local(async move {
+            log::info!("Trying to connect to {}", peer_ip);
+            match ops::outgoing_pwp_connection(
+                peer_ip,
+                extra_peer_storage,
+                extra_peer_ctx,
+                extra_peer_pwp_runtime,
+            )
+            .await
+            {
+                Ok(_) => (),
+                Err(e) => log::error!("Outgoing peer connection exited: {e}"),
+            }
+        });
+    }
 
     let announce_response_storage = storage.clone();
     let announce_response_pwp_runtime = pwp_runtime.clone();

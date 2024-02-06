@@ -153,7 +153,7 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
             Ok(msg) => {
                 state_changed = update_state_with_msg(&mut inner, &msg);
                 if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
-                    log::warn!("Received block from {} while idle", inner.rx.remote_ip());
+                    log::debug!("Received block from {} while idle", inner.rx.remote_ip());
                 }
             }
             Err(pwp::ChannelError::Timeout) => (),

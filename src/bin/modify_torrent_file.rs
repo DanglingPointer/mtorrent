@@ -39,13 +39,13 @@ fn main() {
     let source = if args.len() >= 2 {
         args[1].to_owned()
     } else {
-        "tests/example.torrent".to_string()
+        "tests/test.torrent".to_string()
     };
 
     let dest = if args.len() >= 3 {
         args[2].to_owned()
     } else {
-        "tests/zeroed.torrent".to_string()
+        "tests/zeroed_test.torrent".to_string()
     };
 
     let source_content = fs::read(source).unwrap();

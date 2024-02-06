@@ -1,23 +1,25 @@
-use mtorrent::client;
 use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::worker;
+use mtorrent::{client, info_stopwatch};
 use std::io;
 
 fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(true)
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent", log::LevelFilter::Debug)
+        .with_module_level("mtorrent", log::LevelFilter::Info)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
 
-    let metainfo_path = if let Some(arg) = std::env::args().nth(1) {
-        arg
-    } else {
-        "tests/example.torrent".to_string()
-    };
+    let _sw = info_stopwatch!("mtorrentv2");
 
-    let output_dir = if let Some(arg) = std::env::args().nth(2) {
+    let mut args = std::env::args();
+
+    let metainfo_path = args.nth(1).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "metainfo file not specified")
+    })?;
+
+    let output_dir = if let Some(arg) = args.next() {
         arg
     } else {
         "mtorrentv2_output".to_owned()
@@ -45,6 +47,7 @@ fn main() -> io::Result<()> {
         output_dir,
         pwp_runtime.runtime_handle(),
         storage_runtime.runtime_handle(),
+        args.filter_map(|arg| arg.parse().ok()),
     )?;
 
     Ok(())

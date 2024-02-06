@@ -1,4 +1,5 @@
 use futures::future;
+use rand::random;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::{collections::HashSet, io, net::SocketAddr, rc::Rc};
@@ -14,10 +15,10 @@ async fn run_one_seeder(
     storage: data::StorageClient,
     info: Rc<data::PieceInfo>,
 ) -> io::Result<()> {
-    log::info!("Starting seeder on {local_addr}");
+    log::debug!("Starting seeder on {local_addr}");
     let listener = TcpListener::bind(local_addr).await?;
     let (stream, remote_addr) = listener.accept().await?;
-    log::info!("{} accepted connection from {}", local_addr, remote_addr);
+    log::debug!("{} accepted connection from {}", local_addr, remote_addr);
     let (download_chans, upload_chans, runner) =
         pwp::channels_from_incoming(&[0u8; 20], None, stream).await?;
     task::spawn_local(async move {
@@ -26,7 +27,7 @@ async fn run_one_seeder(
     task::spawn_local(async move {
         let pwp::DownloadChannels(tx, mut rx) = download_chans;
         while let Ok(msg) = rx.receive_message().await {
-            log::debug!("{local_addr} received {msg}");
+            log::debug!("Seeder {local_addr} received {msg}");
         }
         drop(tx);
     });
@@ -53,12 +54,19 @@ async fn run_one_seeder(
                             requested_block.block_length,
                         )
                         .unwrap_or_else(|_| {
-                            panic!("{local_addr} received invalid request {requested_block}")
+                            log::error!("{local_addr} received invalid request {requested_block}");
+                            panic!("{local_addr} received invalid request {requested_block}");
                         });
                     let data = storage
                         .read_block(global_offset, requested_block.block_length)
                         .await
                         .unwrap_or_else(|e| {
+                            log::error!(
+                                "Couldn't read {} bytes at offset {}: {}",
+                                requested_block.block_length,
+                                global_offset,
+                                e
+                            );
                             panic!(
                                 "Couldn't read {} bytes at offset {}: {}",
                                 requested_block.block_length, global_offset, e
@@ -82,7 +90,7 @@ async fn run_one_seeder(
         match msg {
             pwp::DownloaderMessage::Request(block) => request_sender.send(block).unwrap(),
             pwp::DownloaderMessage::Cancel(block) => cancel_sender.send(block).unwrap(),
-            _ => (),
+            msg => log::debug!("Seeder {local_addr} received {msg}"),
         }
     }
     Ok(())
@@ -114,16 +122,16 @@ fn main() -> io::Result<()> {
         total_length,
     ));
 
-    let files_dir = "seeders_input";
+    let files_dir = format!("seeders_input_{:?}", random::<u32>());
     let (storage, _storage_handle) = {
         let storage = if let Some(files) = metainfo.files() {
-            data::Storage::new(files_dir, files)?
+            data::Storage::new(&files_dir, files)?
         } else {
             let name = match metainfo.name() {
                 Some(s) => s.to_string(),
                 None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
             };
-            data::Storage::new(files_dir, iter::once((total_length, PathBuf::from(name))))?
+            data::Storage::new(&files_dir, iter::once((total_length, PathBuf::from(name))))?
         };
         startup::start_storage(storage)
     };

@@ -91,6 +91,10 @@ pub fn new_ctx(metainfo: meta::Metainfo, local_peer_id: PeerId) -> io::Result<Ha
 
 pub async fn periodic_state_dump(mut ctx_handle: Handle) {
     define_with_ctx!(ctx_handle);
+    #[cfg(debug_assertions)]
+    const INTERVAL: Duration = sec!(5);
+
+    #[cfg(not(debug_assertions))]
     const INTERVAL: Duration = sec!(10);
 
     loop {
@@ -106,12 +110,12 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle) {
 }
 
 // struct ControlBlock {
-//     ctx: UnsafeCell<Ctx>,
-//     borrowed: Cell<bool>,
+//     ctx: std::cell::UnsafeCell<Ctx>,
+//     borrowed: std::cell::Cell<bool>,
 // }
 
 // struct BorrowGuard<'a> {
-//     borrowed: &'a Cell<bool>,
+//     borrowed: &'a std::cell::Cell<bool>,
 // }
 // impl<'a> BorrowGuard<'a> {
 //     #[inline(always)]
@@ -131,11 +135,20 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle) {
 //     }
 // }
 
-// pub(super) struct UnsafeHandle {
+// #[derive(Clone)]
+// pub struct Handle {
 //     ctx: Rc<ControlBlock>,
 // }
 
-// impl UnsafeHandle {
+// impl Handle {
+//     fn new(ctx: Ctx) -> Self {
+//         let cb = ControlBlock {
+//             ctx: std::cell::UnsafeCell::new(ctx),
+//             borrowed: Default::default(),
+//         };
+//         Self { ctx: Rc::new(cb) }
+//     }
+
 //     pub(super) fn with_ctx<R, F>(&mut self, f: F) -> R
 //     where
 //         F: FnOnce(&mut Ctx) -> R,

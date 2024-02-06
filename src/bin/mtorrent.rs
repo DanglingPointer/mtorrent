@@ -1,6 +1,7 @@
 use log::{error, info, LevelFilter};
 use mtorrent::ctrl::OperationHandler;
 use mtorrent::data;
+use mtorrent::info_stopwatch;
 use mtorrent::utils::dispatch::Dispatcher;
 use mtorrent::utils::ip;
 use mtorrent::utils::peer_id::PeerId;
@@ -19,6 +20,8 @@ fn main() -> io::Result<()> {
         .with_module_level("mtorrent", LevelFilter::Info)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+
+    let _sw = info_stopwatch!("mtorrent");
 
     let metainfo = read_metainfo(if let Some(arg) = env::args().nth(1) {
         arg
