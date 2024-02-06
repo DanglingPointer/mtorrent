@@ -12,6 +12,13 @@ pub(super) async fn from_incoming_connection(
     define_with_ctx!(ctx_handle);
 
     let remote_ip = stream.peer_addr()?;
+    if with_ctx!(|ctx| ctx.peer_states.get(&remote_ip).is_some()) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("already connected to {remote_ip}"),
+        ));
+    }
+
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
 
@@ -47,6 +54,13 @@ pub(super) async fn from_outgoing_connection(
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
     define_with_ctx!(ctx_handle);
+
+    if with_ctx!(|ctx| ctx.peer_states.get(&remote_ip).is_some()) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("already connected to {remote_ip}"),
+        ));
+    }
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });

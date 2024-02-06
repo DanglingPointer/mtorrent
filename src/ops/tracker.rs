@@ -1,22 +1,21 @@
 use super::{ctrl, ctx};
 use crate::sec;
 use crate::tracker::{http, udp, utils};
+use crate::utils::ip;
 use crate::utils::peer_id::PeerId;
 use futures::future;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::time::Duration;
-use std::{cmp, io, ops};
+use std::{cmp, io};
 use tokio::net::UdpSocket;
 use tokio::time;
 
 const NUM_WANT: usize = 50;
-const DYNAMIC_PORT_RANGE: ops::Range<u32> = 49152..65536;
 
 #[derive(Clone, Copy)]
 enum AnnounceEvent {
     Started,
+    #[allow(dead_code)]
     Stopped,
     Completed,
 }
@@ -64,8 +63,8 @@ impl AnnounceData {
                 Some(AnnounceEvent::Started)
             } else if ctrl::is_finished(ctx) {
                 Some(AnnounceEvent::Completed)
-            } else if ctx.peer_states.all().count() == 0 {
-                Some(AnnounceEvent::Stopped)
+            // } else if ctx.peer_states.all().count() == 0 {
+            //     Some(AnnounceEvent::Stopped)
             } else {
                 None
             },
@@ -112,7 +111,7 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
 }
 
 pub struct ResponseData {
-    pub interval: Duration,
+    interval: Duration,
     pub peers: Vec<SocketAddr>,
 }
 
@@ -125,9 +124,9 @@ impl TryFrom<http::AnnounceResponseContent> for ResponseData {
         }
         Ok(Self {
             interval: sec!(
-                response.interval().ok_or_else(make_error("No interval in response"))? as u64
+                response.interval().ok_or_else(make_error("no interval in response"))? as u64
             ),
-            peers: response.peers().ok_or_else(make_error("No peers in response"))?,
+            peers: response.peers().ok_or_else(make_error("no peers in response"))?,
         })
     }
 }
@@ -147,14 +146,8 @@ async fn http_announce(tracker_url: &str, request: &AnnounceData) -> io::Result<
 }
 
 async fn udp_announce(tracker_addr: &str, request: &AnnounceData) -> io::Result<ResponseData> {
-    // unique udp port for each tracker
-    let bind_addr = {
-        let mut hasher = DefaultHasher::default();
-        tracker_addr.hash(&mut hasher);
-        let hashed_addr = hasher.finish();
-        let port = hashed_addr % DYNAMIC_PORT_RANGE.len() as u64 + DYNAMIC_PORT_RANGE.start as u64;
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port as u16))
-    };
+    // we need a unique udp port for each tracker
+    let bind_addr = ip::any_socketaddr_from_hash(&tracker_addr);
     let socket = UdpSocket::bind(bind_addr).await?;
     socket.connect(&tracker_addr).await?;
     let client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
@@ -183,7 +176,10 @@ async fn run_tracker(
             TrackerType::Udp => udp_announce(&tracker_addr, &request).await,
         };
         match response_result {
-            Ok(response) => {
+            Ok(mut response) => {
+                with_ctx!(|ctx| {
+                    response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
+                });
                 let interval = cmp::min(sec!(300), response.interval);
                 callback(response);
                 time::sleep(interval).await;
@@ -198,7 +194,7 @@ async fn run_tracker(
 
 pub async fn run_periodic_announces(
     mut ctx_handle: ctx::Handle,
-    listener_port: u16,
+    public_listener_port: u16,
     callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
@@ -210,7 +206,7 @@ pub async fn run_periodic_announces(
             TrackerType::Http,
             tracker_addr,
             ctx_handle.clone(),
-            listener_port,
+            public_listener_port,
             callback.clone(),
         )
     });
@@ -219,7 +215,7 @@ pub async fn run_periodic_announces(
             TrackerType::Udp,
             tracker_addr,
             ctx_handle.clone(),
-            listener_port,
+            public_listener_port,
             callback.clone(),
         )
     });

@@ -1,6 +1,7 @@
 use crate::utils::benc;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::str;
 
@@ -38,6 +39,12 @@ impl TryFrom<benc::Element> for Metainfo {
             }
             _ => Err(()),
         }
+    }
+}
+
+impl Hash for Metainfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&self.info_hash)
     }
 }
 

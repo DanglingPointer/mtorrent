@@ -1,3 +1,4 @@
+pub mod client;
 pub mod ctrl;
 pub mod data;
 pub mod engine;

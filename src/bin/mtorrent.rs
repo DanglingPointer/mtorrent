@@ -1,13 +1,14 @@
 use log::{error, info, LevelFilter};
 use mtorrent::ctrl::OperationHandler;
 use mtorrent::data;
-use mtorrent::tracker::utils;
 use mtorrent::utils::dispatch::Dispatcher;
+use mtorrent::utils::ip;
 use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::startup::*;
 use mtorrent::utils::upnp;
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::{env, fs, io, iter};
 use tokio::runtime;
 
@@ -27,7 +28,7 @@ fn main() -> io::Result<()> {
     let name = metainfo.name().unwrap_or("<unknown>");
     log::info!("Successfully consumed metainfo file for '{}'", name);
 
-    let local_internal_ip = SocketAddrV4::new(utils::get_local_ip()?, 23015);
+    let local_internal_ip = SocketAddrV4::new(ip::get_local_addr()?, 23015);
     info!("Local internal ip address: {}", local_internal_ip);
 
     let output_dir = if let Some(arg) = env::args().nth(2) {
@@ -87,7 +88,7 @@ fn main() -> io::Result<()> {
             };
 
             let ctrl = OperationHandler::new(
-                metainfo,
+                Rc::new(metainfo),
                 storage,
                 local_internal_ip,
                 local_external_ip,

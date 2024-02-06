@@ -51,12 +51,17 @@ pub(super) async fn do_handshake_incoming(
     let mut socket = writer.into_inner();
     socket.read_exact(&mut remote_handshake.peer_id).await?;
 
-    log::debug!(
-        "Incoming handshake with {} DONE. Peer id: {}",
-        remote_ip,
-        String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
-    );
-    Ok((socket, remote_handshake))
+    if remote_handshake.peer_id == local_handshake.peer_id {
+        // possible because some trackers include our own external ip
+        Err(io::Error::new(io::ErrorKind::Other, "incoming connect from ourselves"))
+    } else {
+        log::debug!(
+            "Incoming handshake with {} DONE. Peer id: {}",
+            remote_ip,
+            String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
+        );
+        Ok((socket, remote_handshake))
+    }
 }
 
 pub(super) async fn do_handshake_outgoing(

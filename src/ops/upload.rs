@@ -248,7 +248,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
             if request.block_length > MAX_BLOCK_SIZE {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("Received too big request: {request}"),
+                    format!("received too big request: {request}"),
                 ));
             }
             let global_offset = with_ctx!(|ctx| {
@@ -259,7 +259,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 )
             })
             .map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, format!("Received invalid request: {request}"))
+                io::Error::new(io::ErrorKind::Other, format!("received invalid request: {request}"))
             })?;
             if !with_ctx!(|ctx| {
                 ctx.accountant.has_exact_block_at(global_offset, request.block_length)

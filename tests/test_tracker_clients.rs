@@ -1,5 +1,5 @@
 use mtorrent::tracker::{http, udp, utils};
-use mtorrent::utils::{benc, meta};
+use mtorrent::utils::{benc, ip, meta};
 use std::fs;
 use std::net::{SocketAddr, SocketAddrV4};
 use tokio::net::UdpSocket;
@@ -21,7 +21,7 @@ async fn test_udp_announce() {
     let metainfo = read_metainfo("tests/example.torrent");
     let udp_tracker_addrs = utils::get_udp_tracker_addrs(&metainfo);
 
-    let local_ip = SocketAddr::V4(SocketAddrV4::new(utils::get_local_ip().unwrap(), 6666));
+    let local_ip = SocketAddr::V4(SocketAddrV4::new(ip::get_local_addr().unwrap(), 6666));
 
     let announce_request = udp::AnnounceRequest {
         info_hash: *metainfo.info_hash(),

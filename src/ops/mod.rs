@@ -16,5 +16,6 @@ pub use ctx::Handle as CtxHandle;
 pub use listener::run_pwp_listener;
 pub use peer::{incoming_pwp_connection, outgoing_pwp_connection};
 pub use tracker::run_periodic_announces;
+pub use tracker::ResponseData as TrackerResponse;
 
 const MAX_BLOCK_SIZE: usize = 16384;

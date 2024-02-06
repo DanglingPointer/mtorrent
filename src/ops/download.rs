@@ -170,7 +170,8 @@ pub async fn get_pieces(
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
-    let _sw = info_stopwatch!("Download of {} pieces from {}", pieces.len(), inner.rx.remote_ip());
+    let _sw =
+        info_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
 
     fn divide_piece_into_blocks(
         piece_index: usize,
@@ -223,7 +224,7 @@ pub async fn get_pieces(
             } else {
                 log::error!("Piece verification failed, piece_index={piece_index}");
                 handle.with_ctx(|ctx| ctx.accountant.remove_piece(piece_index));
-                return Err(io::Error::new(io::ErrorKind::Other, "Piece verification failed"));
+                return Err(io::Error::new(io::ErrorKind::Other, "piece verification failed"));
             }
         }
         io::Result::Ok(())
