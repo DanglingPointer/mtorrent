@@ -1,6 +1,6 @@
 use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
-use crate::{data, debug_stopwatch, info_stopwatch, pwp, sec};
+use crate::{data, debug_stopwatch, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -88,7 +88,7 @@ pub async fn new_peer(
         state: Default::default(),
     });
     // try wait for bitfield and some have's
-    const SETTLING_PERIOD: Duration = sec!(5);
+    const SETTLING_PERIOD: Duration = sec!(1);
     let mut now = Instant::now();
     let end_time = now + SETTLING_PERIOD;
     while now < end_time {
@@ -153,7 +153,7 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
             Ok(msg) => {
                 state_changed = update_state_with_msg(&mut inner, &msg);
                 if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
-                    log::warn!("{} Received not requested block", inner.rx.remote_ip());
+                    log::warn!("Received block from {} while idle", inner.rx.remote_ip());
                 }
             }
             Err(pwp::ChannelError::Timeout) => (),
@@ -171,7 +171,7 @@ pub async fn get_pieces(
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
     let _sw =
-        info_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
+        debug_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
 
     fn divide_piece_into_blocks(
         piece_index: usize,
@@ -200,7 +200,6 @@ pub async fn get_pieces(
     let verify_pieces = async {
         let mut downloaded_pieces = piece_src;
         while let Some(piece_index) = downloaded_pieces.next().await {
-            let _sw = debug_stopwatch!("Verification of piece {}", piece_index);
             let piece_len = handle.with_ctx(|ctx| ctx.pieces.piece_len(piece_index));
             let global_offset = handle
                 .with_ctx(|ctx| ctx.pieces.global_offset(piece_index, 0, piece_len))
@@ -239,8 +238,6 @@ pub async fn get_pieces(
                 // piece already downloaded from another peer
                 continue;
             }
-            let _sw =
-                debug_stopwatch!("Download of piece {} from {}", piece_index, inner.rx.remote_ip());
             let piece_len = with_ctx!(|ctx| ctx.pieces.piece_len(piece_index));
             let mut requests: HashSet<pwp::BlockInfo> =
                 divide_piece_into_blocks(piece_index, piece_len)
