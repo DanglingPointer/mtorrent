@@ -1,4 +1,4 @@
-use super::{ctx, MAX_BLOCK_SIZE};
+use crate::ops::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;

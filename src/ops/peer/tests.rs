@@ -1,7 +1,7 @@
-use super::{ctx, download, peer, upload};
+use super::*;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{startup, worker::simple};
-use crate::{data, pwp, sec};
+use crate::utils::startup;
+use crate::{ops::ctx, pwp, sec};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use tokio::{join, net::TcpListener, runtime, select, time};
@@ -19,35 +19,35 @@ async fn connecting_peer(
     peer_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
-) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr, simple::Handle) {
+) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
-    let storage = data::Storage::new(files_dir, metainfo.files().unwrap()).unwrap();
-    let (storage, storage_handle) = startup::start_storage(storage);
+    let (storage, storage_server) = startup::create_storage(&metainfo, files_dir).unwrap();
+    runtime::Handle::current().spawn(async move {
+        storage_server.run().await;
+    });
 
     let mut local_id = [0u8; 20];
     local_id[..5].copy_from_slice("leech".as_bytes());
 
     let handle = ctx::new_ctx(metainfo, PeerId::from(&local_id)).unwrap();
 
-    let (download, upload) = peer::from_outgoing_connection(
-        peer_ip,
-        storage,
-        handle.clone(),
-        runtime::Handle::current(),
-    )
-    .await
-    .unwrap();
-    (download, upload, handle, peer_ip, storage_handle)
+    let (download, upload) =
+        from_outgoing_connection(peer_ip, storage, handle.clone(), runtime::Handle::current())
+            .await
+            .unwrap();
+    (download, upload, handle, peer_ip)
 }
 
 async fn listening_seeder(
     listener_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
-) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr, simple::Handle) {
+) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
-    let storage = data::Storage::new(files_dir, metainfo.files().unwrap()).unwrap();
-    let (storage, storage_handle) = startup::start_storage(storage);
+    let (storage, storage_server) = startup::create_storage(&metainfo, files_dir).unwrap();
+    runtime::Handle::current().spawn(async move {
+        storage_server.run().await;
+    });
 
     let piece_count = metainfo.pieces().unwrap().count();
     let mut local_id = [0u8; 20];
@@ -64,15 +64,15 @@ async fn listening_seeder(
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
     let (download, upload) =
-        peer::from_incoming_connection(stream, storage, handle.clone(), runtime::Handle::current())
+        from_incoming_connection(stream, storage, handle.clone(), runtime::Handle::current())
             .await
             .unwrap();
-    (download, upload, handle, peer_ip, storage_handle)
+    (download, upload, handle, peer_ip)
 }
 
 async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
     let files_dir = "test_output";
-    let (download, upload, mut handle, _ip, _storage) =
+    let (download, upload, mut handle, _ip) =
         connecting_peer(peer_ip, metainfo_path, files_dir).await;
     define_with_ctx!(handle);
 
@@ -153,7 +153,7 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
 
 async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
     let files_dir = "test_input";
-    let (download, upload, mut handle, peer_ip, _storage) =
+    let (download, upload, mut handle, peer_ip) =
         listening_seeder(listener_ip, metainfo_path, files_dir).await;
 
     handle.with_ctx(|ctx| {
@@ -222,14 +222,13 @@ async fn run_peer(
     upload: upload::IdlePeer,
     mut handle: ctx::Handle,
     ip: SocketAddr,
-    _storage: simple::Handle,
 ) {
     let handle_copy = handle.clone();
     let upload_fut = async {
-        let _ = peer::run_upload(upload.into(), ip, handle_copy).await;
+        let _ = run_upload(upload.into(), ip, handle_copy).await;
     };
     let download_fut = async {
-        let _result = peer::run_download(download.into(), ip, handle.clone()).await;
+        let _result = run_download(download.into(), ip, handle.clone()).await;
         handle.with_ctx(|ctx| {
             log::info!("Download from {} finished: {}", ip, ctx.accountant);
             assert_eq!(0, ctx.accountant.missing_bytes());
@@ -251,9 +250,9 @@ async fn test_pass_torrent_from_peer_to_peer() {
     let metainfo = "tests/zeroed_test.torrent";
 
     let connecting_peer = async {
-        let (download, upload, mut handle, peer_ip, storage) =
+        let (download, upload, mut handle, peer_ip) =
             connecting_peer(addr, metainfo, "test_output2").await;
-        let run_peer_fut = run_peer(download, upload, handle.clone(), peer_ip, storage);
+        let run_peer_fut = run_peer(download, upload, handle.clone(), peer_ip);
         let check_missing_bytes = async {
             while handle.with_ctx(|ctx| {
                 log::info!("Downloading from {}: {}", peer_ip, ctx.accountant);
@@ -268,9 +267,9 @@ async fn test_pass_torrent_from_peer_to_peer() {
         }
     };
     let listening_peer = async {
-        let (download, upload, handle, peer_ip, storage) =
+        let (download, upload, handle, peer_ip) =
             listening_seeder(addr, metainfo, "test_input2").await;
-        run_peer(download, upload, handle, peer_ip, storage).await;
+        run_peer(download, upload, handle, peer_ip).await;
     };
     join!(listening_peer, connecting_peer);
 

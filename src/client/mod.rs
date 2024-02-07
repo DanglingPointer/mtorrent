@@ -56,7 +56,7 @@ pub async fn single_torrent_main(
         }
     };
 
-    let ctx = ops::new_ctx(metainfo, local_peer_id)?;
+    let ctx: ops::CtxHandle = ops::new_ctx(metainfo, local_peer_id)?;
 
     let incoming_connection_storage = storage.clone();
     let incoming_connection_pwp_runtime = pwp_runtime.clone();

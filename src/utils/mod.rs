@@ -1,8 +1,7 @@
 pub mod benc;
-pub mod canceller;
-pub mod dispatch;
 pub mod fifo;
 pub mod ip;
+pub mod matcher;
 pub mod meta;
 pub mod peer_id;
 pub mod startup;

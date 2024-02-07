@@ -102,6 +102,7 @@ impl PeerStates {
         self.peers.get(peer_ip).map(|(download, upload)| (download, upload))
     }
 
+    #[allow(dead_code)]
     pub fn seeders_count(&self) -> usize {
         self.seeders.len()
     }

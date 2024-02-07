@@ -1,11 +1,10 @@
 use futures::future;
 use rand::random;
+use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::PathBuf;
 use std::{collections::HashSet, io, net::SocketAddr, rc::Rc};
-use std::{env, iter};
 
-use mtorrent::utils::startup;
+use mtorrent::utils::{startup, worker};
 use mtorrent::{data, pwp};
 use tokio::runtime;
 use tokio::{net::TcpListener, sync::mpsc, task};
@@ -123,18 +122,9 @@ fn main() -> io::Result<()> {
     ));
 
     let files_dir = format!("seeders_input_{:?}", random::<u32>());
-    let (storage, _storage_handle) = {
-        let storage = if let Some(files) = metainfo.files() {
-            data::Storage::new(&files_dir, files)?
-        } else {
-            let name = match metainfo.name() {
-                Some(s) => s.to_string(),
-                None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
-            };
-            data::Storage::new(&files_dir, iter::once((total_length, PathBuf::from(name))))?
-        };
-        startup::start_storage(storage)
-    };
+    let (storage, storage_server) = startup::create_storage(&metainfo, &files_dir).unwrap();
+    let _storage_handle =
+        worker::without_runtime(Default::default(), move || storage_server.run_blocking());
 
     runtime::Builder::new_current_thread().enable_all().build()?.block_on(
         task::LocalSet::new().run_until(async move {

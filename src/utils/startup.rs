@@ -7,6 +7,7 @@ pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<meta::M
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let file_content = fs::read(metainfo_filepath)?;
     let root_entity = benc::Element::from_bytes(&file_content)?;
+    log::debug!("Metainfo file content:\n{root_entity}");
     let metainfo = meta::Metainfo::try_from(root_entity)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid metainfo file"))?;
     Ok(metainfo)
@@ -21,32 +22,15 @@ pub fn create_storage(
         .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no total length in metainfo"))?;
 
-    let storage = if let Some(files) = metainfo.files() {
-        data::Storage::new(filedir, files)?
+    if let Some(files) = metainfo.files() {
+        Ok(data::new_async_storage(filedir, files)?)
     } else {
         let name = match metainfo.name() {
             Some(s) => s.to_string(),
             None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
         };
-        data::Storage::new(filedir, iter::once((total_size, PathBuf::from(name))))?
-    };
-    Ok(data::async_storage(storage))
-}
-
-pub fn start_storage(storage: data::Storage) -> (data::StorageClient, worker::simple::Handle) {
-    let (client, server) = data::async_storage(storage);
-
-    let handle = worker::without_runtime(
-        worker::simple::Config {
-            name: "storage".to_string(),
-            ..Default::default()
-        },
-        move || {
-            server.run_blocking();
-        },
-    );
-
-    (client, handle)
+        Ok(data::new_async_storage(filedir, iter::once((total_size, PathBuf::from(name))))?)
+    }
 }
 
 pub fn start_pwp() -> worker::rt::Handle {

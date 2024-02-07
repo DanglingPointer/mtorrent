@@ -1,4 +1,4 @@
-use super::{ctx, MAX_BLOCK_SIZE};
+use crate::ops::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
 use crate::{data, debug_stopwatch, pwp, sec};
 use futures::prelude::*;
@@ -214,7 +214,6 @@ pub async fn get_pieces(
             let verification_success =
                 storage.verify_block(global_offset, piece_len, &expected_sha1).await?;
             if verification_success {
-                log::debug!("Piece verified successfully, piece_index={piece_index}");
                 handle.with_ctx(|ctx| {
                     ctx.piece_tracker.forget_piece(piece_index);
                     ctx.pending_requests.clear_requests_of(piece_index);

@@ -1,9 +1,15 @@
-use super::{ctrl, ctx, download, upload};
+mod download;
+mod upload;
+
+#[cfg(test)]
+mod tests;
+
+use super::{ctrl, ctx};
 use crate::{data, pwp, sec};
 use std::{io, net::SocketAddr, ops::Deref};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
-pub(super) async fn from_incoming_connection(
+async fn from_incoming_connection(
     stream: TcpStream,
     storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
@@ -47,7 +53,7 @@ pub(super) async fn from_incoming_connection(
     Ok((seeder, leech))
 }
 
-pub(super) async fn from_outgoing_connection(
+async fn from_outgoing_connection(
     remote_ip: SocketAddr,
     storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
@@ -104,7 +110,7 @@ pub(super) async fn from_outgoing_connection(
     Ok((seeder, leech))
 }
 
-pub(super) async fn run_download(
+async fn run_download(
     mut peer: download::Peer,
     remote_ip: SocketAddr,
     mut ctx_handle: ctx::Handle,
@@ -132,7 +138,7 @@ pub(super) async fn run_download(
     }
 }
 
-pub(super) async fn run_upload(
+async fn run_upload(
     mut peer: upload::Peer,
     remote_ip: SocketAddr,
     mut ctx_handle: ctx::Handle,

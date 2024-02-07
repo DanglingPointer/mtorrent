@@ -2,33 +2,6 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::process::Command;
 
 #[test]
-fn test_download_torrent_from_two_seeders() {
-    let metainfo_file = "tests/zeroed.torrent";
-    let output_dir = "test_output_download_torrent_from_two_seeders";
-
-    let mut seeders = Command::new(env!("CARGO_BIN_EXE_seeders"))
-        .arg(metainfo_file)
-        .arg("12345")
-        .arg("23456")
-        .spawn()
-        .expect("failed to execute 'seeders'");
-
-    let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrent"))
-        .arg(metainfo_file)
-        .arg(output_dir)
-        .spawn()
-        .expect("failed to execute 'mtorrent'");
-
-    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
-    assert!(mtorrent_ecode.success());
-
-    let seeders_ecode = seeders.wait().expect("failed to wait on 'seeders'");
-    assert!(seeders_ecode.success());
-
-    std::fs::remove_dir_all(output_dir).unwrap();
-}
-
-#[test]
 fn test_download_multifile_torrentv2_from_50_seeders() {
     let metainfo_file = "tests/zeroed.torrent";
     let output_dir = "test_output_download_multifile_torrentv2_from_50_seeders";

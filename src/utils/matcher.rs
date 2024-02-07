@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::cell::Cell;
 
 pub(super) trait Input {
