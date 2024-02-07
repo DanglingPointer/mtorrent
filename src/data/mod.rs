@@ -5,10 +5,10 @@ mod piece_info;
 mod piece_tracker;
 mod storage;
 
-pub use block_accountant::BlockAccountant;
+pub(crate) use block_accountant::BlockAccountant;
 pub use piece_info::PieceInfo;
-pub use piece_tracker::PieceTracker;
-pub use storage::{async_storage, Storage, StorageClient, StorageServer};
+pub(crate) use piece_tracker::PieceTracker;
+pub use storage::{new_async_storage, Storage, StorageClient, StorageServer};
 
 #[derive(Debug)]
 pub enum Error {
@@ -26,7 +26,7 @@ impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         match e {
             Error::IOError(e) => e,
-            Error::InvalidLocation => io::Error::from(io::ErrorKind::NotFound),
+            Error::InvalidLocation => io::Error::new(io::ErrorKind::NotFound, "invalid location"),
         }
     }
 }

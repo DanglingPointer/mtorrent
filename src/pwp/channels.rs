@@ -107,6 +107,8 @@ where
 
 pub type ConnectionRunner = Runner<tcp::OwnedReadHalf, tcp::OwnedWriteHalf>;
 
+const HANDSHAKE_TIMEOUT: Duration = sec!(30);
+
 pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
@@ -117,8 +119,11 @@ pub async fn channels_from_incoming(
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
         ..Default::default()
     };
-    let (socket, remote_handshake) =
-        do_handshake_incoming(socket, &local_handshake, info_hash.is_none()).await?;
+    let (socket, remote_handshake) = timeout(
+        HANDSHAKE_TIMEOUT,
+        do_handshake_incoming(socket, &local_handshake, info_hash.is_none()),
+    )
+    .await??;
 
     let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();
@@ -139,7 +144,8 @@ pub async fn channels_from_outgoing(
     };
     let socket = TcpStream::connect(remote_addr).await?;
     let (socket, remote_handshake) =
-        do_handshake_outgoing(socket, &local_handshake, remote_peer_id).await?;
+        timeout(HANDSHAKE_TIMEOUT, do_handshake_outgoing(socket, &local_handshake, remote_peer_id))
+            .await??;
 
     let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();

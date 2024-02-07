@@ -62,6 +62,7 @@ impl BlockAccountant {
         self.total_bytes += end - start;
     }
 
+    #[allow(dead_code)]
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
         let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
@@ -72,6 +73,7 @@ impl BlockAccountant {
         }
     }
 
+    #[allow(dead_code)]
     pub fn submit_bitfield(&mut self, bitfield: &Bitfield) -> bool {
         if bitfield.len() < self.pieces.piece_count() {
             return false;
@@ -137,6 +139,18 @@ impl BlockAccountant {
     pub fn has_exact_block_at(&self, global_offset: usize, length: usize) -> bool {
         if let Some(block_length) = self.max_block_length_at(global_offset) {
             block_length >= length
+        } else {
+            false
+        }
+    }
+
+    pub fn has_exact_block(&self, block_info: &BlockInfo) -> bool {
+        if let Ok(global_offset) = self.pieces.global_offset(
+            block_info.piece_index,
+            block_info.in_piece_offset,
+            block_info.block_length,
+        ) {
+            self.has_exact_block_at(global_offset, block_info.block_length)
         } else {
             false
         }

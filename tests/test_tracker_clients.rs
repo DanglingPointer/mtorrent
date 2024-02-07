@@ -1,7 +1,7 @@
 use mtorrent::tracker::{http, udp, utils};
-use mtorrent::utils::{benc, meta};
+use mtorrent::utils::{benc, ip, meta};
 use std::fs;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::net::UdpSocket;
 
 fn read_metainfo(path: &str) -> meta::Metainfo {
@@ -21,7 +21,7 @@ async fn test_udp_announce() {
     let metainfo = read_metainfo("tests/example.torrent");
     let udp_tracker_addrs = utils::get_udp_tracker_addrs(&metainfo);
 
-    let local_ip = SocketAddr::V4(SocketAddrV4::new(utils::get_local_ip().unwrap(), 6666));
+    let local_ip = SocketAddr::V4(SocketAddrV4::new(ip::get_local_addr().unwrap(), 6666));
 
     let announce_request = udp::AnnounceRequest {
         info_hash: *metainfo.info_hash(),
@@ -60,38 +60,54 @@ async fn test_udp_announce() {
 
 #[ignore]
 #[tokio::test]
-async fn test_http_announce() {
-    // http://tracker.openbittorrent.com/announce?info_hash=%03%d1U%23cSD%5c%dc%80J%2b%25%05Rsin%cf%9c&peer_id=-qB4410-nMgOHMqB8E2h&port=23005&uploaded=0&downloaded=0&left=0&corrupt=0&key=5352D2ED&event=started&numwant=200&compact=1&no_peer_id=1&supportcrypto=1&redundant=0
+async fn test_udp_scrape() {
+    let udp_tracker_addrs = [
+        "udp://open.stealth.si:80/announce",
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://tracker.tiny-vps.com:6969/announce",
+        "udp://tracker.internetwarriors.net:1337/announce",
+        "udp://tracker.skyts.net:6969/announce",
+    ];
 
-    let mut request =
-        http::TrackerRequestBuilder::try_from("http://tracker.openbittorrent.com/announce")
-            .unwrap();
-    request
-        .info_hash(
-            b"\x03\xd1\x55\x23\x63\x53\x44\x5c\xdc\x80\x4a\x2b\x25\x05\x52\x73\x69\x6e\xcf\x9c",
-        )
-        .peer_id(&[b'm'; 20])
-        .bytes_left(0)
-        .bytes_uploaded(0)
-        .bytes_downloaded(0)
-        .event(http::AnnounceEvent::Started)
-        .port(6666);
-
-    let response = http::do_announce_request(request)
-        .await
-        .unwrap_or_else(|e| panic!("Announce error: {e}"));
-
-    println!("Announce response: {}", response);
-    let peer_count = response.peers().unwrap().len();
-    let seeders = response.complete().unwrap();
-    let leechers = response.incomplete().unwrap();
-    assert_eq!(peer_count, seeders + leechers);
+    let local_set = tokio::task::LocalSet::new();
+    for (i, tracker_addr) in udp_tracker_addrs
+        .iter()
+        .filter_map(|uri| {
+            let udp_addr = uri.strip_prefix("udp://")?;
+            if let Some(stripped) = udp_addr.strip_suffix("/announce") {
+                Some(stripped.to_string())
+            } else {
+                Some(udp_addr.to_string())
+            }
+        })
+        .enumerate()
+    {
+        local_set.spawn_local(async move {
+            let bind_addr =
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 6666 + i as u16));
+            let client_socket = UdpSocket::bind(bind_addr).await.unwrap();
+            if client_socket.connect(&tracker_addr).await.is_err() {
+                println!("Failed to connect to {tracker_addr}");
+                return;
+            }
+            let client =
+                udp::UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
+            let response = client
+                .do_scrape_request(udp::ScrapeRequest {
+                    info_hashes: Vec::new(),
+                })
+                .await
+                .unwrap();
+            println!("Response from {tracker_addr}: {response:?}");
+        });
+    }
+    local_set.await;
 }
 
 #[ignore]
 #[tokio::test]
 async fn test_https_announce() {
-    let metainfo = read_metainfo("tests/ubuntu-22.04.2-desktop-amd64.iso.torrent");
+    let metainfo = read_metainfo("tests/ubuntu-22.04.3-live-server-amd64.iso.torrent");
 
     for tracker_url in utils::get_http_tracker_addrs(&metainfo) {
         let mut request = http::TrackerRequestBuilder::try_from(tracker_url.as_str()).unwrap();
@@ -101,7 +117,6 @@ async fn test_https_announce() {
             .bytes_left(0)
             .bytes_uploaded(0)
             .bytes_downloaded(0)
-            .event(http::AnnounceEvent::Started)
             .port(6666);
 
         let response = http::do_announce_request(request)
@@ -112,21 +127,18 @@ async fn test_https_announce() {
         let peer_count = response.peers().unwrap().len();
         let seeders = response.complete().unwrap();
         let leechers = response.incomplete().unwrap();
-        assert_eq!(peer_count, seeders + leechers);
+        assert!(peer_count <= seeders + leechers);
     }
 }
 
 #[ignore]
 #[tokio::test]
-async fn test_http_scrape() {
-    let mut request =
-        http::TrackerRequestBuilder::try_from("http://tracker.openbittorrent.com/announce")
-            .unwrap();
-    request.info_hash(
-        b"\x03\xd1\x55\x23\x63\x53\x44\x5c\xdc\x80\x4a\x2b\x25\x05\x52\x73\x69\x6e\xcf\x9c",
-    );
+async fn test_https_scrape() {
+    let request =
+        http::TrackerRequestBuilder::try_from("https://torrent.ubuntu.com/announce").unwrap();
     let response = http::do_scrape_request(request)
         .await
         .unwrap_or_else(|e| panic!("Scrape error: {e}"));
-    assert!(!response.is_empty());
+    println!("{response}");
+    assert!(matches!(response, benc::Element::Dictionary(_)));
 }

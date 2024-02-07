@@ -47,11 +47,12 @@ fn test_read_example_torrent_file() {
         assert!(http_iter.next().is_none());
     }
     {
-        let mut udp_iter = utils::get_udp_tracker_addrs(&info).into_iter();
-        assert_eq!("9.rarbg.me:2720", udp_iter.next().unwrap());
-        assert_eq!("9.rarbg.to:2740", udp_iter.next().unwrap());
-        assert_eq!("tracker.fatkhoala.org:13780", udp_iter.next().unwrap());
-        assert_eq!("tracker.tallpenguin.org:15760", udp_iter.next().unwrap());
+        let udp_trackers = utils::get_udp_tracker_addrs(&info);
+        assert_eq!(4, udp_trackers.len());
+        assert!(udp_trackers.contains("9.rarbg.me:2720"));
+        assert!(udp_trackers.contains("9.rarbg.to:2740"));
+        assert!(udp_trackers.contains("tracker.fatkhoala.org:13780"));
+        assert!(udp_trackers.contains("tracker.tallpenguin.org:15760"));
     }
 
     let name = info.name().unwrap();

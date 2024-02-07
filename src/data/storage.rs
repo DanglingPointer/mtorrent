@@ -18,8 +18,12 @@ pub struct StorageClient {
     channel: mpsc::UnboundedSender<Command>,
 }
 
-pub fn async_storage(storage: Storage) -> (StorageClient, StorageServer) {
-    async_generic_storage(storage)
+pub fn new_async_storage(
+    parent_dir: impl AsRef<Path>,
+    length_path_it: impl Iterator<Item = (usize, PathBuf)>,
+) -> Result<(StorageClient, StorageServer), Error> {
+    let storage = Storage::new(parent_dir, length_path_it)?;
+    Ok(async_generic_storage(storage))
 }
 
 fn async_generic_storage<F: RandomAccessReadWrite>(

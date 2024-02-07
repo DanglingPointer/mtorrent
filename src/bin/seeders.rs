@@ -1,10 +1,10 @@
 use futures::future;
+use rand::random;
+use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::path::PathBuf;
-use std::{collections::HashSet, fs, io, net::SocketAddr, path::Path, rc::Rc};
-use std::{env, iter};
+use std::{collections::HashSet, io, net::SocketAddr, rc::Rc};
 
-use mtorrent::utils::{benc, meta::Metainfo, worker};
+use mtorrent::utils::{startup, worker};
 use mtorrent::{data, pwp};
 use tokio::runtime;
 use tokio::{net::TcpListener, sync::mpsc, task};
@@ -14,10 +14,10 @@ async fn run_one_seeder(
     storage: data::StorageClient,
     info: Rc<data::PieceInfo>,
 ) -> io::Result<()> {
-    log::info!("Starting seeder on {local_addr}");
+    log::debug!("Starting seeder on {local_addr}");
     let listener = TcpListener::bind(local_addr).await?;
     let (stream, remote_addr) = listener.accept().await?;
-    log::info!("{} accepted connection from {}", local_addr, remote_addr);
+    log::debug!("{} accepted connection from {}", local_addr, remote_addr);
     let (download_chans, upload_chans, runner) =
         pwp::channels_from_incoming(&[0u8; 20], None, stream).await?;
     task::spawn_local(async move {
@@ -26,7 +26,7 @@ async fn run_one_seeder(
     task::spawn_local(async move {
         let pwp::DownloadChannels(tx, mut rx) = download_chans;
         while let Ok(msg) = rx.receive_message().await {
-            log::debug!("{local_addr} received {msg}");
+            log::debug!("Seeder {local_addr} received {msg}");
         }
         drop(tx);
     });
@@ -53,12 +53,19 @@ async fn run_one_seeder(
                             requested_block.block_length,
                         )
                         .unwrap_or_else(|_| {
-                            panic!("{local_addr} received invalid request {requested_block}")
+                            log::error!("{local_addr} received invalid request {requested_block}");
+                            panic!("{local_addr} received invalid request {requested_block}");
                         });
                     let data = storage
                         .read_block(global_offset, requested_block.block_length)
                         .await
                         .unwrap_or_else(|e| {
+                            log::error!(
+                                "Couldn't read {} bytes at offset {}: {}",
+                                requested_block.block_length,
+                                global_offset,
+                                e
+                            );
                             panic!(
                                 "Couldn't read {} bytes at offset {}: {}",
                                 requested_block.block_length, global_offset, e
@@ -82,35 +89,10 @@ async fn run_one_seeder(
         match msg {
             pwp::DownloaderMessage::Request(block) => request_sender.send(block).unwrap(),
             pwp::DownloaderMessage::Cancel(block) => cancel_sender.send(block).unwrap(),
-            _ => (),
+            msg => log::debug!("Seeder {local_addr} received {msg}"),
         }
     }
     Ok(())
-}
-
-fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<Rc<Metainfo>> {
-    log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
-    let file_content = fs::read(metainfo_filepath)?;
-    let root_entity = benc::Element::from_bytes(&file_content)?;
-    let metainfo = Metainfo::try_from(root_entity)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid metainfo file"))?;
-    Ok(Rc::new(metainfo))
-}
-
-fn start_storage(storage: data::Storage) -> (data::StorageClient, worker::simple::Handle) {
-    let (client, server) = data::async_storage(storage);
-
-    let handle = worker::without_runtime(
-        worker::simple::Config {
-            name: "storage".to_string(),
-            ..Default::default()
-        },
-        move || {
-            server.run_blocking();
-        },
-    );
-
-    (client, handle)
 }
 
 fn main() -> io::Result<()> {
@@ -122,7 +104,7 @@ fn main() -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
     let mut env_args = env::args();
-    let metainfo = read_metainfo(env_args.nth(1).expect("no torrent file specified"))?;
+    let metainfo = startup::read_metainfo(env_args.nth(1).expect("no torrent file specified"))?;
 
     let total_length = metainfo
         .length()
@@ -139,19 +121,10 @@ fn main() -> io::Result<()> {
         total_length,
     ));
 
-    let (storage, _storage_handle) = {
-        let output_dir = "seeders_input";
-        let storage = if let Some(files) = metainfo.files() {
-            data::Storage::new(output_dir, files)?
-        } else {
-            let name = match metainfo.name() {
-                Some(s) => s.to_string(),
-                None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
-            };
-            data::Storage::new(output_dir, iter::once((total_length, PathBuf::from(name))))?
-        };
-        start_storage(storage)
-    };
+    let files_dir = format!("seeders_input_{:?}", random::<u32>());
+    let (storage, storage_server) = startup::create_storage(&metainfo, &files_dir).unwrap();
+    let _storage_handle =
+        worker::without_runtime(Default::default(), move || storage_server.run_blocking());
 
     runtime::Builder::new_current_thread().enable_all().build()?.block_on(
         task::LocalSet::new().run_until(async move {
@@ -164,5 +137,6 @@ fn main() -> io::Result<()> {
         }),
     );
 
+    std::fs::remove_dir_all(files_dir).unwrap();
     Ok(())
 }

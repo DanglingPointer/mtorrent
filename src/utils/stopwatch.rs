@@ -21,9 +21,9 @@ impl Stopwatch {
 
 impl Drop for Stopwatch {
     fn drop(&mut self) {
-        let duration = time::Instant::now() - self.starttime;
+        let duration = self.starttime.elapsed();
         if duration.as_micros() >= 1000 {
-            log::log!(self.lvl, "{}: {} finished in {:?}", self.location, self.what, duration);
+            log::log!(target: self.location, self.lvl, "{} finished in {:?}", self.what, duration);
         }
     }
 }
