@@ -1,7 +1,7 @@
 [![Tests](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml)
 
 # mtorrent
-Simple lightweight Bittorrent client in Rust. Uses Tokio, no threadpool, currently uses 3 threads in total. WIP.
+Lightweight command line Bittorrent client in Rust. Based on Tokio (but without a threadpool, currently runs 3 threads in total).
 
 ## Useful links
 - https://wiki.theory.org/BitTorrentSpecification
@@ -10,7 +10,7 @@ Simple lightweight Bittorrent client in Rust. Uses Tokio, no threadpool, current
 ## Progress
 #### Required:
 - [x] [Basic protocol](https://www.bittorrent.org/beps/bep_0003.html)
-- [ ] [Business logic](https://wiki.theory.org/BitTorrentSpecification#Algorithms)
+- [x] [Business logic](https://wiki.theory.org/BitTorrentSpecification#Algorithms)
 - [x] HTTP tracker client
 #### Optional:
 - [x] [Multitracker Metadata Extension](https://www.bittorrent.org/beps/bep_0012.html)
@@ -22,4 +22,4 @@ Simple lightweight Bittorrent client in Rust. Uses Tokio, no threadpool, current
 
 ## Building
 
-Requires Docker. To build run `./builder.sh [args]` where `args` is the arguments to `cargo`. When using VS Code, open the root folder, then, when prompted, build and open the dev container (requires Dev Containers extension).
+Requires Docker. To build on Linux, run `./builder.sh [args]` where `args` is the arguments to `cargo` (e.g. `build --release`). When using VS Code, open the root folder, then, when prompted, build and open the dev container (requires Dev Containers extension).
