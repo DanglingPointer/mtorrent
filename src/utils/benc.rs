@@ -51,7 +51,7 @@ impl fmt::Display for Element {
             let first_indent = if ignore_first_indent { 0 } else { last_indent };
             match entity {
                 Element::ByteString(data) => match std::str::from_utf8(data) {
-                    Ok(text) => write!(f, "{:first_indent$}{}", ' ', text)?,
+                    Ok(text) => write!(f, "{:first_indent$}\"{}\"", ' ', text)?,
                     Err(_) => write!(f, "{:first_indent$}<{} raw bytes>", ' ', data.len())?,
                 },
                 Element::Integer(number) => write!(f, "{:first_indent$}{}", ' ', number)?,
@@ -67,7 +67,7 @@ impl fmt::Display for Element {
                     writeln!(f, "{:first_indent$}{{", ' ')?;
                     for (key, val) in map {
                         write_entity(key, f, last_indent + INDENT_INCREMENT, false)?;
-                        write!(f, " : ")?;
+                        write!(f, ":")?;
                         write_entity(val, f, last_indent + INDENT_INCREMENT, true)?;
                         writeln!(f, ",")?;
                     }
@@ -445,274 +445,274 @@ mod tests {
         #[rustfmt::skip]
         let expected = 
 r#"   {
-      announce :  http://tracker.trackerfix.com:80/announce,
-      announce-list :  [
+      "announce": "http://tracker.trackerfix.com:80/announce",
+      "announce-list": [
          [
-            http://tracker.trackerfix.com:80/announce,
+            "http://tracker.trackerfix.com:80/announce",
          ],
          [
-            udp://9.rarbg.me:2720/announce,
+            "udp://9.rarbg.me:2720/announce",
          ],
          [
-            udp://9.rarbg.to:2740/announce,
+            "udp://9.rarbg.to:2740/announce",
          ],
          [
-            udp://tracker.fatkhoala.org:13780/announce,
+            "udp://tracker.fatkhoala.org:13780/announce",
          ],
          [
-            udp://tracker.tallpenguin.org:15760/announce,
+            "udp://tracker.tallpenguin.org:15760/announce",
          ],
       ],
-      comment :  Torrent downloaded from https://rarbg.to,
-      created by :  RARBG,
-      creation date :  1629718368,
-      info :  {
-         files :  [
+      "comment": "Torrent downloaded from https://rarbg.to",
+      "created by": "RARBG",
+      "creation date": 1629718368,
+      "info": {
+         "files": [
             {
-               length :  30,
-               path :  [
-                  RARBG.txt,
+               "length": 30,
+               "path": [
+                  "RARBG.txt",
                ],
             },
             {
-               length :  99,
-               path :  [
-                  RARBG_DO_NOT_MIRROR.exe,
+               "length": 99,
+               "path": [
+                  "RARBG_DO_NOT_MIRROR.exe",
                ],
             },
             {
-               length :  66667,
-               path :  [
-                  Subs,
-                  10_French.srt,
+               "length": 66667,
+               "path": [
+                  "Subs",
+                  "10_French.srt",
                ],
             },
             {
-               length :  67729,
-               path :  [
-                  Subs,
-                  11_German.srt,
+               "length": 67729,
+               "path": [
+                  "Subs",
+                  "11_German.srt",
                ],
             },
             {
-               length :  98430,
-               path :  [
-                  Subs,
-                  12_Greek.srt,
+               "length": 98430,
+               "path": [
+                  "Subs",
+                  "12_Greek.srt",
                ],
             },
             {
-               length :  89001,
-               path :  [
-                  Subs,
-                  13_Hebrew.srt,
+               "length": 89001,
+               "path": [
+                  "Subs",
+                  "13_Hebrew.srt",
                ],
             },
             {
-               length :  66729,
-               path :  [
-                  Subs,
-                  14_hrv.srt,
+               "length": 66729,
+               "path": [
+                  "Subs",
+                  "14_hrv.srt",
                ],
             },
             {
-               length :  69251,
-               path :  [
-                  Subs,
-                  15_Hungarian.srt,
+               "length": 69251,
+               "path": [
+                  "Subs",
+                  "15_Hungarian.srt",
                ],
             },
             {
-               length :  67897,
-               path :  [
-                  Subs,
-                  16_Indonesian.srt,
+               "length": 67897,
+               "path": [
+                  "Subs",
+                  "16_Indonesian.srt",
                ],
             },
             {
-               length :  67035,
-               path :  [
-                  Subs,
-                  17_Italian.srt,
+               "length": 67035,
+               "path": [
+                  "Subs",
+                  "17_Italian.srt",
                ],
             },
             {
-               length :  68310,
-               path :  [
-                  Subs,
-                  18_Japanese.srt,
+               "length": 68310,
+               "path": [
+                  "Subs",
+                  "18_Japanese.srt",
                ],
             },
             {
-               length :  79479,
-               path :  [
-                  Subs,
-                  19_Korean.srt,
+               "length": 79479,
+               "path": [
+                  "Subs",
+                  "19_Korean.srt",
                ],
             },
             {
-               length :  67367,
-               path :  [
-                  Subs,
-                  20_may.srt,
+               "length": 67367,
+               "path": [
+                  "Subs",
+                  "20_may.srt",
                ],
             },
             {
-               length :  63337,
-               path :  [
-                  Subs,
-                  21_Bokmal.srt,
+               "length": 63337,
+               "path": [
+                  "Subs",
+                  "21_Bokmal.srt",
                ],
             },
             {
-               length :  68715,
-               path :  [
-                  Subs,
-                  22_Polish.srt,
+               "length": 68715,
+               "path": [
+                  "Subs",
+                  "22_Polish.srt",
                ],
             },
             {
-               length :  67838,
-               path :  [
-                  Subs,
-                  23_Portuguese.srt,
+               "length": 67838,
+               "path": [
+                  "Subs",
+                  "23_Portuguese.srt",
                ],
             },
             {
-               length :  69077,
-               path :  [
-                  Subs,
-                  24_Portuguese.srt,
+               "length": 69077,
+               "path": [
+                  "Subs",
+                  "24_Portuguese.srt",
                ],
             },
             {
-               length :  70967,
-               path :  [
-                  Subs,
-                  25_Romanian.srt,
+               "length": 70967,
+               "path": [
+                  "Subs",
+                  "25_Romanian.srt",
                ],
             },
             {
-               length :  90311,
-               path :  [
-                  Subs,
-                  26_Russian.srt,
+               "length": 90311,
+               "path": [
+                  "Subs",
+                  "26_Russian.srt",
                ],
             },
             {
-               length :  67143,
-               path :  [
-                  Subs,
-                  27_Spanish.srt,
+               "length": 67143,
+               "path": [
+                  "Subs",
+                  "27_Spanish.srt",
                ],
             },
             {
-               length :  67068,
-               path :  [
-                  Subs,
-                  28_Spanish.srt,
+               "length": 67068,
+               "path": [
+                  "Subs",
+                  "28_Spanish.srt",
                ],
             },
             {
-               length :  63229,
-               path :  [
-                  Subs,
-                  29_Swedish.srt,
+               "length": 63229,
+               "path": [
+                  "Subs",
+                  "29_Swedish.srt",
                ],
             },
             {
-               length :  97509,
-               path :  [
-                  Subs,
-                  2_Arabic.srt,
+               "length": 97509,
+               "path": [
+                  "Subs",
+                  "2_Arabic.srt",
                ],
             },
             {
-               length :  126859,
-               path :  [
-                  Subs,
-                  30_Thai.srt,
+               "length": 126859,
+               "path": [
+                  "Subs",
+                  "30_Thai.srt",
                ],
             },
             {
-               length :  69519,
-               path :  [
-                  Subs,
-                  31_Turkish.srt,
+               "length": 69519,
+               "path": [
+                  "Subs",
+                  "31_Turkish.srt",
                ],
             },
             {
-               length :  87216,
-               path :  [
-                  Subs,
-                  32_ukr.srt,
+               "length": 87216,
+               "path": [
+                  "Subs",
+                  "32_ukr.srt",
                ],
             },
             {
-               length :  86745,
-               path :  [
-                  Subs,
-                  33_Vietnamese.srt,
+               "length": 86745,
+               "path": [
+                  "Subs",
+                  "33_Vietnamese.srt",
                ],
             },
             {
-               length :  71908,
-               path :  [
-                  Subs,
-                  3_Chinese.srt,
+               "length": 71908,
+               "path": [
+                  "Subs",
+                  "3_Chinese.srt",
                ],
             },
             {
-               length :  71949,
-               path :  [
-                  Subs,
-                  4_Chinese.srt,
+               "length": 71949,
+               "path": [
+                  "Subs",
+                  "4_Chinese.srt",
                ],
             },
             {
-               length :  69054,
-               path :  [
-                  Subs,
-                  5_Czech.srt,
+               "length": 69054,
+               "path": [
+                  "Subs",
+                  "5_Czech.srt",
                ],
             },
             {
-               length :  64987,
-               path :  [
-                  Subs,
-                  6_Danish.srt,
+               "length": 64987,
+               "path": [
+                  "Subs",
+                  "6_Danish.srt",
                ],
             },
             {
-               length :  60512,
-               path :  [
-                  Subs,
-                  7_Dutch.srt,
+               "length": 60512,
+               "path": [
+                  "Subs",
+                  "7_Dutch.srt",
                ],
             },
             {
-               length :  81102,
-               path :  [
-                  Subs,
-                  8_English.srt,
+               "length": 81102,
+               "path": [
+                  "Subs",
+                  "8_English.srt",
                ],
             },
             {
-               length :  62658,
-               path :  [
-                  Subs,
-                  9_Finnish.srt,
+               "length": 62658,
+               "path": [
+                  "Subs",
+                  "9_Finnish.srt",
                ],
             },
             {
-               length :  1397575464,
-               path :  [
-                  The.Witcher.Nightmare.of.the.Wolf.2021.1080p.WEBRip.x265-RARBG.mp4,
+               "length": 1397575464,
+               "path": [
+                  "The.Witcher.Nightmare.of.the.Wolf.2021.1080p.WEBRip.x265-RARBG.mp4",
                ],
             },
          ],
-         name :  The.Witcher.Nightmare.of.the.Wolf.2021.1080p.WEBRip.x265-RARBG,
-         piece length :  2097152,
+         "name": "The.Witcher.Nightmare.of.the.Wolf.2021.1080p.WEBRip.x265-RARBG",
+         "piece length": 2097152,
       },
    }"#;
 
@@ -722,6 +722,6 @@ r#"   {
         assert!(parsed.is_ok(), "Error: {:?}", parsed.err());
 
         let entity = parsed.unwrap().0;
-        assert_eq!(expected, format!("{entity}"));
+        assert_eq!(expected, format!("{entity}"), "\n{entity}\n");
     }
 }
