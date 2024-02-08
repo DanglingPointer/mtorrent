@@ -1,5 +1,5 @@
 use crate::data::Error;
-use crate::debug_stopwatch;
+use crate::warn_stopwatch;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,7 +59,6 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                 data,
                 callback,
             } => {
-                let _sw = debug_stopwatch!("File write of {} bytes", data.len());
                 let result = self.storage.write_block(global_offset, data);
                 if let Some(callback) = callback {
                     let _ = callback.send(result);
@@ -70,7 +69,6 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                 length,
                 callback,
             } => {
-                let _sw = debug_stopwatch!("File read of {length} bytes");
                 let result = self.storage.read_block(global_offset, length);
                 let _ = callback.send(result);
             }
@@ -80,7 +78,6 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                 expected_sha1,
                 callback,
             } => {
-                let _sw = debug_stopwatch!("Verification of {length} bytes");
                 let result = self.storage.read_block(global_offset, length).map(|data| {
                     let computed_sha1: [u8; 20] = Sha1::from(data).digest().bytes();
                     computed_sha1 == expected_sha1
@@ -133,6 +130,7 @@ impl StorageClient {
         length: usize,
         expected_sha1: &[u8; 20],
     ) -> Result<bool, Error> {
+        let _sw = warn_stopwatch!("Verification of {length} bytes");
         let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
         self.channel
             .send(Command::VerifyBlock {

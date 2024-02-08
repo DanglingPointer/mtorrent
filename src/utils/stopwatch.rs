@@ -1,4 +1,5 @@
-use std::fmt;
+use crate::{millisec, sec};
+use std::{fmt, time::Duration};
 use tokio::time;
 
 pub struct Stopwatch {
@@ -21,11 +22,24 @@ impl Stopwatch {
 
 impl Drop for Stopwatch {
     fn drop(&mut self) {
+        let threshold = match self.lvl {
+            log::Level::Error => sec!(10),
+            log::Level::Warn => sec!(1),
+            log::Level::Info | log::Level::Debug => millisec!(1),
+            log::Level::Trace => Duration::ZERO,
+        };
         let duration = self.starttime.elapsed();
-        if duration.as_micros() >= 1000 {
+        if duration > threshold {
             log::log!(target: self.location, self.lvl, "{} finished in {:?}", self.what, duration);
         }
     }
+}
+
+#[macro_export]
+macro_rules! trace_stopwatch {
+    ($($arg:tt)+) => {
+        $crate::utils::stopwatch::Stopwatch::new(log::Level::Trace, module_path!(), format_args!($($arg)+))
+    };
 }
 
 #[macro_export]
