@@ -37,6 +37,9 @@ pub(super) async fn do_handshake_incoming(
 
     socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
     socket.read_exact(&mut remote_handshake.info_hash).await?;
+    if !use_remote_info_hash && local_handshake.info_hash != remote_handshake.info_hash {
+        return Err(io::Error::new(io::ErrorKind::Other, "info_hash doesn't match"));
+    }
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
@@ -266,12 +269,12 @@ mod tests {
 
         let client_hs_fut = async {
             let result = do_handshake_outgoing(client_stream, &client_hs_data, None).await;
-            let error: io::Error = result.err().unwrap();
-            assert_eq!("info_hash doesn't match", error.to_string(),)
+            assert!(result.is_err());
         };
         let server_hs_fut = async {
             let result = do_handshake_incoming(server_stream, &server_hs_data, false).await;
-            assert!(result.is_err());
+            let error: io::Error = result.err().unwrap();
+            assert_eq!("info_hash doesn't match", error.to_string())
         };
         join!(client_hs_fut, server_hs_fut);
     }
