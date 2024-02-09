@@ -241,7 +241,7 @@ async fn run_peer(
     join!(download_fut, upload_fut);
 }
 
-#[allow(clippy::blocks_in_if_conditions)]
+#[allow(clippy::blocks_in_conditions)]
 #[tokio::test]
 async fn test_pass_full_torrent_from_peer_to_peer() {
     let _ = simple_logger::SimpleLogger::new()

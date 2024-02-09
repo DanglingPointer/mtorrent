@@ -235,6 +235,7 @@ fn read_dictionary(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
     Ok((Element::Dictionary(map), unsafe { rest.get_unchecked(1..) }))
 }
 
+#[allow(clippy::get_first)]
 #[cfg(test)]
 mod tests {
     use super::*;
