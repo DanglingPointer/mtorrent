@@ -8,7 +8,7 @@ use std::{fs, io};
 
 #[test]
 fn test_read_example_torrent_file() {
-    let data = fs::read("tests/example.torrent").unwrap();
+    let data = fs::read("tests/assets/example.torrent").unwrap();
     let entity = benc::Element::from_bytes(&data).unwrap();
     if let benc::Element::Dictionary(ref dict) = entity {
         assert!(!dict.is_empty());
@@ -242,7 +242,7 @@ fn test_read_metainfo_and_spawn_files() {
         }
         Ok(count)
     }
-    let data = fs::read("tests/example.torrent").unwrap();
+    let data = fs::read("tests/assets/example.torrent").unwrap();
     let entity = benc::Element::from_bytes(&data).unwrap();
     if let benc::Element::Dictionary(ref dict) = entity {
         assert!(!dict.is_empty());

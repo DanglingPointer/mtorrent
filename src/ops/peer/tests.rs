@@ -208,13 +208,16 @@ async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
 }
 
 #[tokio::test]
-async fn test_pass_torrent_from_seeder_to_leech() {
+async fn test_pass_partial_torrent_from_seeder_to_leech() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
         .init();
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43210));
-    join!(run_seeder(addr, "tests/zeroed.torrent"), run_leech(addr, "tests/zeroed.torrent"));
+    join!(
+        run_seeder(addr, "tests/assets/zeroed_example.torrent"),
+        run_leech(addr, "tests/assets/zeroed_example.torrent")
+    );
 }
 
 async fn run_peer(
@@ -240,14 +243,14 @@ async fn run_peer(
 
 #[allow(clippy::blocks_in_if_conditions)]
 #[tokio::test]
-async fn test_pass_torrent_from_peer_to_peer() {
+async fn test_pass_full_torrent_from_peer_to_peer() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent::ops::tests", log::LevelFilter::Info)
         .init();
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43211));
-    let metainfo = "tests/zeroed_test.torrent";
+    let metainfo = "tests/assets/zeroed_test.torrent";
 
     let connecting_peer = async {
         let (download, upload, mut handle, peer_ip) =

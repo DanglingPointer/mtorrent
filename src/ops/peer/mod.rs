@@ -32,10 +32,10 @@ async fn from_incoming_connection(
         pwp::channels_from_incoming(&local_peer_id, Some(&info_hash), stream)
             .await
             .map_err(|e| {
-                log::error!("Failed to establish an incoming connection to {remote_ip}: {e}");
+                log::error!("Failed to establish an incoming connection with {remote_ip}: {e}");
                 e
             })?;
-    log::info!("Successfully established an incoming connection to {remote_ip}");
+    log::info!("Successfully established an incoming connection with {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
         if let Err(e) = runner.run().await {
@@ -71,6 +71,7 @@ async fn from_outgoing_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
 
+    log::debug!("Connecting to {remote_ip}...");
     const MAX_RETRY_COUNT: usize = 3;
     let mut attempts_left = MAX_RETRY_COUNT;
     let mut reconnect_interval = sec!(2);
