@@ -8,6 +8,7 @@ fn main() -> io::Result<()> {
         .with_threads(true)
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
+        // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
 

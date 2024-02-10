@@ -120,21 +120,26 @@ async fn run_download(
     loop {
         match peer {
             download::Peer::Idle(idling_peer) => {
-                if with_ctx!(|ctx| ctrl::should_activate_download(&remote_ip, ctx)) {
-                    let seeder = download::activate(idling_peer).await?;
-                    peer = seeder.into();
-                } else {
-                    peer = download::linger(idling_peer.into(), sec!(10)).await?;
+                match with_ctx!(|ctx| ctrl::idle_download_next_action(&remote_ip, ctx)) {
+                    ctrl::IdleDownloadAction::ActivateDownload => {
+                        peer = download::activate(idling_peer).await?.into();
+                    }
+                    ctrl::IdleDownloadAction::WaitForUpdates(timeout) => {
+                        peer = download::linger(idling_peer.into(), timeout).await?;
+                    }
                 }
             }
             download::Peer::Seeder(seeding_peer) => {
-                let requests = with_ctx!(|ctx| ctrl::pieces_to_request(&remote_ip, ctx));
-                if !requests.is_empty() {
-                    peer = download::get_pieces(seeding_peer, requests.iter()).await?;
-                } else if with_ctx!(|ctx| ctrl::should_deactivate_download(&remote_ip, ctx)) {
-                    peer = download::deactivate(seeding_peer).await?.into();
-                } else {
-                    peer = download::linger(seeding_peer.into(), sec!(10)).await?;
+                match with_ctx!(|ctx| ctrl::active_download_next_action(&remote_ip, ctx)) {
+                    ctrl::SeederDownloadAction::RequestPieces(requests) => {
+                        peer = download::get_pieces(seeding_peer, requests.iter()).await?;
+                    }
+                    ctrl::SeederDownloadAction::WaitForUpdates(timeout) => {
+                        peer = download::linger(seeding_peer.into(), timeout).await?;
+                    }
+                    ctrl::SeederDownloadAction::DeactivateDownload => {
+                        peer = download::deactivate(seeding_peer).await?.into();
+                    }
                 }
             }
         }
@@ -151,19 +156,23 @@ async fn run_upload(
         peer = upload::update_peer(peer).await?;
         match peer {
             upload::Peer::Idle(idling_peer) => {
-                if with_ctx!(|ctx| ctrl::should_activate_upload(&remote_ip, ctx)) {
-                    let leech = upload::activate(idling_peer).await?;
-                    peer = leech.into();
-                } else {
-                    peer = upload::linger(idling_peer, sec!(10)).await?;
+                match with_ctx!(|ctx| ctrl::idle_upload_next_action(&remote_ip, ctx)) {
+                    ctrl::IdleUploadAction::ActivateUpload => {
+                        peer = upload::activate(idling_peer).await?.into();
+                    }
+                    ctrl::IdleUploadAction::Linger(timeout) => {
+                        peer = upload::linger(idling_peer, timeout).await?;
+                    }
                 }
             }
             upload::Peer::Leech(leeching_peer) => {
-                if with_ctx!(|ctx| ctrl::should_stop_upload(&remote_ip, ctx)) {
-                    let idling_peer = upload::deactivate(leeching_peer).await?;
-                    peer = upload::linger(idling_peer, sec!(10)).await?;
-                } else {
-                    peer = upload::serve_pieces(leeching_peer, sec!(30)).await?;
+                match with_ctx!(|ctx| ctrl::active_upload_next_action(&remote_ip, ctx)) {
+                    ctrl::LeechUploadAction::DeactivateUpload => {
+                        peer = upload::deactivate(leeching_peer).await?.into();
+                    }
+                    ctrl::LeechUploadAction::Serve(duration) => {
+                        peer = upload::serve_pieces(leeching_peer, duration).await?;
+                    }
                 }
             }
         }

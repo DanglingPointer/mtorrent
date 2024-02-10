@@ -65,6 +65,7 @@ pub struct PeerState {
     pub download: DownloadState,
     pub upload: UploadState,
     pub last_download_time: Instant,
+    pub last_upload_time: Instant,
 }
 
 impl Default for PeerState {
@@ -73,6 +74,7 @@ impl Default for PeerState {
             download: Default::default(),
             upload: Default::default(),
             last_download_time: Instant::now(),
+            last_upload_time: Instant::now(),
         }
     }
 }
@@ -101,6 +103,9 @@ impl PeerStates {
 
     pub fn update_upload(&mut self, remote_ip: &SocketAddr, new_state: &UploadState) {
         let state = self.peers.entry(*remote_ip).or_default();
+        if new_state.bytes_sent > state.upload.bytes_sent {
+            state.last_upload_time = Instant::now();
+        }
         state.upload = new_state.clone();
         if state.upload.peer_interested && !state.upload.am_choking {
             self.leeches.insert(*remote_ip);
@@ -122,7 +127,6 @@ impl PeerStates {
         self.peers.get(peer_ip)
     }
 
-    #[allow(dead_code)]
     pub fn seeders_count(&self) -> usize {
         self.seeders.len()
     }
