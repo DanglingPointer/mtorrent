@@ -1,8 +1,8 @@
 #![cfg(not(target_family = "windows"))]
-use mtorrent::data;
 use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
 use mtorrent::utils::meta;
+use mtorrent::utils::startup;
 use std::path::Path;
 use std::{fs, io};
 
@@ -247,23 +247,24 @@ fn test_read_torrent_file_without_announce_list() {
     assert!(http_iter.next().is_none());
 }
 
-#[test]
-fn test_read_metainfo_and_spawn_files() {
-    fn count_files(dir: &Path) -> io::Result<usize> {
-        let mut count = 0usize;
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    count += count_files(&path)?;
-                } else {
-                    count += 1;
-                }
+fn count_files(dir: impl AsRef<Path>) -> io::Result<usize> {
+    let mut count = 0usize;
+    if dir.as_ref().is_dir() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                count += count_files(&path)?;
+            } else {
+                count += 1;
             }
         }
-        Ok(count)
     }
+    Ok(count)
+}
+
+#[test]
+fn test_read_metainfo_and_spawn_files() {
     let data = fs::read("tests/assets/example.torrent").unwrap();
     let entity = benc::Element::from_bytes(&data).unwrap();
     if let benc::Element::Dictionary(ref dict) = entity {
@@ -273,23 +274,53 @@ fn test_read_metainfo_and_spawn_files() {
     }
     let info = meta::Metainfo::try_from(entity).unwrap();
 
-    let initial_file_count = count_files(".".as_ref()).unwrap();
     let parent_dir = "test_read_metainfo_and_spawn_files_output";
+    let filedir = Path::new(parent_dir).join("files");
+    let storage = startup::create_storage(&info, &filedir).unwrap();
 
-    let filekeeper = data::Storage::new(parent_dir, info.files().unwrap());
-
-    assert_eq!(info.files().unwrap().count(), count_files(parent_dir.as_ref()).unwrap());
+    assert_eq!(info.files().unwrap().count(), count_files(parent_dir).unwrap());
 
     for (length, path) in info.files().unwrap() {
-        let path = Path::new(parent_dir).join(path);
+        let path = Path::new(&filedir).join(path);
         let file = fs::File::open(&path)
             .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
         assert_eq!(length as u64, file.metadata().unwrap().len());
     }
 
-    fs::remove_dir_all(parent_dir).unwrap();
-    drop(filekeeper);
+    fs::remove_dir_all(&filedir).unwrap();
+    drop(storage);
 
-    let final_file_count = count_files(".".as_ref()).unwrap();
-    assert_eq!(initial_file_count, final_file_count);
+    assert_eq!(0, count_files(parent_dir).unwrap());
+
+    fs::remove_dir_all(parent_dir).unwrap();
+}
+
+#[test]
+fn test_read_metainfo_and_spawn_single_file() {
+    let data = fs::read("tests/assets/pcap.torrent").unwrap();
+    let entity = benc::Element::from_bytes(&data).unwrap();
+    if let benc::Element::Dictionary(ref dict) = entity {
+        assert!(!dict.is_empty());
+    } else {
+        panic!("Not a dictionary");
+    }
+    let info = meta::Metainfo::try_from(entity).unwrap();
+
+    let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
+    let filedir = Path::new(parent_dir).join("files");
+    let storage = startup::create_storage(&info, &filedir).unwrap();
+
+    assert_eq!(1, count_files(parent_dir).unwrap());
+
+    let path = Path::new(&filedir).join(info.name().unwrap());
+    let file = fs::File::open(&path)
+        .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
+    assert_eq!(info.length().unwrap() as u64, file.metadata().unwrap().len());
+
+    fs::remove_dir_all(&filedir).unwrap();
+    drop(storage);
+
+    assert_eq!(0, count_files(parent_dir).unwrap());
+
+    fs::remove_dir_all(parent_dir).unwrap();
 }

@@ -1,11 +1,14 @@
 use futures::future;
 use mtorrent::utils::{self, startup};
 use mtorrent::{data, pwp, sec};
-use rand::random;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
+use std::{fs, iter};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::{task, time};
@@ -154,7 +157,11 @@ enum ConnectionMode {
     },
 }
 
-async fn launch_seeders(metainfo_file: &str, mode: ConnectionMode) {
+async fn launch_seeders(
+    metainfo_file: impl AsRef<Path>,
+    files_parentdir: impl AsRef<Path>,
+    mode: ConnectionMode,
+) {
     let metainfo = startup::read_metainfo(metainfo_file).unwrap();
 
     let total_length = metainfo
@@ -168,8 +175,8 @@ async fn launch_seeders(metainfo_file: &str, mode: ConnectionMode) {
         total_length,
     ));
 
-    let files_dir = format!("seeders_input_{:?}", random::<u32>());
-    let (storage, storage_server) = startup::create_storage(&metainfo, &files_dir).unwrap();
+    assert!(files_parentdir.as_ref().is_dir());
+    let (storage, storage_server) = startup::create_storage(&metainfo, &files_parentdir).unwrap();
 
     let task_set = task::LocalSet::new();
     task_set.spawn_local(async move {
@@ -205,110 +212,172 @@ async fn launch_seeders(metainfo_file: &str, mode: ConnectionMode) {
                 .await;
         }
     }
-
-    std::fs::remove_dir_all(files_dir).unwrap();
 }
 
-#[ignore]
-#[tokio::test]
-async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
-    let metainfo_file = "tests/assets/zeroed_example.torrent";
-    let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
-
-    let seeder_ips = (50000u16..50050u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
-
-    let mut mtorrent = {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
-        cmd.arg(metainfo_file).arg(output_dir);
-        for ip in &seeder_ips {
-            cmd.arg(ip.to_string());
-        }
-        cmd.spawn().expect("failed to execute 'mtorrentv2'")
+fn compare_input_and_output(input_dir: impl AsRef<Path>, output_dir: impl AsRef<Path>, name: &str) {
+    let output_dir = {
+        let mut b = PathBuf::new();
+        b.push(output_dir);
+        b.push(name);
+        b
     };
 
-    launch_seeders(
-        metainfo_file,
-        ConnectionMode::Incoming {
-            listen_addrs: seeder_ips,
-        },
-    )
-    .await;
-
-    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
-    assert!(mtorrent_ecode.success());
-
-    std::fs::remove_dir_all(output_dir).unwrap();
-}
-
-#[tokio::test]
-async fn test_accept_50_seeders_and_download_multifile_torrent() {
-    let metainfo_file = "tests/assets/zeroed_example.torrent";
-    let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
-
-    let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
-        .arg(metainfo_file)
-        .arg(output_dir)
-        .spawn()
-        .expect("failed to execute 'mtorrentv2'");
-
-    launch_seeders(metainfo_file, ConnectionMode::Outgoing { num_seeders: 50 }).await;
-
-    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
-    assert!(mtorrent_ecode.success());
-
-    std::fs::remove_dir_all(output_dir).unwrap();
-}
-
-#[ignore]
-#[tokio::test]
-async fn test_accept_50_seeders_and_download_monofile_torrent() {
-    let metainfo_file = "tests/assets/zeroed_ubuntu.torrent";
-    let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
-
-    let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
-        .arg(metainfo_file)
-        .arg(output_dir)
-        .spawn()
-        .expect("failed to execute 'mtorrentv2'");
-
-    launch_seeders(metainfo_file, ConnectionMode::Outgoing { num_seeders: 50 }).await;
-
-    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
-    assert!(mtorrent_ecode.success());
-
-    std::fs::remove_dir_all(output_dir).unwrap();
-}
-
-#[tokio::test]
-async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
-    let metainfo_file = "tests/assets/zeroed_ubuntu.torrent";
-    let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
-
-    let seeder_ips = (50050u16..50100u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
-
-    let mut mtorrent = {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
-        cmd.arg(metainfo_file).arg(output_dir);
-        for ip in &seeder_ips {
-            cmd.arg(ip.to_string());
+    fn verify_files_identical(p1: impl AsRef<Path>, p2: impl AsRef<Path>) {
+        let name1 = p1.as_ref().to_string_lossy().into_owned();
+        let name2 = p2.as_ref().to_string_lossy().into_owned();
+        let mut f1 = File::open(p1).unwrap();
+        let mut f2 = File::open(p2).unwrap();
+        let buff1: &mut [u8] = &mut [0; 1024];
+        let buff2: &mut [u8] = &mut [0; 1024];
+        loop {
+            match (f1.read(buff1), f2.read(buff2)) {
+                (Ok(f1_read_len), Ok(f2_read_len)) => {
+                    if f1_read_len != f2_read_len {
+                        panic!("{} and {} are different", name1, name2);
+                    }
+                    if f1_read_len == 0 {
+                        break;
+                    }
+                    if buff1[0..f1_read_len] != buff2[0..f2_read_len] {
+                        panic!("{} and {} are different", name1, name2);
+                    }
+                }
+                _ => panic!(),
+            }
         }
-        cmd.spawn().expect("failed to execute 'mtorrentv2'")
-    };
+    }
+    for (input, output) in
+        iter::zip(fs::read_dir(input_dir).unwrap(), fs::read_dir(output_dir).unwrap())
+    {
+        let input_path = input.unwrap().path();
+        let output_path = output.unwrap().path();
 
-    launch_seeders(
-        metainfo_file,
-        ConnectionMode::Incoming {
-            listen_addrs: seeder_ips,
-        },
-    )
-    .await;
+        if input_path.is_dir() && output_path.is_dir() {
+            compare_input_and_output(input_path, output_path, "");
+        } else if input_path.is_file() && output_path.is_file() {
+            verify_files_identical(input_path, output_path);
+        } else {
+            panic!();
+        }
+    }
+}
 
-    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
-    assert!(mtorrent_ecode.success());
+#[tokio::test]
+async fn test_download_multifile_torrent_from_50_seeders() {
+    // these 2 tests need to run sequentially because mtorrent
+    // always listens on the same port for a given torrent
+    {
+        let metainfo_file = "tests/assets/screenshots.torrent";
+        let data_dir = "tests/assets/screenshots";
+        let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
+        let torrent_name = "screenshots";
 
-    std::fs::remove_dir_all(output_dir).unwrap();
+        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+            .arg(metainfo_file)
+            .arg(output_dir)
+            .spawn()
+            .expect("failed to execute 'mtorrentv2'");
+
+        launch_seeders(metainfo_file, data_dir, ConnectionMode::Outgoing { num_seeders: 50 }).await;
+
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        assert!(mtorrent_ecode.success());
+
+        compare_input_and_output(data_dir, output_dir, torrent_name);
+        std::fs::remove_dir_all(output_dir).unwrap();
+    }
+    {
+        let metainfo_file = "tests/assets/screenshots.torrent";
+        let data_dir = "tests/assets/screenshots";
+        let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
+        let torrent_name = "screenshots";
+
+        let seeder_ips = (50000u16..50050u16)
+            .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+            .collect::<Vec<_>>();
+
+        let mut mtorrent = {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
+            cmd.arg(metainfo_file).arg(output_dir);
+            for ip in &seeder_ips {
+                cmd.arg(ip.to_string());
+            }
+            cmd.spawn().expect("failed to execute 'mtorrentv2'")
+        };
+
+        launch_seeders(
+            metainfo_file,
+            data_dir,
+            ConnectionMode::Incoming {
+                listen_addrs: seeder_ips,
+            },
+        )
+        .await;
+
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        assert!(mtorrent_ecode.success());
+
+        compare_input_and_output(data_dir, output_dir, torrent_name);
+        std::fs::remove_dir_all(output_dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_download_monofile_torrent_from_50_seeders() {
+    // these 2 tests need to run sequentially because mtorrent
+    // always listens on the same port for a given torrent
+    {
+        let metainfo_file = "tests/assets/pcap.torrent";
+        let data_dir = "tests/assets/pcap";
+        let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
+        let torrent_name = "pwp.pcapng";
+
+        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+            .arg(metainfo_file)
+            .arg(output_dir)
+            .spawn()
+            .expect("failed to execute 'mtorrentv2'");
+
+        launch_seeders(metainfo_file, data_dir, ConnectionMode::Outgoing { num_seeders: 50 }).await;
+
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        assert!(mtorrent_ecode.success());
+
+        compare_input_and_output(data_dir, output_dir, torrent_name);
+        std::fs::remove_dir_all(output_dir).unwrap();
+    }
+    {
+        let metainfo_file = "tests/assets/pcap.torrent";
+        let data_dir = "tests/assets/pcap";
+        let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
+        let torrent_name = "pwp.pcapng";
+
+        let seeder_ips = (50050u16..50100u16)
+            .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+            .collect::<Vec<_>>();
+
+        let mut mtorrent = {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
+            cmd.arg(metainfo_file).arg(output_dir);
+            for ip in &seeder_ips {
+                cmd.arg(ip.to_string());
+            }
+            cmd.spawn().expect("failed to execute 'mtorrentv2'")
+        };
+
+        launch_seeders(
+            metainfo_file,
+            data_dir,
+            ConnectionMode::Incoming {
+                listen_addrs: seeder_ips,
+            },
+        )
+        .await;
+
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        assert!(mtorrent_ecode.success());
+
+        compare_input_and_output(data_dir, output_dir, torrent_name);
+        std::fs::remove_dir_all(output_dir).unwrap();
+    }
 }
