@@ -135,28 +135,20 @@ pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-// pub async fn remove_interest(peer: IdlePeer) -> io::Result<IdlePeer> {
-//     let mut inner = peer.0;
-//     debug_assert!(inner.state.am_interested);
-//     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
-//     inner.state.am_interested = false;
-//     update_state!(inner);
-//     Ok(IdlePeer(inner))
-// }
-
 pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = inner!(peer);
     let start_time = Instant::now();
-    let mut state_changed = false;
-    while !state_changed && start_time.elapsed() < timeout {
+    loop {
         match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
             Ok(msg) => {
-                state_changed = update_state_with_msg(&mut inner, &msg);
+                if update_state_with_msg(&mut inner, &msg) {
+                    break;
+                }
                 if matches!(msg, pwp::UploaderMessage::Block(_, _)) {
                     log::debug!("Received block from {} while idle", inner.rx.remote_ip());
                 }
             }
-            Err(pwp::ChannelError::Timeout) => (),
+            Err(pwp::ChannelError::Timeout) => break,
             Err(e) => return Err(e.into()),
         }
     }

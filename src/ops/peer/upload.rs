@@ -149,43 +149,27 @@ pub async fn deactivate(peer: LeechingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-// pub async fn unchoke(peer: IdlePeer) -> io::Result<Peer> {
-//     let mut inner = peer.0;
-//     debug_assert!(inner.state.am_choking);
-//     inner.tx.send_message(pwp::UploaderMessage::Unchoke).await?;
-//     inner.state.am_choking = false;
-//     update_state!(inner);
-//     Ok(to_enum!(inner))
-// }
-
 pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_choking || !inner.state.peer_interested);
     let start_time = Instant::now();
-    let mut state_changed = false;
-    while !state_changed && start_time.elapsed() < timeout {
+    loop {
         match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
             Ok(msg) => {
-                state_changed = update_state_with_msg!(&mut inner, &msg);
-                match &msg {
-                    pwp::DownloaderMessage::Request(info) => {
-                        log::warn!(
-                            "{}: Received request ({}) while choking",
-                            inner.tx.remote_ip(),
-                            info
-                        )
+                if update_state_with_msg!(&mut inner, &msg) {
+                    break;
+                }
+                match msg {
+                    pwp::DownloaderMessage::Request(_) => {
+                        log::warn!("Received request from {} while idle", inner.rx.remote_ip())
                     }
-                    pwp::DownloaderMessage::Cancel(info) => {
-                        log::warn!(
-                            "{}: Received cancel ({}) while choking",
-                            inner.tx.remote_ip(),
-                            info
-                        )
+                    pwp::DownloaderMessage::Cancel(_) => {
+                        log::warn!("Received cancel from {} while idle", inner.rx.remote_ip())
                     }
                     _ => (),
                 }
             }
-            Err(pwp::ChannelError::Timeout) => (),
+            Err(pwp::ChannelError::Timeout) => break,
             Err(e) => return Err(e.into()),
         }
     }
