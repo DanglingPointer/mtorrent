@@ -19,6 +19,7 @@ Lightweight command line Bittorrent client in Rust. Based on Tokio (but without 
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
 - [ ] [Extension Protocol](https://www.bittorrent.org/beps/bep_0010.html)
 - [ ] [PEX](https://www.bittorrent.org/beps/bep_0011.html)
+- [ ] [BitTorrent v2](http://bittorrent.org/beps/bep_0052.html)
 
 ## Building
 
