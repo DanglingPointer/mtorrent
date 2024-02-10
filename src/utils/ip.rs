@@ -26,7 +26,7 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)
         .find_map(|addr| match addr {
-            IpAddr::V4(ipv4) => Some(*ipv4),
+            std::net::IpAddr::V4(ipv4) => Some(*ipv4),
             _ => None,
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
