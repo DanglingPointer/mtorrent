@@ -1,6 +1,7 @@
 use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use tokio::time::Instant;
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
@@ -60,9 +61,25 @@ impl fmt::Display for UploadState {
     }
 }
 
+pub struct PeerState {
+    pub download: DownloadState,
+    pub upload: UploadState,
+    pub last_download_time: Instant,
+}
+
+impl Default for PeerState {
+    fn default() -> Self {
+        Self {
+            download: Default::default(),
+            upload: Default::default(),
+            last_download_time: Instant::now(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct PeerStates {
-    peers: HashMap<SocketAddr, (DownloadState, UploadState)>,
+    peers: HashMap<SocketAddr, PeerState>,
     seeders: HashSet<SocketAddr>,
     leeches: HashSet<SocketAddr>,
     previously_uploaded_bytes: usize,
@@ -70,9 +87,12 @@ pub struct PeerStates {
 
 impl PeerStates {
     pub fn update_download(&mut self, remote_ip: &SocketAddr, new_state: &DownloadState) {
-        let (state, _) = self.peers.entry(*remote_ip).or_default();
-        *state = new_state.clone();
-        if state.am_interested && !state.peer_choking {
+        let state = self.peers.entry(*remote_ip).or_default();
+        if new_state.bytes_received > state.download.bytes_received {
+            state.last_download_time = Instant::now();
+        }
+        state.download = new_state.clone();
+        if state.download.am_interested && !state.download.peer_choking {
             self.seeders.insert(*remote_ip);
         } else {
             self.seeders.remove(remote_ip);
@@ -80,9 +100,9 @@ impl PeerStates {
     }
 
     pub fn update_upload(&mut self, remote_ip: &SocketAddr, new_state: &UploadState) {
-        let (_, state) = self.peers.entry(*remote_ip).or_default();
-        *state = new_state.clone();
-        if state.peer_interested && !state.am_choking {
+        let state = self.peers.entry(*remote_ip).or_default();
+        state.upload = new_state.clone();
+        if state.upload.peer_interested && !state.upload.am_choking {
             self.leeches.insert(*remote_ip);
         } else {
             self.leeches.remove(remote_ip);
@@ -90,16 +110,16 @@ impl PeerStates {
     }
 
     pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
-        if let Some((_download, upload)) = self.peers.get(remote_ip) {
-            self.previously_uploaded_bytes += upload.bytes_sent;
+        if let Some(state) = self.peers.get(remote_ip) {
+            self.previously_uploaded_bytes += state.upload.bytes_sent;
             self.peers.remove(remote_ip);
             self.seeders.remove(remote_ip);
             self.leeches.remove(remote_ip);
         }
     }
 
-    pub fn get(&self, peer_ip: &SocketAddr) -> Option<(&DownloadState, &UploadState)> {
-        self.peers.get(peer_ip).map(|(download, upload)| (download, upload))
+    pub fn get(&self, peer_ip: &SocketAddr) -> Option<&PeerState> {
+        self.peers.get(peer_ip)
     }
 
     #[allow(dead_code)]
@@ -111,21 +131,21 @@ impl PeerStates {
         self.leeches.len()
     }
 
-    pub fn all(&self) -> impl Iterator<Item = (&SocketAddr, &DownloadState, &UploadState)> {
-        self.peers.iter().map(|(addr, (download, upload))| (addr, download, upload))
+    pub fn all(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
+        self.peers.iter()
     }
 
     pub fn uploaded_bytes(&self) -> usize {
         self.previously_uploaded_bytes
-            + self.peers.values().map(|(_, upload)| upload.bytes_sent).sum::<usize>()
+            + self.peers.values().map(|state| state.upload.bytes_sent).sum::<usize>()
     }
 }
 
 impl fmt::Display for PeerStates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected peers ({}):", self.peers.len())?;
-        for (ip, (download, upload)) in &self.peers {
-            write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, download, " ", upload)?;
+        for (ip, state) in &self.peers {
+            write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, state.download, " ", state.upload)?;
         }
         Ok(())
     }

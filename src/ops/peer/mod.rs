@@ -131,8 +131,10 @@ async fn run_download(
                 let requests = with_ctx!(|ctx| ctrl::pieces_to_request(&remote_ip, ctx));
                 if !requests.is_empty() {
                     peer = download::get_pieces(seeding_peer, requests.iter()).await?;
-                } else {
+                } else if with_ctx!(|ctx| ctrl::should_deactivate_download(&remote_ip, ctx)) {
                     peer = download::deactivate(seeding_peer).await?.into();
+                } else {
+                    peer = download::linger(seeding_peer.into(), sec!(10)).await?;
                 }
             }
         }
