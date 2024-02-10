@@ -63,7 +63,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        log::trace!("Sending announce request");
+        log::debug!("Sending announce request to {}", self.socket.peer_addr()?);
 
         Self::do_request(
             &self.socket,

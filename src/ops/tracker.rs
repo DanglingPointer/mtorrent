@@ -181,6 +181,10 @@ async fn run_tracker(
                     response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
                 });
                 let interval = cmp::min(sec!(300), response.interval);
+                log::info!(
+                    "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
+                    response.peers
+                );
                 callback(response);
                 time::sleep(interval).await;
             }

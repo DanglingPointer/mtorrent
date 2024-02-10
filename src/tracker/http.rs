@@ -52,7 +52,7 @@ pub async fn do_announce_request(
 
     let response_data = client.get(announce_url).send().await?.bytes().await?;
     let entity = benc::Element::from_bytes(&response_data)?;
-    log::debug!("Announce response: {entity}");
+    log::debug!("Received announce response: {entity}");
 
     let content = AnnounceResponseContent::from_benc(entity)
         .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".to_string())))?;
