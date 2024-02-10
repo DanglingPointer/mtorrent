@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
-use std::{fs, iter};
+use std::{fs, io, iter};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::{task, time};
@@ -103,7 +103,7 @@ async fn run_one_seeder(
             _ => (),
         }
         if remote_pieces.iter().all(|has_piece| has_piece == true) {
-            println!("Seeder {index} exiting: remote as all pieces");
+            println!("Seeder {index} exiting: remote has all pieces");
             return;
         }
     }
@@ -116,12 +116,22 @@ async fn listening_seeder(
     storage: data::StorageClient,
     info: Rc<data::PieceInfo>,
 ) {
-    let listener = TcpListener::bind(listening_addr).await.unwrap();
-    let (stream, remote_addr) = listener.accept().await.unwrap();
-    println!("Seeder {} on {} accepted connection from {}", index, listening_addr, remote_addr);
-    let (download_chans, upload_chans, runner) =
-        pwp::channels_from_incoming(&[index + b'0'; 20], None, stream).await.unwrap();
-    run_one_seeder(index, download_chans, upload_chans, runner, storage, info).await;
+    match TcpListener::bind(listening_addr).await {
+        Ok(listener) => {
+            let (stream, remote_addr) = listener.accept().await.unwrap();
+            println!(
+                "Seeder {} on {} accepted connection from {}",
+                index, listening_addr, remote_addr
+            );
+            let (download_chans, upload_chans, runner) =
+                pwp::channels_from_incoming(&[index + b'0'; 20], None, stream).await.unwrap();
+            run_one_seeder(index, download_chans, upload_chans, runner, storage, info).await;
+        }
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Couldn't create listener on {listening_addr}")
+        }
+        Err(e) => panic!("{e}"),
+    }
 }
 
 async fn connecting_seeder(
