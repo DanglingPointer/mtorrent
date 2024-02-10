@@ -120,7 +120,7 @@ async fn listening_seeder(
     let (stream, remote_addr) = listener.accept().await.unwrap();
     println!("Seeder {} on {} accepted connection from {}", index, listening_addr, remote_addr);
     let (download_chans, upload_chans, runner) =
-        pwp::channels_from_incoming(&[index; 20], None, stream).await.unwrap();
+        pwp::channels_from_incoming(&[index + b'0'; 20], None, stream).await.unwrap();
     run_one_seeder(index, download_chans, upload_chans, runner, storage, info).await;
 }
 
@@ -135,7 +135,7 @@ async fn connecting_seeder(
     let start_time = time::Instant::now();
     let (download_chans, upload_chans, runner) = loop {
         let connect_result =
-            pwp::channels_from_outgoing(&[index; 20], &info_hash, remote_ip, None).await;
+            pwp::channels_from_outgoing(&[index + b'0'; 20], &info_hash, remote_ip, None).await;
         if let Ok(result) = connect_result {
             break result;
         }

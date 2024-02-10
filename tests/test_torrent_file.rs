@@ -238,12 +238,12 @@ fn test_read_torrent_file_without_announce_list() {
     let info = meta::Metainfo::try_from(entity).unwrap();
 
     let announce = info.announce().unwrap();
-    assert_eq!("http://0.0.0.0:8000/announce", announce, "announce: {}", announce);
+    assert_eq!("http://localhost:8000/announce", announce, "announce: {}", announce);
 
     assert!(info.announce_list().is_none());
 
     let mut http_iter = utils::get_http_tracker_addrs(&info).into_iter();
-    assert_eq!("http://0.0.0.0:8000/announce", http_iter.next().unwrap());
+    assert_eq!("http://localhost:8000/announce", http_iter.next().unwrap());
     assert!(http_iter.next().is_none());
 }
 
