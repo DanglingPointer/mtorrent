@@ -6,7 +6,7 @@ use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process;
 use std::rc::Rc;
 use std::{fs, iter};
 use tokio::net::TcpListener;
@@ -214,7 +214,12 @@ async fn launch_seeders(
     }
 }
 
-fn start_tracker<'a>(dir: &str, port: u16, peers: impl Iterator<Item = &'a SocketAddr>) {
+#[must_use]
+fn start_tracker<'a>(
+    dir: &str,
+    port: u16,
+    peers: impl Iterator<Item = &'a SocketAddr>,
+) -> process::Child {
     fn get_peers_entry(addr: &SocketAddr) -> benc::Element {
         let ip_key = benc::Element::from("ip");
         let ip_value = benc::Element::from(addr.ip().to_string().as_str());
@@ -246,11 +251,11 @@ fn start_tracker<'a>(dir: &str, port: u16, peers: impl Iterator<Item = &'a Socke
     announce.write_all(&response.to_bytes()).unwrap();
     announce.flush().unwrap();
 
-    let _http_server = Command::new("python3")
+    process::Command::new("python3")
         .args(["-m", "http.server", &port.to_string()])
         .current_dir(dir)
         .spawn()
-        .unwrap();
+        .unwrap()
 }
 
 fn compare_input_and_output(input_dir: impl AsRef<Path>, output_dir: impl AsRef<Path>, name: &str) {
@@ -311,7 +316,7 @@ async fn test_download_multifile_torrent_from_50_seeders() {
         let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
         let torrent_name = "screenshots";
 
-        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
@@ -336,9 +341,9 @@ async fn test_download_multifile_torrent_from_50_seeders() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        start_tracker(output_dir, tracker_port, seeder_ips.iter());
+        let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
@@ -356,6 +361,8 @@ async fn test_download_multifile_torrent_from_50_seeders() {
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
 
+        tracker.kill().unwrap();
+
         compare_input_and_output(data_dir, output_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
     }
@@ -371,7 +378,7 @@ async fn test_download_monofile_torrent_from_50_seeders() {
         let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
         let torrent_name = "pwp.pcapng";
 
-        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
@@ -396,9 +403,9 @@ async fn test_download_monofile_torrent_from_50_seeders() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        start_tracker(output_dir, tracker_port, seeder_ips.iter());
+        let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
@@ -415,6 +422,8 @@ async fn test_download_monofile_torrent_from_50_seeders() {
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
+
+        tracker.kill().unwrap();
 
         compare_input_and_output(data_dir, output_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
