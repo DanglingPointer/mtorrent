@@ -1,4 +1,3 @@
-#![cfg(not(target_family = "windows"))]
 use mtorrent::tracker::utils;
 use mtorrent::utils::benc;
 use mtorrent::utils::meta;
@@ -88,131 +87,131 @@ fn test_read_example_torrent_file() {
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(66667, length);
-        assert_eq!("Subs/10_French.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/10_French.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67729, length);
-        assert_eq!("Subs/11_German.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/11_German.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(98430, length);
-        assert_eq!("Subs/12_Greek.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/12_Greek.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(89001, length);
-        assert_eq!("Subs/13_Hebrew.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/13_Hebrew.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(66729, length);
-        assert_eq!("Subs/14_hrv.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/14_hrv.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(69251, length);
-        assert_eq!("Subs/15_Hungarian.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/15_Hungarian.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67897, length);
-        assert_eq!("Subs/16_Indonesian.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/16_Indonesian.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67035, length);
-        assert_eq!("Subs/17_Italian.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/17_Italian.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(68310, length);
-        assert_eq!("Subs/18_Japanese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/18_Japanese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(79479, length);
-        assert_eq!("Subs/19_Korean.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/19_Korean.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67367, length);
-        assert_eq!("Subs/20_may.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/20_may.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(63337, length);
-        assert_eq!("Subs/21_Bokmal.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/21_Bokmal.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(68715, length);
-        assert_eq!("Subs/22_Polish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/22_Polish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67838, length);
-        assert_eq!("Subs/23_Portuguese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/23_Portuguese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(69077, length);
-        assert_eq!("Subs/24_Portuguese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/24_Portuguese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(70967, length);
-        assert_eq!("Subs/25_Romanian.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/25_Romanian.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(90311, length);
-        assert_eq!("Subs/26_Russian.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/26_Russian.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67143, length);
-        assert_eq!("Subs/27_Spanish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/27_Spanish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(67068, length);
-        assert_eq!("Subs/28_Spanish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/28_Spanish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(63229, length);
-        assert_eq!("Subs/29_Swedish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/29_Swedish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(97509, length);
-        assert_eq!("Subs/2_Arabic.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/2_Arabic.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(126859, length);
-        assert_eq!("Subs/30_Thai.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/30_Thai.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(69519, length);
-        assert_eq!("Subs/31_Turkish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/31_Turkish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(87216, length);
-        assert_eq!("Subs/32_ukr.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/32_ukr.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(86745, length);
-        assert_eq!("Subs/33_Vietnamese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/33_Vietnamese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(71908, length);
-        assert_eq!("Subs/3_Chinese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/3_Chinese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(71949, length);
-        assert_eq!("Subs/4_Chinese.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/4_Chinese.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(69054, length);
-        assert_eq!("Subs/5_Czech.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/5_Czech.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(64987, length);
-        assert_eq!("Subs/6_Danish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/6_Danish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(60512, length);
-        assert_eq!("Subs/7_Dutch.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/7_Dutch.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(81102, length);
-        assert_eq!("Subs/8_English.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/8_English.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(62658, length);
-        assert_eq!("Subs/9_Finnish.srt", path.to_string_lossy());
+        assert_eq!(Path::new("Subs/9_Finnish.srt"), path);
 
         let (length, path) = iter.next().unwrap();
         assert_eq!(1397575464, length);
