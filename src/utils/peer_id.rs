@@ -15,8 +15,8 @@ impl PeerId {
         let s = format!("-mt0{}{}{}-", maj, min, pat).into_bytes();
         ret[..s.len()].copy_from_slice(&s);
 
-        for b in &mut ret[8..] {
-            *b = rand::thread_rng().gen_range(32..127); // non-control characters
+        for b in &mut ret[s.len()..] {
+            *b = rand::thread_rng().gen_range(33..127); // non-control characters and not space
         }
         Self(ret)
     }
