@@ -47,7 +47,6 @@ fn main() -> io::Result<()> {
         output_dir,
         pwp_runtime.runtime_handle(),
         storage_runtime.runtime_handle(),
-        args.filter_map(|arg| arg.parse().ok()),
     )?;
 
     Ok(())

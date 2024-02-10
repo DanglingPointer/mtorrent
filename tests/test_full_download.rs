@@ -1,9 +1,9 @@
 use futures::future;
-use mtorrent::utils::{self, startup};
+use mtorrent::utils::{self, benc, startup};
 use mtorrent::{data, pwp, sec};
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::Read;
+use std::collections::{BTreeMap, HashSet};
+use std::fs::{create_dir, File};
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -214,6 +214,45 @@ async fn launch_seeders(
     }
 }
 
+fn start_tracker<'a>(dir: &str, port: u16, peers: impl Iterator<Item = &'a SocketAddr>) {
+    fn get_peers_entry(addr: &SocketAddr) -> benc::Element {
+        let ip_key = benc::Element::from("ip");
+        let ip_value = benc::Element::from(addr.ip().to_string().as_str());
+        let port_key = benc::Element::from("port");
+        let port_value = benc::Element::Integer(addr.port() as i64);
+        let mut d = BTreeMap::new();
+        d.insert(ip_key, ip_value);
+        d.insert(port_key, port_value);
+        benc::Element::Dictionary(d)
+    }
+
+    let response = {
+        let peers_key = benc::Element::from("peers");
+        let peers_value = benc::Element::List(peers.map(get_peers_entry).collect());
+
+        let interval_key = benc::Element::from("interval");
+        let interval_value = benc::Element::Integer(1800);
+
+        let mut root = BTreeMap::new();
+        root.insert(peers_key, peers_value);
+        root.insert(interval_key, interval_value);
+        benc::Element::Dictionary(root)
+    };
+
+    let _ = create_dir(dir);
+
+    let announce_path: PathBuf = [dir, "announce"].into_iter().collect();
+    let mut announce = fs::File::create(announce_path).unwrap();
+    announce.write_all(&response.to_bytes()).unwrap();
+    announce.flush().unwrap();
+
+    let _http_server = Command::new("python3")
+        .args(["-m", "http.server", &port.to_string()])
+        .current_dir(dir)
+        .spawn()
+        .unwrap();
+}
+
 fn compare_input_and_output(input_dir: impl AsRef<Path>, output_dir: impl AsRef<Path>, name: &str) {
     let output_dir = {
         let mut b = PathBuf::new();
@@ -291,19 +330,19 @@ async fn test_download_multifile_torrent_from_50_seeders() {
         let data_dir = "tests/assets/screenshots";
         let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
         let torrent_name = "screenshots";
+        let tracker_port = 9000u16;
 
         let seeder_ips = (50000u16..50050u16)
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let mut mtorrent = {
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
-            cmd.arg(metainfo_file).arg(output_dir);
-            for ip in &seeder_ips {
-                cmd.arg(ip.to_string());
-            }
-            cmd.spawn().expect("failed to execute 'mtorrentv2'")
-        };
+        start_tracker(output_dir, tracker_port, seeder_ips.iter());
+
+        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+            .arg(metainfo_file)
+            .arg(output_dir)
+            .spawn()
+            .expect("failed to execute 'mtorrentv2'");
 
         launch_seeders(
             metainfo_file,
@@ -351,19 +390,19 @@ async fn test_download_monofile_torrent_from_50_seeders() {
         let data_dir = "tests/assets/pcap";
         let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
         let torrent_name = "pwp.pcapng";
+        let tracker_port = 8000u16;
 
         let seeder_ips = (50050u16..50100u16)
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let mut mtorrent = {
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"));
-            cmd.arg(metainfo_file).arg(output_dir);
-            for ip in &seeder_ips {
-                cmd.arg(ip.to_string());
-            }
-            cmd.spawn().expect("failed to execute 'mtorrentv2'")
-        };
+        start_tracker(output_dir, tracker_port, seeder_ips.iter());
+
+        let mut mtorrent = Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+            .arg(metainfo_file)
+            .arg(output_dir)
+            .spawn()
+            .expect("failed to execute 'mtorrentv2'");
 
         launch_seeders(
             metainfo_file,
