@@ -1,5 +1,6 @@
 use crate::utils::meta::Metainfo;
 use std::collections::HashSet;
+use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = SocketAddr> + '_ {
@@ -14,34 +15,36 @@ pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = Socke
 }
 
 pub fn get_udp_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
-    match metainfo.announce_list() {
-        Some(announce_list) => announce_list
-            .flatten()
-            .filter_map(|uri| {
-                let udp_addr = uri.strip_prefix("udp://")?;
-                if let Some(stripped) = udp_addr.strip_suffix("/announce") {
-                    Some(stripped.to_string())
-                } else {
-                    Some(udp_addr.to_string())
-                }
-            })
-            .collect(),
-        None => Default::default(),
+    fn filter_uri(uri: &str) -> Option<String> {
+        let udp_addr = uri.strip_prefix("udp://")?;
+        if let Some(stripped) = udp_addr.strip_suffix("/announce") {
+            Some(stripped.to_string())
+        } else {
+            Some(udp_addr.to_string())
+        }
+    }
+    if let Some(announce_list) = metainfo.announce_list() {
+        announce_list.flatten().filter_map(filter_uri).collect()
+    } else if let Some(Some(url)) = metainfo.announce().map(filter_uri) {
+        iter::once(url).collect()
+    } else {
+        Default::default()
     }
 }
 
 pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
-    match metainfo.announce_list() {
-        Some(announce_list) => announce_list
-            .flatten()
-            .filter_map(|url| {
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    Some(url.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect(),
-        None => Default::default(),
+    fn filter_url(url: &str) -> Option<String> {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            Some(url.to_string())
+        } else {
+            None
+        }
+    }
+    if let Some(announce_list) = metainfo.announce_list() {
+        announce_list.flatten().filter_map(filter_url).collect()
+    } else if let Some(Some(url)) = metainfo.announce().map(filter_url) {
+        iter::once(url).collect()
+    } else {
+        Default::default()
     }
 }
