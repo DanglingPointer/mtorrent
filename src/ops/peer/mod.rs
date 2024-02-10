@@ -185,12 +185,23 @@ pub async fn outgoing_pwp_connection(
     ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
-    let (download, upload) =
-        from_outgoing_connection(remote_ip, storage, ctx_handle.clone(), pwp_worker_handle).await?;
-    try_join!(
-        run_download(download.into(), remote_ip, ctx_handle.clone()),
-        run_upload(upload.into(), remote_ip, ctx_handle.clone())
-    )?;
+    loop {
+        let (download, upload) = from_outgoing_connection(
+            remote_ip,
+            storage.clone(),
+            ctx_handle.clone(),
+            pwp_worker_handle.clone(),
+        )
+        .await?;
+        let run_result = try_join!(
+            run_download(download.into(), remote_ip, ctx_handle.clone()),
+            run_upload(upload.into(), remote_ip, ctx_handle.clone())
+        );
+        match run_result {
+            Ok(_) => break,
+            Err(e) => log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting..."),
+        }
+    }
     Ok(())
 }
 
@@ -201,11 +212,21 @@ pub async fn incoming_pwp_connection(
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
     let remote_ip = stream.peer_addr()?;
-    let (download, upload) =
-        from_incoming_connection(stream, storage, ctx_handle.clone(), pwp_worker_handle).await?;
-    try_join!(
+    let (download, upload) = from_incoming_connection(
+        stream,
+        storage.clone(),
+        ctx_handle.clone(),
+        pwp_worker_handle.clone(),
+    )
+    .await?;
+    let run_result = try_join!(
         run_download(download.into(), remote_ip, ctx_handle.clone()),
         run_upload(upload.into(), remote_ip, ctx_handle.clone())
-    )?;
-    Ok(())
+    );
+    if let Err(e) = run_result {
+        log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
+        outgoing_pwp_connection(remote_ip, storage, ctx_handle, pwp_worker_handle).await
+    } else {
+        Ok(())
+    }
 }
