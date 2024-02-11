@@ -25,7 +25,7 @@ impl fmt::Display for DownloadState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "am_interested={:<5} peer_choking={:<5} bytes_recv={}",
+            "am_interested={:<5} peer_choking={:<5} bytes_recv={:<12}",
             self.am_interested, self.peer_choking, self.bytes_received
         )?;
         Ok(())
@@ -54,7 +54,7 @@ impl fmt::Display for UploadState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "peer_interested={:<5} am_choking={:<5} bytes_sent={}",
+            "peer_interested={:<5} am_choking={:<5} bytes_sent={:<12}",
             self.peer_interested, self.am_choking, self.bytes_sent
         )?;
         Ok(())
@@ -149,7 +149,7 @@ impl fmt::Display for PeerStates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected peers ({}):", self.peers.len())?;
         for (ip, state) in &self.peers {
-            write!(f, "\n[{:<21}]: {}\n{:<24} {}", ip, state.download, " ", state.upload)?;
+            write!(f, "\n[{}]:\n{} {}", ip, state.download, state.upload)?;
         }
         Ok(())
     }

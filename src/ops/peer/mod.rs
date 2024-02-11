@@ -29,12 +29,7 @@ async fn from_incoming_connection(
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
 
     let (download_chans, upload_chans, runner) =
-        pwp::channels_from_incoming(&local_peer_id, Some(&info_hash), stream)
-            .await
-            .map_err(|e| {
-                log::error!("Failed to establish an incoming connection with {remote_ip}: {e}");
-                e
-            })?;
+        pwp::channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await?;
     log::info!("Successfully established an incoming connection with {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
@@ -86,10 +81,7 @@ async fn from_outgoing_connection(
                     attempts_left -= 1;
                     reconnect_interval *= 2;
                 }
-                _ => {
-                    log::error!("Failed to establish an outgoing connection to {remote_ip}: {e}");
-                    return Err(e);
-                }
+                _ => return Err(e),
             },
         }
     };

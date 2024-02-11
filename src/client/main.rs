@@ -60,9 +60,11 @@ pub async fn single_torrent(
         let pwp_runtime = incoming_connection_pwp_runtime.clone();
         let ctx = incoming_connection_ctx.clone();
         task::spawn_local(async move {
+            let peer_ip =
+                stream.peer_addr().map_or_else(|_| "<N/A>".to_owned(), |ip| format!("{ip}"));
             match ops::incoming_pwp_connection(stream, storage, ctx, pwp_runtime).await {
                 Ok(_) => (),
-                Err(e) => log::error!("Incoming peer connection exited: {e}"),
+                Err(e) => log::error!("Incoming peer connection from {peer_ip} failed: {e}"),
             }
         });
     };
@@ -85,7 +87,7 @@ pub async fn single_torrent(
             task::spawn_local(async move {
                 match ops::outgoing_pwp_connection(peer_ip, storage, ctx, pwp_runtime).await {
                     Ok(_) => (),
-                    Err(e) => log::error!("Outgoing peer connection exited: {e}"),
+                    Err(e) => log::error!("Outgoing peer connection to {peer_ip} failed: {e}"),
                 }
             });
         }
