@@ -22,9 +22,10 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> bool {
         })
     };
     let has_recently_uploaded_data = || {
-        ctx.peer_states
-            .get(peer_ip)
-            .is_some_and(|state| state.last_download_time.elapsed() < sec!(30))
+        ctx.peer_states.get(peer_ip).is_some_and(|state| {
+            // need to check both because last_download_time is set upon creation
+            state.download.bytes_received > 0 && state.last_download_time.elapsed() < sec!(30)
+        })
     };
 
     if ctx.accountant.missing_bytes() == 0 {
@@ -111,6 +112,7 @@ fn should_seed_to_peer(state: &pwp::PeerState, leech_count: usize) -> bool {
     let is_active_seeder = || {
         state.download.am_interested
             && !state.download.peer_choking
+            && state.download.bytes_received > 0 // need to check this because last_download_time is set upon creation
             && state.last_download_time.elapsed() < sec!(11)
     };
     if !state.upload.peer_interested {
