@@ -195,8 +195,12 @@ pub async fn outgoing_pwp_connection(
             run_upload(upload.into(), remote_ip, ctx_handle.clone())
         );
         match run_result {
-            Ok(_) => break,
-            Err(e) => log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting..."),
+            Err(e) if e.kind() != io::ErrorKind::Other => {
+                // ErrorKind::Other means we disconnected the peer intentionally
+                log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...")
+            }
+            Err(e) => return Err(e),
+            _ => break,
         }
     }
     Ok(())
@@ -220,10 +224,13 @@ pub async fn incoming_pwp_connection(
         run_download(download.into(), remote_ip, ctx_handle.clone()),
         run_upload(upload.into(), remote_ip, ctx_handle.clone())
     );
-    if let Err(e) = run_result {
-        log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
-        outgoing_pwp_connection(remote_ip, storage, ctx_handle, pwp_worker_handle).await
-    } else {
-        Ok(())
+    match run_result {
+        Err(e) if e.kind() != io::ErrorKind::Other => {
+            // ErrorKind::Other means we disconnected the peer intentionally
+            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
+            outgoing_pwp_connection(remote_ip, storage, ctx_handle, pwp_worker_handle).await
+        }
+        Err(e) => Err(e),
+        _ => Ok(()),
     }
 }

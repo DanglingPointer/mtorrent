@@ -238,7 +238,13 @@ pub async fn get_pieces(
                 inner.tx.send_message(pwp::DownloaderMessage::Request(block.clone())).await?;
             }
             while !with_ctx!(|ctx| ctx.accountant.has_piece(piece_index)) {
-                let msg = inner.rx.receive_message().await?;
+                // timeout of 11s because some clients do stuff every 5s
+                let msg = inner.rx.receive_message_timed(sec!(11)).await.map_err(|e| match e {
+                    pwp::ChannelError::Timeout => {
+                        io::Error::new(io::ErrorKind::Other, "peer failed to respond to requests")
+                    }
+                    pwp::ChannelError::ConnectionClosed => io::Error::from(e),
+                })?;
                 update_state_with_msg(&mut inner, &msg);
                 if inner.state.peer_choking {
                     with_ctx!(|ctx| ctx.pending_requests.clear_requests_to(inner.rx.remote_ip()));
