@@ -55,13 +55,17 @@ async fn from_outgoing_connection(
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
     define_with_ctx!(ctx_handle);
-
-    if with_ctx!(|ctx| ctx.peer_states.get(&remote_ip).is_some()) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("already connected to {remote_ip}"),
-        ));
+    fn check_already_connected(remote_ip: SocketAddr, ctx: &ctx::Ctx) -> io::Result<()> {
+        if ctx.peer_states.get(&remote_ip).is_some() {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("already connected to {remote_ip}"),
+            ))
+        } else {
+            Ok(())
+        }
     }
+    with_ctx!(|ctx| check_already_connected(remote_ip, ctx))?;
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
@@ -85,6 +89,7 @@ async fn from_outgoing_connection(
             },
         }
     };
+    with_ctx!(|ctx| check_already_connected(remote_ip, ctx))?;
     log::info!("Successfully established an outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
