@@ -2,6 +2,7 @@ use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::worker;
 use mtorrent::{client, info_stopwatch};
 use std::io;
+use std::path::{Path, PathBuf};
 
 fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -21,9 +22,9 @@ fn main() -> io::Result<()> {
     })?;
 
     let output_dir = if let Some(arg) = args.next() {
-        arg
+        PathBuf::from(arg)
     } else {
-        "mtorrentv2_output".to_owned()
+        Path::new(&metainfo_path).parent().map(Into::into).unwrap_or_default()
     };
 
     let storage_runtime = worker::with_runtime(worker::rt::Config {

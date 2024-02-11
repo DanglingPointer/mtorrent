@@ -55,10 +55,9 @@ fn read_config_file(filepath: impl AsRef<Path>) -> io::Result<HashMap<[u8; 20], 
 }
 
 pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
-    let content = read_config_file(config_dir.as_ref().join(FILENAME))?;
+    let mut content = read_config_file(config_dir.as_ref().join(FILENAME))?;
     content
-        .get(info_hash)
-        .cloned()
+        .remove(info_hash)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "info hash not found"))
 }
 
