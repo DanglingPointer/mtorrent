@@ -205,7 +205,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     let collect_requests = async {
         let request_sink = request_sink; // move it, so that it's dropped at the end
         let start_time = Instant::now();
-        while start_time.elapsed() < min_duration {
+        loop {
             match inner.rx.receive_message_timed(min_duration - start_time.elapsed()).await {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
                     request_sink.send(info);
@@ -219,7 +219,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                         return Ok(());
                     }
                 }
-                Err(pwp::ChannelError::Timeout) => (),
+                Err(pwp::ChannelError::Timeout) => break,
                 Err(e) => return Err(io::Error::from(e)),
             }
         }
