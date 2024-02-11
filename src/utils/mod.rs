@@ -1,4 +1,5 @@
 pub mod benc;
+pub mod config;
 pub mod fifo;
 pub mod ip;
 pub mod matcher;

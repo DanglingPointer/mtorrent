@@ -62,7 +62,6 @@ impl BlockAccountant {
         self.total_bytes += end - start;
     }
 
-    #[allow(dead_code)]
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
         let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
@@ -73,7 +72,6 @@ impl BlockAccountant {
         }
     }
 
-    #[allow(dead_code)]
     pub fn submit_bitfield(&mut self, bitfield: &Bitfield) -> bool {
         if bitfield.len() < self.pieces.piece_count() {
             return false;

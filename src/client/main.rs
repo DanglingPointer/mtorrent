@@ -3,27 +3,23 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{ip, startup, upnp};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::net::TcpStream;
 use tokio::{runtime, task};
 
 pub async fn single_torrent(
     local_peer_id: PeerId,
     metainfo_filepath: impl AsRef<Path>,
-    output_filedir: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(metainfo_filepath)?;
 
-    let output_filedir = {
-        let mut tmp = PathBuf::new();
-        tmp.push(output_filedir);
-        tmp.push(metainfo.name().unwrap_or(&format!("{local_peer_id}")));
-        tmp.into_boxed_path()
-    };
+    let content_dir =
+        Path::new(output_dir.as_ref()).join(metainfo.name().unwrap_or(&format!("{local_peer_id}")));
 
-    let (storage, storage_server) = startup::create_storage(&metainfo, output_filedir)?;
+    let (storage, storage_server) = startup::create_storage(&metainfo, content_dir)?;
     storage_runtime.spawn(async move {
         storage_server.run().await;
     });
@@ -102,7 +98,7 @@ pub async fn single_torrent(
 
     local_task
         .run_until(async move {
-            ops::periodic_state_dump(ctx).await;
+            ops::periodic_state_dump(ctx, output_dir).await;
         })
         .await;
     Ok(())

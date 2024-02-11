@@ -1,9 +1,11 @@
 use super::ctrl;
 use crate::sec;
+use crate::utils::config;
 use crate::utils::peer_id::PeerId;
 use crate::{data, pwp, utils::meta};
 use core::fmt;
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 use tokio::time;
@@ -89,8 +91,26 @@ pub fn new_ctx(metainfo: meta::Metainfo, local_peer_id: PeerId) -> io::Result<Ha
     Ok(Handle { ctx })
 }
 
-pub async fn periodic_state_dump(mut ctx_handle: Handle) {
+pub async fn periodic_state_dump(mut ctx_handle: Handle, outputdir: impl AsRef<Path>) {
     define_with_ctx!(ctx_handle);
+
+    with_ctx!(|ctx| {
+        match config::load_state(&outputdir, ctx.metainfo.info_hash()) {
+            Ok(mut state) => {
+                state.resize(ctx.pieces.piece_count(), false);
+                ctx.accountant.submit_bitfield(&state);
+                for (piece_index, is_present) in state.iter().enumerate() {
+                    if *is_present {
+                        ctx.piece_tracker.forget_piece(piece_index);
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Could not read config file: {e}");
+            }
+        }
+    });
+
     #[cfg(debug_assertions)]
     const INTERVAL: Duration = sec!(5);
 
@@ -100,6 +120,13 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle) {
     loop {
         time::sleep(INTERVAL).await;
         let finished = with_ctx!(|ctx| {
+            if let Err(e) = config::save_state(
+                &outputdir,
+                ctx.metainfo.info_hash(),
+                ctx.accountant.generate_bitfield(),
+            ) {
+                log::warn!("Could not write config file: {e}");
+            }
             log::info!("Periodic state dump:\n{}", ctx);
             ctrl::is_finished(ctx)
         });

@@ -3,7 +3,7 @@ use mtorrent::utils::{self, benc, startup};
 use mtorrent::{data, pwp, sec};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{create_dir, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -257,9 +257,7 @@ fn start_tracker<'a>(
     let _ = create_dir(dir);
 
     let announce_path: PathBuf = [dir, "announce"].into_iter().collect();
-    let mut announce = fs::File::create(announce_path).unwrap();
-    announce.write_all(&response.to_bytes()).unwrap();
-    announce.flush().unwrap();
+    fs::write(announce_path, response.to_bytes()).unwrap();
 
     process::Command::new("python3")
         .args(["-m", "http.server", &port.to_string()])
