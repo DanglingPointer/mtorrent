@@ -114,7 +114,9 @@ pub async fn new_peer(
         state: Default::default(),
         local_pieces_snapshot: bitfield.clone(),
     });
-    inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
+    if bitfield.iter().any(|bit| bit == true) {
+        inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
+    }
     update_state!(inner);
     Ok(IdlePeer(inner))
 }
