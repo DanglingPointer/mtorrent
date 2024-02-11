@@ -42,12 +42,14 @@ fn main() -> io::Result<()> {
 
     let peer_id = PeerId::generate_new();
 
-    client::single_torrent_main(
-        peer_id,
-        metainfo_path,
-        output_dir,
-        pwp_runtime.runtime_handle(),
-        storage_runtime.runtime_handle(),
+    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(
+        client::main::single_torrent(
+            peer_id,
+            metainfo_path,
+            output_dir,
+            pwp_runtime.runtime_handle(),
+            storage_runtime.runtime_handle(),
+        ),
     )?;
 
     Ok(())
