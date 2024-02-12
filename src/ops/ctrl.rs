@@ -1,5 +1,7 @@
 use super::ctx;
+use crate::ops::MAX_BLOCK_SIZE;
 use crate::{pwp, sec};
+use std::cmp;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -38,7 +40,10 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> bool {
 }
 
 fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> Vec<usize> {
-    const MAX_REQUEST_COUNT: usize = 10;
+    // libtorrent supports max 250 queued requests, hence:
+    // 250 * 16kB == piece_len * piece_count
+    let max_request_count =
+        cmp::min(50, cmp::max(1, MAX_BLOCK_SIZE * 250 / ctx.pieces.piece_len(0)));
     let available_pieces: HashSet<usize> =
         if let Some(it) = ctx.piece_tracker.get_peer_pieces(peer_ip) {
             it.collect()
@@ -47,18 +52,18 @@ fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> Vec<usize> {
         };
     let mut ret = Vec::new();
     if !available_pieces.is_empty() {
-        ret.reserve(MAX_REQUEST_COUNT);
+        ret.reserve(max_request_count);
         for piece in ctx
             .piece_tracker
             .get_rarest_pieces()
             .filter(|piece| {
                 available_pieces.contains(piece) && !ctx.pending_requests.is_piece_requested(*piece)
             })
-            .take(MAX_REQUEST_COUNT)
+            .take(max_request_count)
         {
             ret.push(piece);
         }
-        if ret.len() < MAX_REQUEST_COUNT {
+        if ret.len() < max_request_count {
             for piece in ctx
                 .piece_tracker
                 .get_rarest_pieces()
@@ -67,7 +72,7 @@ fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> Vec<usize> {
                 if !ret.contains(&piece) {
                     ret.push(piece);
                 }
-                if ret.len() == MAX_REQUEST_COUNT {
+                if ret.len() == max_request_count {
                     break;
                 }
             }
