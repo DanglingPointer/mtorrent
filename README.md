@@ -15,6 +15,7 @@ Lightweight command line Bittorrent client in Rust. Based on Tokio (but without 
 #### Optional:
 - [x] [Multitracker Metadata Extension](https://www.bittorrent.org/beps/bep_0012.html)
 - [x] [UDP Tracker Protocol](https://www.bittorrent.org/beps/bep_0015.html)
+- [ ] [Magnet URIs](http://www.bittorrent.org/beps/bep_0009.html) + [extension](http://bittorrent.org/beps/bep_0053.html)
 - [ ] [DHT](https://www.bittorrent.org/beps/bep_0005.html)
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
 - [ ] [Extension Protocol](https://www.bittorrent.org/beps/bep_0010.html)
