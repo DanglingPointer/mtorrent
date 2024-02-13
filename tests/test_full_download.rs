@@ -2,7 +2,7 @@ use futures::future;
 use mtorrent::utils::{self, benc, startup};
 use mtorrent::{data, pwp, sec};
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{create_dir, File};
+use std::fs::File;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -254,7 +254,7 @@ fn start_tracker<'a>(
         benc::Element::Dictionary(root)
     };
 
-    let _ = create_dir(dir);
+    let _ = fs::create_dir(dir);
 
     let announce_path: PathBuf = [dir, "announce"].into_iter().collect();
     fs::write(announce_path, response.to_bytes()).unwrap();
@@ -267,12 +267,7 @@ fn start_tracker<'a>(
 }
 
 fn compare_input_and_output(input_dir: impl AsRef<Path>, output_dir: impl AsRef<Path>, name: &str) {
-    let output_dir = {
-        let mut b = PathBuf::new();
-        b.push(output_dir);
-        b.push(name);
-        b
-    };
+    let output_dir = output_dir.as_ref().join(name);
 
     fn verify_files_identical(p1: impl AsRef<Path>, p2: impl AsRef<Path>) {
         let name1 = p1.as_ref().to_string_lossy().into_owned();
