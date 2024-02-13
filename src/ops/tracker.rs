@@ -208,6 +208,9 @@ pub async fn run_periodic_announces(
     let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
         (utils::get_http_tracker_addrs(&ctx.metainfo), utils::get_udp_tracker_addrs(&ctx.metainfo))
     });
+    if http_trackers.is_empty() && udp_trackers.is_empty() {
+        log::error!("No trackers found - download will fail");
+    }
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
         run_tracker(
             TrackerType::Http,

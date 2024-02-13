@@ -293,12 +293,18 @@ fn update_state_with_msg(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
             }
         }
         pwp::UploaderMessage::Have { piece_index } => {
+            log::trace!("Received Have({piece_index}) from {ip}");
             inner
                 .handle
                 .with_ctx(|ctx| ctx.piece_tracker.add_single_record(ip, *piece_index));
             true
         }
         pwp::UploaderMessage::Bitfield(bitfield) => {
+            if log::log_enabled!(log::Level::Trace) {
+                let remote_piece_count =
+                    bitfield.iter().map(|bit| if *bit { 1 } else { 0 }).sum::<usize>();
+                log::trace!("Received bitfield from {ip}: peer has {remote_piece_count} pieces");
+            }
             inner.handle.with_ctx(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
             true
         }

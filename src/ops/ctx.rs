@@ -106,7 +106,7 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle, outputdir: impl AsRef<P
                 }
             }
             Err(e) => {
-                log::warn!("Could not read config file: {e}");
+                log::warn!("Failed to load saved state: {e}");
             }
         }
     });
@@ -125,7 +125,7 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle, outputdir: impl AsRef<P
                 ctx.metainfo.info_hash(),
                 ctx.accountant.generate_bitfield(),
             ) {
-                log::warn!("Could not write config file: {e}");
+                log::warn!("Failed to save state to file: {e}");
             }
             log::info!("Periodic state dump:\n{}", ctx);
             ctrl::is_finished(ctx)
