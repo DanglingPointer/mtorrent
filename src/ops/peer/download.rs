@@ -87,19 +87,13 @@ pub async fn new_peer(
         storage,
         state: Default::default(),
     });
-    // try wait for bitfield and some have's
-    const SETTLING_PERIOD: Duration = sec!(1);
-    let mut now = Instant::now();
-    let end_time = now + SETTLING_PERIOD;
-    while now < end_time {
-        match inner.rx.receive_message_timed(end_time - now).await {
-            Ok(msg) => {
-                update_state_with_msg(&mut inner, &msg);
-            }
-            Err(pwp::ChannelError::Timeout) => (),
-            Err(e) => return Err(e.into()),
+    // try wait for bitfield
+    match inner.rx.receive_message_timed(sec!(1)).await {
+        Ok(msg) => {
+            update_state_with_msg(&mut inner, &msg);
         }
-        now = Instant::now();
+        Err(pwp::ChannelError::Timeout) => (),
+        Err(e) => return Err(e.into()),
     }
     update_state!(inner);
     Ok(IdlePeer(inner))

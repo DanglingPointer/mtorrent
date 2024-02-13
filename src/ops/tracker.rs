@@ -178,7 +178,10 @@ async fn run_tracker(
         match response_result {
             Ok(mut response) => {
                 with_ctx!(|ctx| {
-                    response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
+                    response.peers.retain(|peer_ip| {
+                        // some udp trackers send 0.0.0.0:65535 and 0.0.0.0 (for obfuscation?)
+                        !peer_ip.ip().is_unspecified() && ctx.peer_states.get(peer_ip).is_none()
+                    });
                 });
                 let interval = cmp::min(sec!(300), response.interval);
                 log::info!(
