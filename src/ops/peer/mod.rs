@@ -11,7 +11,7 @@ use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
 async fn from_incoming_connection(
     stream: TcpStream,
-    storage: data::StorageClient,
+    content_storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
@@ -39,10 +39,10 @@ async fn from_incoming_connection(
     });
 
     let pwp::DownloadChannels(tx, rx) = download_chans;
-    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, storage.clone());
+    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
 
     let pwp::UploadChannels(tx, rx) = upload_chans;
-    let upload_fut = upload::new_peer(ctx_handle, rx, tx, storage);
+    let upload_fut = upload::new_peer(ctx_handle, rx, tx, content_storage);
 
     let (seeder, leech) = try_join!(download_fut, upload_fut)?;
     Ok((seeder, leech))
@@ -50,7 +50,7 @@ async fn from_incoming_connection(
 
 async fn from_outgoing_connection(
     remote_ip: SocketAddr,
-    storage: data::StorageClient,
+    content_storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer)> {
@@ -99,10 +99,10 @@ async fn from_outgoing_connection(
     });
 
     let pwp::DownloadChannels(tx, rx) = download_chans;
-    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, storage.clone());
+    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
 
     let pwp::UploadChannels(tx, rx) = upload_chans;
-    let upload_fut = upload::new_peer(ctx_handle, rx, tx, storage);
+    let upload_fut = upload::new_peer(ctx_handle, rx, tx, content_storage);
 
     let (seeder, leech) = try_join!(download_fut, upload_fut)?;
     Ok((seeder, leech))

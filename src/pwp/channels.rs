@@ -190,14 +190,14 @@ where
     let receiver = IngressStream {
         source: ingress,
         remote_ip,
-        rx_inbound: remote_uploader_msg_in,
-        tx_inbound: remote_downloader_msg_in,
+        ul_msg_sink: remote_uploader_msg_in,
+        dl_msg_sink: remote_downloader_msg_in,
     };
     let sender = EgressStream {
         sink: BufWriter::new(egress),
         remote_ip,
-        rx_outbound: local_downloader_msg_out,
-        tx_outbound: local_uploader_msg_out,
+        dl_msg_source: local_downloader_msg_out,
+        ul_msg_source: local_uploader_msg_out,
     };
 
     let download_rx = DownloadRxChannel {
@@ -228,8 +228,8 @@ where
 struct IngressStream<S: AsyncReadExt> {
     source: S,
     remote_ip: SocketAddr,
-    rx_inbound: mpsc::Sender<UploaderMessage>,
-    tx_inbound: mpsc::Sender<DownloaderMessage>,
+    ul_msg_sink: mpsc::Sender<UploaderMessage>,
+    dl_msg_sink: mpsc::Sender<DownloaderMessage>,
 }
 
 impl<S: AsyncReadExt + Unpin> IngressStream<S> {
@@ -253,13 +253,13 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
 
         let received = match UploaderMessage::try_from(received) {
             Ok(msg) => {
-                return forward_msg(msg, &mut self.rx_inbound, &self.remote_ip).await;
+                return forward_msg(msg, &mut self.ul_msg_sink, &self.remote_ip).await;
             }
             Err(received) => received,
         };
         let received = match DownloaderMessage::try_from(received) {
             Ok(msg) => {
-                return forward_msg(msg, &mut self.tx_inbound, &self.remote_ip).await;
+                return forward_msg(msg, &mut self.dl_msg_sink, &self.remote_ip).await;
             }
             Err(received) => received,
         };
@@ -271,8 +271,8 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
 struct EgressStream<S: AsyncWriteExt> {
     sink: BufWriter<S>,
     remote_ip: SocketAddr,
-    rx_outbound: mpsc::Receiver<Option<DownloaderMessage>>,
-    tx_outbound: mpsc::Receiver<Option<UploaderMessage>>,
+    dl_msg_source: mpsc::Receiver<Option<DownloaderMessage>>,
+    ul_msg_source: mpsc::Receiver<Option<UploaderMessage>>,
 }
 
 impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
@@ -302,13 +302,13 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
         }
 
         select_biased! {
-            rx_msg = self.rx_outbound.next().fuse() => {
+            rx_msg = self.dl_msg_source.next().fuse() => {
                 let msg = rx_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg(msg, &mut self.rx_outbound, &mut self.sink, &self.remote_ip).await?;
+                process_msg(msg, &mut self.dl_msg_source, &mut self.sink, &self.remote_ip).await?;
             }
-            tx_msg = self.tx_outbound.next().fuse() => {
+            tx_msg = self.ul_msg_source.next().fuse() => {
                 let msg = tx_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg(msg, &mut self.tx_outbound, &mut self.sink, &self.remote_ip).await?;
+                process_msg(msg, &mut self.ul_msg_source, &mut self.sink, &self.remote_ip).await?;
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {
                 let ping_msg = PeerMessage::KeepAlive;
