@@ -14,10 +14,10 @@ pub async fn single_torrent(
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
 ) -> io::Result<()> {
-    let metainfo = startup::read_metainfo(metainfo_filepath)?;
+    let metainfo = startup::read_metainfo(&metainfo_filepath)?;
 
-    let content_dir =
-        Path::new(output_dir.as_ref()).join(metainfo.name().unwrap_or(&format!("{local_peer_id}")));
+    let content_dir = Path::new(output_dir.as_ref())
+        .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());
 
     let (storage, storage_server) = startup::create_storage(&metainfo, content_dir)?;
     storage_runtime.spawn(async move {
