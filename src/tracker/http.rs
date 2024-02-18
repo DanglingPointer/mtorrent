@@ -51,7 +51,8 @@ pub async fn do_announce_request(
     log::debug!("Sending announce request to {}", announce_url);
 
     let response_data = client.get(announce_url).send().await?.bytes().await?;
-    let entity = benc::Element::from_bytes(&response_data)?;
+    let entity = benc::Element::from_bytes(&response_data)
+        .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
     log::debug!("Received announce response: {entity}");
 
     let content = AnnounceResponseContent::from_benc(entity)
