@@ -10,7 +10,7 @@ use std::{cmp, io};
 use tokio::net::UdpSocket;
 use tokio::time;
 
-const NUM_WANT: usize = 50;
+const NUM_WANT: usize = 100;
 
 #[derive(Clone, Copy)]
 enum AnnounceEvent {
@@ -102,6 +102,8 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
             .bytes_left(data.left)
             .bytes_uploaded(data.uploaded)
             .numwant(NUM_WANT)
+            .compact_support()
+            .no_peer_id()
             .port(data.listener_port);
         if let Some(event) = data.event {
             request.event(event.into());

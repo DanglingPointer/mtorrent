@@ -43,10 +43,16 @@ impl From<Error> for io::Error {
     }
 }
 
+const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
 pub async fn do_announce_request(
     request_builder: TrackerRequestBuilder,
 ) -> Result<AnnounceResponseContent, Error> {
-    let client = reqwest::Client::builder().gzip(true).timeout(sec!(30)).build()?;
+    let client = reqwest::Client::builder()
+        .gzip(true)
+        .user_agent(APP_USER_AGENT)
+        .timeout(sec!(30))
+        .build()?;
     let announce_url = request_builder.build_announce();
     log::debug!("Sending announce request to {}", announce_url);
 
@@ -67,7 +73,11 @@ pub async fn do_announce_request(
 pub async fn do_scrape_request(
     request_builder: TrackerRequestBuilder,
 ) -> Result<benc::Element, Error> {
-    let client = reqwest::Client::builder().gzip(true).timeout(sec!(30)).build()?;
+    let client = reqwest::Client::builder()
+        .gzip(true)
+        .user_agent(APP_USER_AGENT)
+        .timeout(sec!(30))
+        .build()?;
     let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
     log::debug!("Sending scrape request to {}", scrape_url);
 

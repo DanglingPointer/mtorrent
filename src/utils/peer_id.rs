@@ -7,15 +7,18 @@ pub struct PeerId([u8; 20]); // immutable wrapper
 
 impl PeerId {
     pub fn generate_new() -> Self {
+        const PREFIX: &[u8] = concat!(
+            "-mt0",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+        )
+        .as_bytes();
+
         let mut ret = [0u8; 20];
-        let maj = str::parse::<u8>(env!("CARGO_PKG_VERSION_MAJOR")).unwrap_or(b'x');
-        let min = str::parse::<u8>(env!("CARGO_PKG_VERSION_MINOR")).unwrap_or(b'x');
-        let pat = str::parse::<u8>(env!("CARGO_PKG_VERSION_PATCH")).unwrap_or(b'x');
+        ret[..PREFIX.len()].copy_from_slice(PREFIX);
 
-        let s = format!("-mt0{}{}{}-", maj, min, pat).into_bytes();
-        ret[..s.len()].copy_from_slice(&s);
-
-        for b in &mut ret[s.len()..] {
+        for b in &mut ret[PREFIX.len()..] {
             *b = rand::thread_rng().gen_range(33..127); // non-control characters and not space
         }
         Self(ret)
