@@ -317,6 +317,40 @@ impl fmt::Display for BlockInfo {
     }
 }
 
+impl fmt::Display for HandshakeData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ext=[{:?}]", self.extensions)?;
+        if let Some(port) = self.listen_port {
+            write!(f, " port={port}")?;
+        }
+        if let Some(client_type) = self.client_type.as_ref() {
+            write!(f, " client={client_type}")?;
+        }
+        if let Some(yourip) = self.yourip {
+            write!(f, " yourip={yourip}")?;
+        }
+        if let Some(ipv4) = self.ipv4 {
+            write!(f, " ipv4={ipv4}")?;
+        }
+        if let Some(ipv6) = self.ipv6 {
+            write!(f, " ipv6={ipv6}")?;
+        }
+        if let Some(reqq) = self.request_limit {
+            write!(f, " reqq={reqq}")?;
+        }
+        if let Some(metasize) = self.metadata_size {
+            write!(f, " metasize={metasize}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for PeerData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "added={:?} dropped={:?}", self.added, self.dropped)
+    }
+}
+
 // ------
 
 impl From<UploaderMessage> for PeerMessage {
@@ -900,11 +934,21 @@ impl TryFrom<PeerMessage> for ExtendedMessage {
 impl fmt::Display for ExtendedMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExtendedMessage::Handshake(_) => write!(f, "ExtendedHandshake"),
-            ExtendedMessage::MetadataRequest { .. } => write!(f, "MetadataRequest"),
-            ExtendedMessage::MetadataBlock { .. } => write!(f, "MetadataBlock"),
-            ExtendedMessage::MetadataReject { .. } => write!(f, "MetadataReject"),
-            ExtendedMessage::PeerExchange(_) => write!(f, "PEX"),
+            ExtendedMessage::Handshake(hs) => {
+                write!(f, "ExtendedHandshake[{hs}]")
+            }
+            ExtendedMessage::MetadataRequest { piece } => {
+                write!(f, "MetadataRequest[piece={piece}]")
+            }
+            ExtendedMessage::MetadataBlock { piece, .. } => {
+                write!(f, "MetadataBlock[piece={piece}]")
+            }
+            ExtendedMessage::MetadataReject { piece } => {
+                write!(f, "MetadataReject[piece={piece}]")
+            }
+            ExtendedMessage::PeerExchange(pex) => {
+                write!(f, "PEX[{pex}]")
+            }
         }
     }
 }
