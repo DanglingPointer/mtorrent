@@ -59,7 +59,7 @@ impl AnnounceData {
             uploaded: ctx.peer_states.uploaded_bytes(),
             local_peer_id: ctx.local_peer_id,
             listener_port,
-            event: if ctx.accountant.accounted_bytes() == 0 && ctx.peer_states.all().count() == 0 {
+            event: if ctx.accountant.accounted_bytes() == 0 && ctx.peer_states.iter().count() == 0 {
                 Some(AnnounceEvent::Started)
             } else if ctrl::is_finished(ctx) {
                 Some(AnnounceEvent::Completed)

@@ -135,7 +135,7 @@ impl PeerStates {
         self.leeches.len()
     }
 
-    pub fn all(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
         self.peers.iter()
     }
 
