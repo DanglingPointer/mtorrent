@@ -9,6 +9,8 @@ use crate::{data, pwp, sec};
 use std::{io, net::SocketAddr, ops::Deref};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
+const EXTENSION_PROTOCOL_ENABLED: bool = false;
+
 async fn from_incoming_connection(
     stream: TcpStream,
     content_storage: data::StorageClient,
@@ -28,8 +30,13 @@ async fn from_incoming_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.local_peer_id.deref()) });
 
-    let (download_chans, upload_chans, runner) =
-        pwp::channels_from_incoming(&local_peer_id, Some(&info_hash), stream).await?;
+    let (download_chans, upload_chans, _extended_chans, runner) = pwp::channels_from_incoming(
+        &local_peer_id,
+        Some(&info_hash),
+        EXTENSION_PROTOCOL_ENABLED,
+        stream,
+    )
+    .await?;
     log::info!("Successfully established an incoming connection with {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
@@ -74,8 +81,16 @@ async fn from_outgoing_connection(
     const MAX_RETRY_COUNT: usize = 3;
     let mut attempts_left = MAX_RETRY_COUNT;
     let mut reconnect_interval = sec!(2);
-    let (download_chans, upload_chans, runner) = loop {
-        match pwp::channels_from_outgoing(&local_peer_id, &info_hash, remote_ip, None).await {
+    let (download_chans, upload_chans, _extended_chans, runner) = loop {
+        match pwp::channels_from_outgoing(
+            &local_peer_id,
+            &info_hash,
+            EXTENSION_PROTOCOL_ENABLED,
+            remote_ip,
+            None,
+        )
+        .await
+        {
             Ok(channels) => break channels,
             Err(e) => match e.kind() {
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset

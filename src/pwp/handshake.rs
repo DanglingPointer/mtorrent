@@ -5,6 +5,12 @@ use tokio::net::TcpStream;
 
 pub type ReservedBits = BitArray<[u8; 8], Lsb0>;
 
+pub fn reserved_bits(extended_protocol: bool) -> ReservedBits {
+    let mut bits = ReservedBits::ZERO;
+    bits.set(44, extended_protocol);
+    bits
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Handshake {
     pub peer_id: [u8; 20],

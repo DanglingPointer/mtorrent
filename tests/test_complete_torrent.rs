@@ -272,8 +272,10 @@ async fn listening_peer<P: Peer>(
                 "Peer {} on {} accepted connection from {}",
                 index, listening_addr, remote_addr
             );
-            let (download_chans, upload_chans, runner) =
-                pwp::channels_from_incoming(&[index + b'0'; 20], None, stream).await.unwrap();
+            let (download_chans, upload_chans, _, runner) =
+                pwp::channels_from_incoming(&[index + b'0'; 20], None, false, stream)
+                    .await
+                    .unwrap();
             P::run(index, download_chans, upload_chans, runner, storage, info).await;
         }
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
@@ -292,9 +294,10 @@ async fn connecting_peer<P: Peer>(
 ) {
     println!("Peer {} connecting to {}...", index, remote_ip);
     let start_time = time::Instant::now();
-    let (download_chans, upload_chans, runner) = loop {
+    let (download_chans, upload_chans, _, runner) = loop {
         let connect_result =
-            pwp::channels_from_outgoing(&[index + b'0'; 20], &info_hash, remote_ip, None).await;
+            pwp::channels_from_outgoing(&[index + b'0'; 20], &info_hash, false, remote_ip, None)
+                .await;
         if let Ok(result) = connect_result {
             break result;
         }
