@@ -9,37 +9,7 @@ pub struct Metainfo {
     root: BTreeMap<String, benc::Element>,
     info: BTreeMap<String, benc::Element>,
     info_hash: [u8; 20],
-}
-
-impl TryFrom<benc::Element> for Metainfo {
-    type Error = ();
-
-    fn try_from(e: benc::Element) -> Result<Self, Self::Error> {
-        let (root_dictionary, info_element) = match e {
-            benc::Element::Dictionary(mut root) => {
-                let info_key: benc::Element = benc::Element::from("info");
-                let info = root.remove(&info_key);
-                (Some(root), info)
-            }
-            _ => (None, None),
-        };
-
-        match (root_dictionary, info_element) {
-            (Some(root), Some(info)) => {
-                let info_bytes = info.to_bytes();
-                if let benc::Element::Dictionary(info) = info {
-                    Ok(Metainfo {
-                        root: benc::convert_dictionary(root),
-                        info: benc::convert_dictionary(info),
-                        info_hash: Sha1::from(info_bytes).digest().bytes(),
-                    })
-                } else {
-                    Err(())
-                }
-            }
-            _ => Err(()),
-        }
-    }
+    size: usize,
 }
 
 impl Hash for Metainfo {
@@ -49,6 +19,30 @@ impl Hash for Metainfo {
 }
 
 impl Metainfo {
+    pub fn new(file_content: &[u8]) -> Option<Self> {
+        let root_entity = benc::Element::from_bytes(file_content).ok()?;
+        log::debug!("Metainfo file content:\n{root_entity}");
+        let (root_dictionary, info_element) = match root_entity {
+            benc::Element::Dictionary(mut root) => {
+                let info_key: benc::Element = benc::Element::from("info");
+                let info = root.remove(&info_key);
+                (Some(root), info)
+            }
+            _ => (None, None),
+        };
+        let info_element = info_element?;
+        let info_hash = Sha1::from(info_element.to_bytes()).digest().bytes();
+        match (root_dictionary, info_element) {
+            (Some(root), benc::Element::Dictionary(info)) => Some(Metainfo {
+                root: benc::convert_dictionary(root),
+                info: benc::convert_dictionary(info),
+                info_hash,
+                size: file_content.len(),
+            }),
+            _ => None,
+        }
+    }
+
     pub fn announce(&self) -> Option<&str> {
         if let Some(benc::Element::ByteString(data)) = self.root.get("announce") {
             str::from_utf8(data).ok()
@@ -107,6 +101,10 @@ impl Metainfo {
         } else {
             None
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
     }
 }
 

@@ -289,7 +289,7 @@ pub struct HandshakeData {
 }
 
 #[derive(Default, PartialEq, Eq)]
-pub struct PeerData {
+pub struct PeerExchangeData {
     pub added: HashSet<SocketAddr>,
     pub dropped: HashSet<SocketAddr>,
 }
@@ -308,7 +308,7 @@ pub enum ExtendedMessage {
     MetadataReject {
         piece: usize,
     },
-    PeerExchange(Box<PeerData>),
+    PeerExchange(Box<PeerExchangeData>),
 }
 
 impl fmt::Display for BlockInfo {
@@ -345,7 +345,7 @@ impl fmt::Display for HandshakeData {
     }
 }
 
-impl fmt::Display for PeerData {
+impl fmt::Display for PeerExchangeData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "added={:?} dropped={:?}", self.added, self.dropped)
     }
@@ -642,7 +642,7 @@ impl HandshakeData {
     }
 }
 
-impl PeerData {
+impl PeerExchangeData {
     const KEY_ADDED_V4: &'static str = "added";
     const KEY_ADDED_V6: &'static str = "added6";
     const KEY_DROPPED_V4: &'static str = "dropped";
@@ -688,7 +688,7 @@ impl PeerData {
             read_ips(Self::KEY_ADDED_V6, &mut added, 18);
             read_ips(Self::KEY_DROPPED_V4, &mut dropped, 6);
             read_ips(Self::KEY_DROPPED_V6, &mut dropped, 18);
-            Some(PeerData { added, dropped })
+            Some(PeerExchangeData { added, dropped })
         } else {
             None
         }
@@ -901,7 +901,7 @@ impl TryFrom<PeerMessage> for ExtendedMessage {
                 id: Extension::ID_PEX,
                 ref data,
             } => {
-                let peer_data = PeerData::decode(data).ok_or(msg)?;
+                let peer_data = PeerExchangeData::decode(data).ok_or(msg)?;
                 Ok(ExtendedMessage::PeerExchange(Box::new(peer_data)))
             }
             PeerMessage::Extended {

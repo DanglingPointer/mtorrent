@@ -338,7 +338,8 @@ async fn launch_peers<P: Peer>(
     ));
 
     assert!(files_parentdir.as_ref().is_dir() == P::NEEDS_INPUT_DATA);
-    let (storage, storage_server) = startup::create_storage(&metainfo, &files_parentdir).unwrap();
+    let (storage, storage_server) =
+        startup::create_content_storage(&metainfo, &files_parentdir).unwrap();
 
     let task_set = task::LocalSet::new();
     task_set.spawn_local(async move {

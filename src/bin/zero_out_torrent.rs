@@ -19,9 +19,7 @@ fn main() {
     };
 
     let source_content = fs::read(source).unwrap();
-
-    let entity = benc::Element::from_bytes(&source_content).unwrap();
-    let metainfo = meta::Metainfo::try_from(entity).unwrap();
+    let metainfo = meta::Metainfo::new(&source_content).unwrap();
 
     let piece_count = metainfo.pieces().unwrap().count();
     let piece_length = metainfo.piece_length().unwrap();

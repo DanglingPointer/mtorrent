@@ -21,7 +21,7 @@ async fn connecting_peer(
     files_dir: &'static str,
 ) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
-    let (storage, storage_server) = startup::create_storage(&metainfo, files_dir).unwrap();
+    let (storage, storage_server) = startup::create_content_storage(&metainfo, files_dir).unwrap();
     runtime::Handle::current().spawn(async move {
         storage_server.run().await;
     });
@@ -31,10 +31,15 @@ async fn connecting_peer(
 
     let handle = ctx::new_ctx(metainfo, PeerId::from(&local_id)).unwrap();
 
-    let (download, upload) =
-        from_outgoing_connection(peer_ip, storage, handle.clone(), runtime::Handle::current())
-            .await
-            .unwrap();
+    let (download, upload, _) = from_outgoing_connection(
+        peer_ip,
+        storage.clone(),
+        storage, // hack
+        handle.clone(),
+        runtime::Handle::current(),
+    )
+    .await
+    .unwrap();
     (download, upload, handle, peer_ip)
 }
 
@@ -44,7 +49,7 @@ async fn listening_seeder(
     files_dir: &'static str,
 ) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
-    let (storage, storage_server) = startup::create_storage(&metainfo, files_dir).unwrap();
+    let (storage, storage_server) = startup::create_content_storage(&metainfo, files_dir).unwrap();
     runtime::Handle::current().spawn(async move {
         storage_server.run().await;
     });
@@ -63,10 +68,15 @@ async fn listening_seeder(
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    let (download, upload) =
-        from_incoming_connection(stream, storage, handle.clone(), runtime::Handle::current())
-            .await
-            .unwrap();
+    let (download, upload, _) = from_incoming_connection(
+        stream,
+        storage.clone(),
+        storage, // hack
+        handle.clone(),
+        runtime::Handle::current(),
+    )
+    .await
+    .unwrap();
     (download, upload, handle, peer_ip)
 }
 
