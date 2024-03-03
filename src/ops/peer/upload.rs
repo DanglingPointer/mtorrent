@@ -156,7 +156,11 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
     debug_assert!(inner.state.am_choking || !inner.state.peer_interested);
     let start_time = Instant::now();
     loop {
-        match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
+        match inner
+            .rx
+            .receive_message_timed(timeout.saturating_sub(start_time.elapsed()))
+            .await
+        {
             Ok(msg) => {
                 if update_state_with_msg!(&mut inner, &msg) {
                     break;
@@ -206,7 +210,11 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         let request_sink = request_sink; // move it, so that it's dropped at the end
         let start_time = Instant::now();
         loop {
-            match inner.rx.receive_message_timed(min_duration - start_time.elapsed()).await {
+            match inner
+                .rx
+                .receive_message_timed(min_duration.saturating_sub(start_time.elapsed()))
+                .await
+            {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
                     request_sink.send(info);
                 }

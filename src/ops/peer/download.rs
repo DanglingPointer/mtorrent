@@ -133,7 +133,11 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
     let mut inner = inner!(peer);
     let start_time = Instant::now();
     loop {
-        match inner.rx.receive_message_timed(timeout - start_time.elapsed()).await {
+        match inner
+            .rx
+            .receive_message_timed(timeout.saturating_sub(start_time.elapsed()))
+            .await
+        {
             Ok(msg) => {
                 if update_state_with_msg(&mut inner, &msg) {
                     break;
