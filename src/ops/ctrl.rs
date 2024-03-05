@@ -179,3 +179,7 @@ pub fn active_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> Leec
 pub fn is_finished(ctx: &ctx::Ctx) -> bool {
     ctx.accountant.missing_bytes() == 0 && ctx.peer_states.leeches_count() == 0
 }
+
+pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::Ctx) -> bool {
+    true
+}

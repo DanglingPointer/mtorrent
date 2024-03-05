@@ -33,6 +33,12 @@ impl From<&str> for Element {
     }
 }
 
+impl From<String> for Element {
+    fn from(value: String) -> Self {
+        Element::ByteString(value.into_bytes())
+    }
+}
+
 impl From<i64> for Element {
     fn from(number: i64) -> Self {
         Element::Integer(number)
@@ -422,6 +428,33 @@ mod tests {
         }
 
         assert_eq!(input.as_bytes(), entity.to_bytes().as_slice());
+    }
+
+    #[test]
+    fn test_decode_dictionary_with_appended_data() {
+        let input = "d8:msg_typei1e5:piecei0e10:total_sizei34256eexxxxxxxx";
+
+        let parsed = Element::from_bytes(input.as_bytes()).unwrap();
+
+        if let Element::Dictionary(map) = parsed {
+            let mut it = map.into_iter();
+
+            let (key, value) = it.next().unwrap();
+            assert_eq!(Element::from("msg_type"), key);
+            assert_eq!(Element::Integer(1), value);
+
+            let (key, value) = it.next().unwrap();
+            assert_eq!(Element::from("piece"), key);
+            assert_eq!(Element::Integer(0), value);
+
+            let (key, value) = it.next().unwrap();
+            assert_eq!(Element::from("total_size"), key);
+            assert_eq!(Element::Integer(34256), value);
+
+            assert!(it.next().is_none());
+        } else {
+            panic!("Not a dictionary");
+        }
     }
 
     #[test]

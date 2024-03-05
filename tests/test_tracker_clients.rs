@@ -1,24 +1,12 @@
 use mtorrent::tracker::{http, udp, utils};
-use mtorrent::utils::{benc, ip, meta};
-use std::fs;
+use mtorrent::utils::{benc, ip, startup};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::net::UdpSocket;
-
-fn read_metainfo(path: &str) -> meta::Metainfo {
-    let data = fs::read(path).unwrap();
-    let entity = benc::Element::from_bytes(&data).unwrap();
-    if let benc::Element::Dictionary(ref dict) = entity {
-        assert!(!dict.is_empty());
-    } else {
-        panic!("Not a dictionary");
-    }
-    meta::Metainfo::try_from(entity).unwrap()
-}
 
 #[ignore]
 #[tokio::test]
 async fn test_udp_announce() {
-    let metainfo = read_metainfo("tests/assets/example.torrent");
+    let metainfo = startup::read_metainfo("tests/assets/example.torrent").unwrap();
     let udp_tracker_addrs = utils::get_udp_tracker_addrs(&metainfo);
 
     let local_ip = SocketAddr::V4(SocketAddrV4::new(ip::get_local_addr().unwrap(), 6666));
@@ -107,7 +95,9 @@ async fn test_udp_scrape() {
 #[ignore]
 #[tokio::test]
 async fn test_https_announce() {
-    let metainfo = read_metainfo("tests/assets/ubuntu-22.04.3-live-server-amd64.iso.torrent");
+    let metainfo =
+        startup::read_metainfo("tests/assets/ubuntu-22.04.3-live-server-amd64.iso.torrent")
+            .unwrap();
 
     for tracker_url in utils::get_http_tracker_addrs(&metainfo) {
         let mut request = http::TrackerRequestBuilder::try_from(tracker_url.as_str()).unwrap();

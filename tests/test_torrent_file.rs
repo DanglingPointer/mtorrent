@@ -1,5 +1,4 @@
 use mtorrent::tracker::utils;
-use mtorrent::utils::benc;
 use mtorrent::utils::meta;
 use mtorrent::utils::startup;
 use std::path::Path;
@@ -8,14 +7,7 @@ use std::{fs, io};
 #[test]
 fn test_read_example_torrent_file() {
     let data = fs::read("tests/assets/example.torrent").unwrap();
-    let entity = benc::Element::from_bytes(&data).unwrap();
-    if let benc::Element::Dictionary(ref dict) = entity {
-        assert!(!dict.is_empty());
-    } else {
-        panic!("Not a dictionary");
-    }
-
-    let info = meta::Metainfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::new(&data).unwrap();
 
     let announce = info.announce().unwrap();
     assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {}", announce);
@@ -227,14 +219,7 @@ fn test_read_example_torrent_file() {
 #[test]
 fn test_read_torrent_file_without_announce_list() {
     let data = fs::read("tests/assets/pcap.torrent").unwrap();
-    let entity = benc::Element::from_bytes(&data).unwrap();
-    if let benc::Element::Dictionary(ref dict) = entity {
-        assert!(!dict.is_empty());
-    } else {
-        panic!("Not a dictionary");
-    }
-
-    let info = meta::Metainfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::new(&data).unwrap();
 
     let announce = info.announce().unwrap();
     assert_eq!("http://localhost:8000/announce", announce, "announce: {}", announce);
@@ -265,17 +250,11 @@ fn count_files(dir: impl AsRef<Path>) -> io::Result<usize> {
 #[test]
 fn test_read_metainfo_and_spawn_files() {
     let data = fs::read("tests/assets/example.torrent").unwrap();
-    let entity = benc::Element::from_bytes(&data).unwrap();
-    if let benc::Element::Dictionary(ref dict) = entity {
-        assert!(!dict.is_empty());
-    } else {
-        panic!("Not a dictionary");
-    }
-    let info = meta::Metainfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::new(&data).unwrap();
 
     let parent_dir = "test_read_metainfo_and_spawn_files_output";
     let filedir = Path::new(parent_dir).join("files");
-    let storage = startup::create_storage(&info, &filedir).unwrap();
+    let storage = startup::create_content_storage(&info, &filedir).unwrap();
 
     assert_eq!(info.files().unwrap().count(), count_files(parent_dir).unwrap());
 
@@ -297,17 +276,11 @@ fn test_read_metainfo_and_spawn_files() {
 #[test]
 fn test_read_metainfo_and_spawn_single_file() {
     let data = fs::read("tests/assets/pcap.torrent").unwrap();
-    let entity = benc::Element::from_bytes(&data).unwrap();
-    if let benc::Element::Dictionary(ref dict) = entity {
-        assert!(!dict.is_empty());
-    } else {
-        panic!("Not a dictionary");
-    }
-    let info = meta::Metainfo::try_from(entity).unwrap();
+    let info = meta::Metainfo::new(&data).unwrap();
 
     let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
     let filedir = Path::new(parent_dir).join("files");
-    let storage = startup::create_storage(&info, &filedir).unwrap();
+    let storage = startup::create_content_storage(&info, &filedir).unwrap();
 
     assert_eq!(1, count_files(parent_dir).unwrap());
 

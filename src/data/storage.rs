@@ -452,6 +452,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_past_the_end_read_fails() {
+        let s = GenericStorage::from_length_file_pairs(iter::once(fake_length_file_pair(
+            (1u8..=10u8).collect(),
+        )))
+        .unwrap();
+        assert!(matches!(s.read_block(5, 10), Err(Error::InvalidLocation)));
+        assert!(matches!(s.read_block(11, 5), Err(Error::InvalidLocation)));
+    }
+
     #[tokio::test]
     async fn test_async_detached_write_then_read_on_file_boundary() {
         task::LocalSet::new()
