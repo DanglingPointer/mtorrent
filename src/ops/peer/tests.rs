@@ -1,8 +1,10 @@
 use super::*;
+use crate::ops::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
 use crate::utils::startup;
 use crate::{ops::ctx, pwp, sec};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use tokio::{join, net::TcpListener, runtime, select, time};
 
@@ -44,15 +46,102 @@ async fn connecting_peer(
     (download, upload, handle, peer_ip)
 }
 
+async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_path: &'static str) {
+    let metainfo = startup::read_metainfo(metainfo_path).unwrap();
+    let metainfo_len = metainfo.size();
+    let (storage, storage_server) = startup::create_metainfo_storage(metainfo_path).unwrap();
+
+    runtime::Handle::current().spawn(async move {
+        storage_server.run().await;
+    });
+
+    let mut local_id = [0u8; 20];
+    local_id[..4].copy_from_slice("meta".as_bytes());
+
+    let (mut download_chans, mut upload_chans, extended_chans, runner) =
+        pwp::channels_from_outgoing(&local_id, metainfo.info_hash(), true, remote_ip, None)
+            .await
+            .unwrap();
+    let extended_chans = extended_chans.unwrap();
+
+    runtime::Handle::current().spawn(async move {
+        let _ = runner.run().await;
+    });
+
+    let download_fut = async {
+        while let Ok(msg) = download_chans.1.receive_message().await {
+            log::info!("Received downloader message: {}", msg);
+        }
+    };
+    let upload_fut = async {
+        while let Ok(msg) = upload_chans.1.receive_message().await {
+            log::info!("Received uploader message: {}", msg);
+        }
+    };
+    let meta_fut = async move {
+        let pwp::ExtendedChannels(mut tx, mut rx) = extended_chans;
+        let local_handshake = Box::new(pwp::HandshakeData {
+            extensions: SUPPORTED_EXTENSIONS.iter().map(|e| (*e, e.local_id())).collect(),
+            ..Default::default()
+        });
+        tx.send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0))
+            .await
+            .unwrap();
+        let received = rx.receive_message().await.unwrap();
+        log::info!("Receved initial message {received}");
+        match received {
+            pwp::ExtendedMessage::Handshake(data) => {
+                assert_eq!(
+                    SUPPORTED_EXTENSIONS
+                        .iter()
+                        .map(|e| (*e, e.local_id()))
+                        .collect::<HashMap<_, _>>(),
+                    data.extensions
+                );
+                assert!(matches!(data.yourip, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))));
+                assert_eq!(metainfo_len, data.metadata_size.unwrap());
+            }
+            msg => panic!("Unexpected initial extended message: {msg}"),
+        };
+        let id = pwp::Extension::Metadata.local_id();
+        for (piece, offset) in (0..metainfo_len).step_by(MAX_BLOCK_SIZE).enumerate() {
+            log::info!("Requesting metadata piece {piece}");
+            tx.send_message((pwp::ExtendedMessage::MetadataRequest { piece }, id))
+                .await
+                .unwrap();
+            let received = rx.receive_message().await.unwrap();
+            log::info!("Receved message {received}");
+            match received {
+                pwp::ExtendedMessage::MetadataBlock {
+                    piece: received_piece,
+                    total_size,
+                    data,
+                } => {
+                    assert_eq!(piece, received_piece);
+                    assert_eq!(metainfo_len, total_size);
+                    assert_eq!(std::cmp::min(MAX_BLOCK_SIZE, metainfo_len - offset), data.len());
+                    let expected_data = storage.read_block(offset, data.len()).await.unwrap();
+                    assert_eq!(expected_data, data);
+                }
+                msg => panic!("Unexpected extended message: {msg}"),
+            }
+        }
+    };
+    join!(download_fut, upload_fut, meta_fut);
+}
+
 async fn listening_seeder(
     listener_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
-) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
+) -> (download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>, ctx::Handle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
-    let (storage, storage_server) = startup::create_content_storage(&metainfo, files_dir).unwrap();
+    let (content_storage, content_storage_server) =
+        startup::create_content_storage(&metainfo, files_dir).unwrap();
+    let (meta_storage, meta_storage_server) =
+        startup::create_metainfo_storage(metainfo_path).unwrap();
     runtime::Handle::current().spawn(async move {
-        storage_server.run().await;
+        join!(content_storage_server.run(), meta_storage_server.run());
     });
 
     let piece_count = metainfo.pieces().unwrap().count();
@@ -71,16 +160,15 @@ async fn listening_seeder(
     let (stream, peer_ip) = listener.accept().await.unwrap();
     let (download, upload, extensions) = from_incoming_connection(
         stream,
-        storage.clone(),
-        storage, // hack
+        content_storage,
+        meta_storage,
         handle.clone(),
         runtime::Handle::current(),
         true, // extension protocol
     )
     .await
     .unwrap();
-    assert!(extensions.is_none());
-    (download, upload, handle, peer_ip)
+    (download, upload, extensions, handle, peer_ip)
 }
 
 async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
@@ -166,8 +254,9 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
 
 async fn run_seeder(listener_ip: SocketAddr, metainfo_path: &'static str) {
     let files_dir = "test_input";
-    let (download, upload, mut handle, peer_ip) =
+    let (download, upload, extensions, mut handle, peer_ip) =
         listening_seeder(listener_ip, metainfo_path, files_dir).await;
+    assert!(extensions.is_none());
 
     handle.with_ctx(|ctx| {
         assert_eq!(0, ctx.piece_tracker.get_poorest_peers().count());
@@ -283,12 +372,38 @@ async fn test_pass_full_torrent_from_peer_to_peer() {
         }
     };
     let listening_peer = async {
-        let (download, upload, handle, peer_ip) =
+        let (download, upload, extensions, handle, peer_ip) =
             listening_seeder(addr, metainfo, "test_input2").await;
+        assert!(extensions.is_none());
         run_peer(download, upload, handle, peer_ip).await;
     };
     join!(listening_peer, connecting_peer);
 
     std::fs::remove_dir_all("test_output2").unwrap();
     std::fs::remove_dir_all("test_input2").unwrap();
+}
+
+#[tokio::test]
+async fn test_send_metainfo_file_to_peer() {
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .init();
+
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43212));
+    let metainfo = "tests/assets/big_metainfo_file.torrent";
+
+    let sending_peer = async {
+        let (download, upload, extensions, handle, peer_ip) =
+            listening_seeder(addr, metainfo, "test_input3").await;
+        assert!(extensions.is_some());
+        let download = run_download(download.into(), peer_ip, handle.clone());
+        let upload = run_upload(upload.into(), peer_ip, handle.clone());
+        let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
+        let _ = join!(download, upload, extensions);
+    };
+    let requesting_peer = async {
+        connecting_peer_downloading_metadata(addr, metainfo).await;
+    };
+    join!(sending_peer, requesting_peer);
 }

@@ -940,8 +940,8 @@ impl fmt::Display for ExtendedMessage {
             ExtendedMessage::MetadataRequest { piece } => {
                 write!(f, "MetadataRequest[piece={piece}]")
             }
-            ExtendedMessage::MetadataBlock { piece, .. } => {
-                write!(f, "MetadataBlock[piece={piece}]")
+            ExtendedMessage::MetadataBlock { piece, data, .. } => {
+                write!(f, "MetadataBlock[piece={} len={}]", piece, data.len())
             }
             ExtendedMessage::MetadataReject { piece } => {
                 write!(f, "MetadataReject[piece={piece}]")
