@@ -43,7 +43,7 @@ async fn from_incoming_connection(
         stream,
     )
     .await?;
-    log::info!("Successfully established an incoming connection with {remote_ip}");
+    log::info!("Successful incoming connection from {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
         if let Err(e) = runner.run().await {
@@ -115,7 +115,7 @@ async fn from_outgoing_connection(
         }
     };
     with_ctx!(|ctx| check_already_connected(remote_ip, ctx))?;
-    log::info!("Successfully established an outgoing connection to {remote_ip}");
+    log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
         if let Err(e) = runner.run().await {
