@@ -11,6 +11,10 @@ pub fn reserved_bits(extended_protocol: bool) -> ReservedBits {
     bits
 }
 
+pub fn is_extension_protocol_enabled(reserved: &ReservedBits) -> bool {
+    reserved[44]
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Handshake {
     pub peer_id: [u8; 20],

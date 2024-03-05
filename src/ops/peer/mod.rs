@@ -22,6 +22,7 @@ async fn from_incoming_connection(
     metainfo_storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
+    extension_protocol_enabled: bool,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
     define_with_ctx!(ctx_handle);
 
@@ -39,7 +40,7 @@ async fn from_incoming_connection(
     let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
         &local_peer_id,
         Some(&info_hash),
-        EXTENSION_PROTOCOL_ENABLED,
+        extension_protocol_enabled,
         stream,
     )
     .await?;
@@ -70,6 +71,7 @@ async fn from_outgoing_connection(
     metainfo_storage: data::StorageClient,
     mut ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
+    extension_protocol_enabled: bool,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
     define_with_ctx!(ctx_handle);
     fn check_already_connected(remote_ip: SocketAddr, ctx: &ctx::Ctx) -> io::Result<()> {
@@ -95,7 +97,7 @@ async fn from_outgoing_connection(
         match pwp::channels_from_outgoing(
             &local_peer_id,
             &info_hash,
-            EXTENSION_PROTOCOL_ENABLED,
+            extension_protocol_enabled,
             remote_ip,
             None,
         )
@@ -258,6 +260,7 @@ pub async fn outgoing_pwp_connection(
             metainfo_storage.clone(),
             ctx_handle.clone(),
             pwp_worker_handle.clone(),
+            EXTENSION_PROTOCOL_ENABLED,
         )
         .await?;
         let run_result = try_join!(
@@ -292,6 +295,7 @@ pub async fn incoming_pwp_connection(
         metainfo_storage.clone(),
         ctx_handle.clone(),
         pwp_worker_handle.clone(),
+        EXTENSION_PROTOCOL_ENABLED,
     )
     .await?;
     let run_result = try_join!(

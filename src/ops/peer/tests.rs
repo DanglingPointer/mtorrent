@@ -37,6 +37,7 @@ async fn connecting_peer(
         storage, // hack
         handle.clone(),
         runtime::Handle::current(),
+        false, // extension protocol
     )
     .await
     .unwrap();
@@ -68,15 +69,17 @@ async fn listening_seeder(
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    let (download, upload, _) = from_incoming_connection(
+    let (download, upload, extensions) = from_incoming_connection(
         stream,
         storage.clone(),
         storage, // hack
         handle.clone(),
         runtime::Handle::current(),
+        true, // extension protocol
     )
     .await
     .unwrap();
+    assert!(extensions.is_none());
     (download, upload, handle, peer_ip)
 }
 

@@ -119,13 +119,13 @@ const HANDSHAKE_TIMEOUT: Duration = sec!(30);
 pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
-    extension_protocol: bool,
+    extension_protocol_enabled: bool,
     socket: TcpStream,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionRunner)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
-        reserved: reserved_bits(extension_protocol),
+        reserved: reserved_bits(extension_protocol_enabled),
     };
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
@@ -136,20 +136,20 @@ pub async fn channels_from_incoming(
     let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();
 
-    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake))
+    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake, extension_protocol_enabled))
 }
 
 pub async fn channels_from_outgoing(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
-    extension_protocol: bool,
+    extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionRunner)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
-        reserved: reserved_bits(extension_protocol),
+        reserved: reserved_bits(extension_protocol_enabled),
     };
     let socket = TcpStream::connect(remote_addr).await?;
     let (socket, remote_handshake) =
@@ -159,7 +159,7 @@ pub async fn channels_from_outgoing(
     let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();
 
-    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake))
+    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake, extension_protocol_enabled))
 }
 
 // ------
@@ -176,12 +176,13 @@ fn setup_channels<I, E>(
     egress: E,
     remote_ip: SocketAddr,
     remote_handshake: Handshake,
+    extended_protocol_enabled: bool,
 ) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, Runner<I, E>)
 where
     I: AsyncReadExt,
     E: AsyncWriteExt,
 {
-    let extended_protocol_supported = remote_handshake.reserved[44];
+    let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
     let info = Rc::new(PeerInfo {
         handshake_info: remote_handshake,
@@ -199,7 +200,7 @@ where
         mpsc::channel::<DownloaderMessage>(MAX_INCOMING_QUEUE);
 
     let (local_extended_msg_out, remote_extended_msg_in, extended_channels) =
-        if extended_protocol_supported {
+        if extended_protocol_supported && extended_protocol_enabled {
             let (local_extended_msg_in, local_extended_msg_out) =
                 mpsc::channel::<Option<(ExtendedMessage, u8)>>(0);
             let (remote_extended_msg_in, remote_extended_msg_out) =
@@ -525,6 +526,7 @@ mod tests {
             PendingStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
         assert!(extended.is_none());
 
@@ -553,6 +555,7 @@ mod tests {
             PendingStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
         assert!(extended.is_none());
 
@@ -593,6 +596,7 @@ mod tests {
             PendingStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
+            true,
         );
         assert!(extended.is_some());
 
@@ -649,6 +653,7 @@ mod tests {
             PendingStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
+            true,
         );
 
         let upload_fut = async {
@@ -687,6 +692,7 @@ mod tests {
             PendingStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
 
         let download_fut = async {
@@ -715,6 +721,7 @@ mod tests {
             FakeSocket::default(),
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
 
         let send_msg_fut = async {
@@ -742,6 +749,7 @@ mod tests {
             FakeSocket::default(),
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
 
         let send_msg_fut = async {
@@ -769,6 +777,7 @@ mod tests {
             FakeSocket::default(),
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
+            true,
         );
         assert!(extended.is_some());
         let ExtendedChannels(mut tx, _rx) = extended.unwrap();
@@ -827,6 +836,7 @@ mod tests {
             ErrorStream {},
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
 
         let send_msg_fut = async {
@@ -852,6 +862,7 @@ mod tests {
             FakeSocket::default(),
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
+            false,
         );
 
         let runner = Rc::new(RefCell::new(runner));
@@ -924,6 +935,7 @@ mod tests {
                     FakeSink(writer),
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
+                    false,
                 );
 
                 task::spawn_local(async move {
@@ -962,6 +974,7 @@ mod tests {
                     FakeSocket::default(),
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
+                    false,
                 );
 
                 let (mut result_sender, mut result_receiver) = mpsc::channel::<io::Result<()>>(1);
@@ -995,6 +1008,7 @@ mod tests {
                     PendingStream {},
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
+                    false,
                 );
 
                 let (mut result_sender, mut result_receiver) =
@@ -1030,6 +1044,7 @@ mod tests {
                     PendingStream {},
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
+                    false,
                 );
 
                 let (mut result_sender, mut result_receiver) =
