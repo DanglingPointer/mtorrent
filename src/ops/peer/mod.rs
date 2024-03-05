@@ -58,11 +58,16 @@ async fn from_incoming_connection(
     let pwp::UploadChannels(tx, rx) = upload_chans;
     let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
 
-    let (seeder, leech) = try_join!(download_fut, upload_fut)?;
-    let extensions = extended_chans.map(|pwp::ExtendedChannels(tx, rx)| {
-        extensions::new_peer(ctx_handle, rx, tx, metainfo_storage)
-    });
-    Ok((seeder, leech, extensions))
+    let extensions_fut = async move {
+        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
+            Ok(Some(extensions::new_peer(ctx_handle, rx, tx, metainfo_storage).await?))
+        } else {
+            Ok(None)
+        }
+    };
+
+    let (seeder, leech, ext) = try_join!(download_fut, upload_fut, extensions_fut)?;
+    Ok((seeder, leech, ext))
 }
 
 async fn from_outgoing_connection(
@@ -131,11 +136,16 @@ async fn from_outgoing_connection(
     let pwp::UploadChannels(tx, rx) = upload_chans;
     let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
 
-    let (seeder, leech) = try_join!(download_fut, upload_fut)?;
-    let extensions = extended_chans.map(|pwp::ExtendedChannels(tx, rx)| {
-        extensions::new_peer(ctx_handle, rx, tx, metainfo_storage)
-    });
-    Ok((seeder, leech, extensions))
+    let extensions_fut = async move {
+        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
+            Ok(Some(extensions::new_peer(ctx_handle, rx, tx, metainfo_storage).await?))
+        } else {
+            Ok(None)
+        }
+    };
+
+    let (seeder, leech, ext) = try_join!(download_fut, upload_fut, extensions_fut)?;
+    Ok((seeder, leech, ext))
 }
 
 async fn run_download(

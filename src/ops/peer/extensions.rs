@@ -1,7 +1,7 @@
 use super::super::{ctx, MAX_BLOCK_SIZE};
 use super::SUPPORTED_EXTENSIONS;
 use crate::utils::ip;
-use crate::{data, pwp};
+use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -20,14 +20,14 @@ struct Data {
 
 pub struct Peer(Box<Data>);
 
-pub fn new_peer(
+pub async fn new_peer(
     mut handle: ctx::Handle,
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
-) -> Peer {
+) -> io::Result<Peer> {
     let metadata_len = handle.with_ctx(|ctx| ctx.metainfo.size());
-    let inner = Box::new(Data {
+    let mut inner = Box::new(Data {
         handle,
         rx,
         tx,
@@ -36,7 +36,24 @@ pub fn new_peer(
         sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
         last_shared_peers: Default::default(),
     });
-    Peer(inner)
+    // try wait for remote handshake
+    match inner.rx.receive_message_timed(sec!(1)).await {
+        Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+            log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), hs);
+            inner.remote_extensions = hs.extensions;
+            inner.remote_extensions.retain(|_ext, id| *id != 0); // id 0 means extension is disabled
+        }
+        Ok(msg) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("unexpected first extended message: {msg}"),
+            ))
+        }
+        Err(pwp::ChannelError::Timeout) => (),
+        Err(e) => return Err(e.into()),
+    }
+    // don't send local handshake here, because 'upload' needs to send bitfield first
+    Ok(Peer(inner))
 }
 
 const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
@@ -82,6 +99,7 @@ pub async fn share_peers(peer: Peer) -> io::Result<Peer> {
             dropped: inner.last_shared_peers.difference(&connected_peers).cloned().collect(),
         });
         if !pex.added.is_empty() || !pex.dropped.is_empty() {
+            log::debug!("Sending PEX message to {}: {}", inner.tx.remote_ip(), pex);
             inner.tx.send_message((pwp::ExtendedMessage::PeerExchange(pex), id)).await?;
             inner.last_shared_peers = connected_peers;
         }

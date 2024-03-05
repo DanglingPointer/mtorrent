@@ -88,7 +88,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
             .await
             .unwrap();
         let received = rx.receive_message().await.unwrap();
-        log::info!("Receved initial message {received}");
+        log::info!("Received initial message {received}");
         match received {
             pwp::ExtendedMessage::Handshake(data) => {
                 assert_eq!(
@@ -101,7 +101,16 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
                 assert!(matches!(data.yourip, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))));
                 assert_eq!(metainfo_len, data.metadata_size.unwrap());
             }
-            msg => panic!("Unexpected initial extended message: {msg}"),
+            msg => panic!("Unexpected first extended message: {msg}"),
+        };
+        let received = rx.receive_message().await.unwrap();
+        log::info!("Received second message {received}");
+        match received {
+            pwp::ExtendedMessage::PeerExchange(data) => {
+                assert_eq!(1, data.added.len());
+                assert_eq!(0, data.dropped.len());
+            }
+            msg => panic!("Unexpected second extended message: {msg}"),
         };
         let id = pwp::Extension::Metadata.local_id();
         for (piece, offset) in (0..metainfo_len).step_by(MAX_BLOCK_SIZE).enumerate() {
@@ -110,7 +119,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
                 .await
                 .unwrap();
             let received = rx.receive_message().await.unwrap();
-            log::info!("Receved message {received}");
+            log::info!("Received message {received}");
             match received {
                 pwp::ExtendedMessage::MetadataBlock {
                     piece: received_piece,
