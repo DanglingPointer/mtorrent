@@ -1,5 +1,5 @@
 use super::super::{ctx, MAX_BLOCK_SIZE};
-use super::SUPPORTED_EXTENSIONS;
+use super::ALL_SUPPORTED_EXTENSIONS;
 use crate::utils::ip;
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
@@ -69,7 +69,7 @@ pub async fn send_handshake(
 
     // set 0 ids for disabled extensions, and local ids for those enabled
     let mut extensions: HashMap<pwp::Extension, u8> =
-        SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
+        ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
     extensions.extend(enabled_extensions.map(|e| (*e, e.local_id())));
 
     let local_handshake = Box::new(pwp::HandshakeData {

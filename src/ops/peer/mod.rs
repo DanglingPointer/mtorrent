@@ -11,9 +11,9 @@ use std::io;
 use std::{net::SocketAddr, ops::Deref, time::Duration};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
-const EXTENSION_PROTOCOL_ENABLED: bool = false;
+const EXTENSION_PROTOCOL_ENABLED: bool = true;
 
-const SUPPORTED_EXTENSIONS: &[pwp::Extension] =
+const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
     &[pwp::Extension::Metadata, pwp::Extension::PeerExchange];
 
 async fn from_incoming_connection(
@@ -223,7 +223,7 @@ async fn run_extensions(
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    peer = extensions::send_handshake(peer, SUPPORTED_EXTENSIONS.iter()).await?;
+    peer = extensions::send_handshake(peer, ALL_SUPPORTED_EXTENSIONS.iter()).await?;
     const PEX_INTERVAL: Duration = sec!(60);
     loop {
         peer = extensions::share_peers(peer).await?;
