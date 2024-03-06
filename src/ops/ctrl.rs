@@ -8,7 +8,7 @@ use std::time::Duration;
 
 const MAX_SEEDER_COUNT: usize = 50;
 
-fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> bool {
+fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
     let has_missing_pieces = || {
         ctx.piece_tracker
             .get_peer_pieces(peer_ip)
@@ -39,7 +39,7 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> bool {
     }
 }
 
-fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::Ctx) -> Vec<usize> {
+fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
     // libtorrent supports max 250 queued requests, hence:
     // 250 * 16kB == piece_len * piece_count
     let max_request_count =
@@ -86,7 +86,7 @@ pub enum IdleDownloadAction {
     WaitForUpdates(Duration),
 }
 
-pub fn idle_download_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> IdleDownloadAction {
+pub fn idle_download_next_action(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> IdleDownloadAction {
     if is_peer_interesting(peer_addr, ctx) {
         IdleDownloadAction::ActivateDownload
     } else {
@@ -100,7 +100,10 @@ pub enum SeederDownloadAction {
     DeactivateDownload,
 }
 
-pub fn active_download_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> SeederDownloadAction {
+pub fn active_download_next_action(
+    peer_addr: &SocketAddr,
+    ctx: &ctx::MainCtx,
+) -> SeederDownloadAction {
     let pieces = pieces_to_request(peer_addr, ctx);
     if !pieces.is_empty() {
         SeederDownloadAction::RequestPieces(pieces)
@@ -137,7 +140,7 @@ pub enum IdleUploadAction {
     Linger(Duration),
 }
 
-pub fn idle_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> IdleUploadAction {
+pub fn idle_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> IdleUploadAction {
     if let Some(state) = ctx.peer_states.get(peer_addr) {
         if should_seed_to_peer(state, ctx.peer_states.leeches_count()) {
             IdleUploadAction::ActivateUpload
@@ -159,7 +162,7 @@ pub enum LeechUploadAction {
     Serve(Duration),
 }
 
-pub fn active_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> LeechUploadAction {
+pub fn active_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> LeechUploadAction {
     if let Some(state) = ctx.peer_states.get(peer_addr) {
         if !should_seed_to_peer(state, ctx.peer_states.leeches_count()) {
             LeechUploadAction::DeactivateUpload
@@ -176,10 +179,10 @@ pub fn active_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::Ctx) -> Leec
     }
 }
 
-pub fn is_finished(ctx: &ctx::Ctx) -> bool {
+pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
     ctx.accountant.missing_bytes() == 0 && ctx.peer_states.leeches_count() == 0
 }
 
-pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::Ctx) -> bool {
+pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool {
     true
 }

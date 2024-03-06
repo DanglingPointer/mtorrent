@@ -10,7 +10,7 @@ use tokio::{runtime, task};
 fn peer_discovered_callback_factory(
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    ctx_handle: ops::CtxHandle,
+    ctx_handle: ops::Handle<ops::MainCtx>,
     pwp_worker_handle: runtime::Handle,
 ) -> impl FnMut(&SocketAddr) + Clone {
     move |remote_ip| {
@@ -92,7 +92,7 @@ pub async fn single_torrent(
         }
     };
 
-    let ctx: ops::CtxHandle = ops::new_ctx(metainfo, local_peer_id)?;
+    let ctx = ops::MainCtx::new(metainfo, local_peer_id)?;
 
     let incoming_connection_content_storage = content_storage.clone();
     let incoming_connection_metainfo_storage = metainfo_storage.clone();

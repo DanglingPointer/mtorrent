@@ -8,8 +8,10 @@ use std::{cmp, io};
 use tokio::time::Instant;
 use tokio::try_join;
 
+type CtxHandle = ctx::Handle<ctx::MainCtx>;
+
 struct Data {
-    handle: ctx::Handle,
+    handle: CtxHandle,
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
@@ -75,7 +77,7 @@ macro_rules! update_state {
 }
 
 pub async fn new_peer(
-    handle: ctx::Handle,
+    handle: CtxHandle,
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,

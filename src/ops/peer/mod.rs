@@ -11,6 +11,8 @@ use std::io;
 use std::{net::SocketAddr, ops::Deref, time::Duration};
 use tokio::{net::TcpStream, runtime, time::sleep, try_join};
 
+type CtxHandle = ctx::Handle<ctx::MainCtx>;
+
 const EXTENSION_PROTOCOL_ENABLED: bool = true;
 
 const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
@@ -20,7 +22,7 @@ async fn from_incoming_connection(
     stream: TcpStream,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
     pwp_worker_handle: runtime::Handle,
     extension_protocol_enabled: bool,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
@@ -74,12 +76,12 @@ async fn from_outgoing_connection(
     remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
     pwp_worker_handle: runtime::Handle,
     extension_protocol_enabled: bool,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
     define_with_ctx!(ctx_handle);
-    fn check_already_connected(remote_ip: SocketAddr, ctx: &ctx::Ctx) -> io::Result<()> {
+    fn check_already_connected(remote_ip: SocketAddr, ctx: &ctx::MainCtx) -> io::Result<()> {
         if ctx.peer_states.get(&remote_ip).is_some() {
             Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -151,7 +153,7 @@ async fn from_outgoing_connection(
 async fn run_download(
     mut peer: download::Peer,
     remote_ip: SocketAddr,
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
@@ -186,7 +188,7 @@ async fn run_download(
 async fn run_upload(
     mut peer: upload::Peer,
     remote_ip: SocketAddr,
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
@@ -219,7 +221,7 @@ async fn run_upload(
 async fn run_extensions(
     mut peer: extensions::Peer,
     remote_ip: SocketAddr,
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
@@ -259,7 +261,7 @@ pub async fn outgoing_pwp_connection(
     remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    ctx_handle: ctx::Handle,
+    ctx_handle: CtxHandle,
     pwp_worker_handle: runtime::Handle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
@@ -294,7 +296,7 @@ pub async fn incoming_pwp_connection(
     stream: TcpStream,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    ctx_handle: ctx::Handle,
+    ctx_handle: CtxHandle,
     pwp_worker_handle: runtime::Handle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {

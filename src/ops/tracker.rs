@@ -10,6 +10,8 @@ use std::{cmp, io};
 use tokio::net::UdpSocket;
 use tokio::time;
 
+type CtxHandle = ctx::Handle<ctx::MainCtx>;
+
 const NUM_WANT: usize = 100;
 
 #[derive(Clone, Copy)]
@@ -51,7 +53,7 @@ struct AnnounceData {
 }
 
 impl AnnounceData {
-    fn new(ctx: &ctx::Ctx, listener_port: u16) -> Self {
+    fn new(ctx: &ctx::MainCtx, listener_port: u16) -> Self {
         Self {
             info_hash: *ctx.metainfo.info_hash(),
             downloaded: ctx.accountant.accounted_bytes(),
@@ -166,7 +168,7 @@ enum TrackerType {
 async fn run_tracker(
     tracker_type: TrackerType,
     tracker_addr: String,
-    mut handle: ctx::Handle,
+    mut handle: CtxHandle,
     listener_port: u16,
     mut callback: impl FnMut(ResponseData),
 ) {
@@ -202,7 +204,7 @@ async fn run_tracker(
 }
 
 pub async fn run_periodic_announces(
-    mut ctx_handle: ctx::Handle,
+    mut ctx_handle: CtxHandle,
     public_listener_port: u16,
     callback: impl FnMut(ResponseData) + Clone,
 ) {

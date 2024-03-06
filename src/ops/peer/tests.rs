@@ -17,11 +17,13 @@ const START_PIECE_INDEX: usize = 600;
 const EXPECTED_BYTES_PASSED: usize =
     PIECE_LENGTH * (PIECE_COUNT - START_PIECE_INDEX - 1) + LAST_PIECE_LENGTH;
 
+type CtxHandle = ctx::Handle<ctx::MainCtx>;
+
 async fn connecting_peer(
     peer_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
-) -> (download::IdlePeer, upload::IdlePeer, ctx::Handle, SocketAddr) {
+) -> (download::IdlePeer, upload::IdlePeer, CtxHandle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
     let (storage, storage_server) = startup::create_content_storage(&metainfo, files_dir).unwrap();
     runtime::Handle::current().spawn(async move {
@@ -31,7 +33,7 @@ async fn connecting_peer(
     let mut local_id = [0u8; 20];
     local_id[..5].copy_from_slice("leech".as_bytes());
 
-    let handle = ctx::new_ctx(metainfo, PeerId::from(&local_id)).unwrap();
+    let handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
 
     let (download, upload, _) = from_outgoing_connection(
         peer_ip,
@@ -143,7 +145,7 @@ async fn listening_seeder(
     listener_ip: SocketAddr,
     metainfo_path: &'static str,
     files_dir: &'static str,
-) -> (download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>, ctx::Handle, SocketAddr) {
+) -> (download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>, CtxHandle, SocketAddr) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, files_dir).unwrap();
@@ -157,7 +159,7 @@ async fn listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle = ctx::new_ctx(metainfo, PeerId::from(&local_id)).unwrap();
+    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
@@ -334,7 +336,7 @@ async fn test_pass_partial_torrent_from_seeder_to_leech() {
 async fn run_peer(
     download: download::IdlePeer,
     upload: upload::IdlePeer,
-    mut handle: ctx::Handle,
+    mut handle: CtxHandle,
     ip: SocketAddr,
 ) {
     let handle_copy = handle.clone();

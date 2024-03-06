@@ -8,8 +8,10 @@ use std::time::Duration;
 use std::{cmp, io};
 use tokio::time::Instant;
 
+type CtxHandle = ctx::Handle<ctx::MainCtx>;
+
 struct Data {
-    handle: ctx::Handle,
+    handle: CtxHandle,
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
@@ -21,7 +23,7 @@ struct Data {
 pub struct Peer(Box<Data>);
 
 pub async fn new_peer(
-    mut handle: ctx::Handle,
+    mut handle: CtxHandle,
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
