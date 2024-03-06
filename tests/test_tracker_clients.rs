@@ -7,7 +7,7 @@ use tokio::net::UdpSocket;
 #[tokio::test]
 async fn test_udp_announce() {
     let metainfo = startup::read_metainfo("tests/assets/example.torrent").unwrap();
-    let udp_tracker_addrs = utils::get_udp_tracker_addrs(&metainfo);
+    let udp_tracker_addrs = utils::get_udp_trackers(utils::trackers_from_metainfo(&metainfo));
 
     let local_ip = SocketAddr::V4(SocketAddrV4::new(ip::get_local_addr().unwrap(), 6666));
 
@@ -24,7 +24,7 @@ async fn test_udp_announce() {
         port: local_ip.port(),
     };
 
-    for tracker_addr in &udp_tracker_addrs {
+    for tracker_addr in udp_tracker_addrs {
         let client_socket = UdpSocket::bind(local_ip).await.unwrap();
         client_socket
             .connect(&tracker_addr)
@@ -99,7 +99,9 @@ async fn test_https_announce() {
         startup::read_metainfo("tests/assets/ubuntu-22.04.3-live-server-amd64.iso.torrent")
             .unwrap();
 
-    for tracker_url in utils::get_http_tracker_addrs(&metainfo) {
+    let http_tracker_addrs = utils::get_http_trackers(utils::trackers_from_metainfo(&metainfo));
+
+    for tracker_url in http_tracker_addrs {
         let mut request = http::TrackerRequestBuilder::try_from(tracker_url.as_str()).unwrap();
         request
             .info_hash(metainfo.info_hash())

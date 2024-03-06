@@ -33,12 +33,13 @@ fn test_read_example_torrent_file() {
         assert!(iter.next().is_none());
     }
     {
-        let mut http_iter = utils::get_http_tracker_addrs(&info).into_iter();
+        let mut http_iter =
+            utils::get_http_trackers(utils::trackers_from_metainfo(&info)).into_iter();
         assert_eq!("http://tracker.trackerfix.com:80/announce", http_iter.next().unwrap());
         assert!(http_iter.next().is_none());
     }
     {
-        let udp_trackers = utils::get_udp_tracker_addrs(&info);
+        let udp_trackers = utils::get_udp_trackers(utils::trackers_from_metainfo(&info));
         assert_eq!(4, udp_trackers.len());
         assert!(udp_trackers.contains("9.rarbg.me:2720"));
         assert!(udp_trackers.contains("9.rarbg.to:2740"));
@@ -226,7 +227,7 @@ fn test_read_torrent_file_without_announce_list() {
 
     assert!(info.announce_list().is_none());
 
-    let mut http_iter = utils::get_http_tracker_addrs(&info).into_iter();
+    let mut http_iter = utils::get_http_trackers(utils::trackers_from_metainfo(&info)).into_iter();
     assert_eq!("http://localhost:8000/announce", http_iter.next().unwrap());
     assert!(http_iter.next().is_none());
 }

@@ -1,10 +1,12 @@
 use super::{ctrl, ctx};
 use crate::sec;
 use crate::tracker::{http, udp, utils};
-use crate::utils::ip;
 use crate::utils::peer_id::PeerId;
+use crate::utils::{config, ip};
 use futures::future;
+use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 use std::{cmp, io};
 use tokio::net::UdpSocket;
@@ -205,16 +207,36 @@ async fn run_tracker(
 
 pub async fn run_periodic_announces(
     mut ctx_handle: CtxHandle,
+    configdir: impl AsRef<Path>,
     public_listener_port: u16,
     callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
+
     let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
-        (utils::get_http_tracker_addrs(&ctx.metainfo), utils::get_udp_tracker_addrs(&ctx.metainfo))
+        let metainfo_trackers: Vec<Cow<'_, str>> =
+            utils::trackers_from_metainfo(&ctx.metainfo).map(Into::into).collect();
+        let trackers = if !metainfo_trackers.is_empty() {
+            if let Err(e) = config::save_trackers(&configdir, metainfo_trackers.iter().cloned()) {
+                log::warn!("Failed to save trackers to file: {e}");
+            }
+            metainfo_trackers
+        } else {
+            log::warn!("No trackers in metainfo - trying to load from config");
+            match config::load_trackers(&configdir) {
+                Ok(trackers) => trackers.map(Into::into).collect(),
+                Err(_e) => Vec::new(),
+            }
+        };
+        let http_trackers = utils::get_http_trackers(trackers.iter());
+        let udp_trackers = utils::get_udp_trackers(trackers.iter());
+        (http_trackers, udp_trackers)
     });
+
     if http_trackers.is_empty() && udp_trackers.is_empty() {
         log::error!("No trackers found - download will fail");
     }
+
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
         run_tracker(
             TrackerType::Http,

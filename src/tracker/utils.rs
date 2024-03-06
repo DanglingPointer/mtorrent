@@ -14,37 +14,75 @@ pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = Socke
     data.chunks_exact(6).filter_map(to_addr_and_port)
 }
 
-pub fn get_udp_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
-    fn filter_uri(uri: &str) -> Option<String> {
-        let udp_addr = uri.strip_prefix("udp://")?;
-        if let Some(stripped) = udp_addr.strip_suffix("/announce") {
-            Some(stripped.to_string())
-        } else {
-            Some(udp_addr.to_string())
-        }
-    }
+pub fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &str> + '_> {
     if let Some(announce_list) = metainfo.announce_list() {
-        announce_list.flatten().filter_map(filter_uri).collect()
-    } else if let Some(Some(url)) = metainfo.announce().map(filter_uri) {
-        iter::once(url).collect()
+        Box::new(announce_list.flatten())
+    } else if let Some(url) = metainfo.announce() {
+        Box::new(iter::once(url))
     } else {
-        Default::default()
+        Box::new(iter::empty())
     }
 }
 
-pub fn get_http_tracker_addrs(metainfo: &Metainfo) -> HashSet<String> {
-    fn filter_url(url: &str) -> Option<String> {
-        if url.starts_with("http://") || url.starts_with("https://") {
-            Some(url.to_string())
-        } else {
-            None
-        }
+pub fn get_udp_trackers<T: AsRef<str>>(trackers: impl Iterator<Item = T>) -> HashSet<String> {
+    trackers
+        .filter_map(|tracker| {
+            let tracker = tracker.as_ref();
+            let udp_addr = tracker.strip_prefix("udp://")?;
+            Some(udp_addr.strip_suffix("/announce").unwrap_or(udp_addr).to_owned())
+        })
+        .collect()
+}
+
+pub fn get_http_trackers<T: AsRef<str>>(trackers: impl Iterator<Item = T>) -> HashSet<String> {
+    trackers
+        .filter_map(|tracker| {
+            let tracker = tracker.as_ref();
+            (tracker.starts_with("http://") || tracker.starts_with("https://"))
+                .then_some(tracker.to_owned())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_udp_trackers() {
+        let trackers = [
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://tracker.tiny-vps.com:6969",
+            "https://example.com",
+            "udp://tracker.internetwarriors.net:1337/announce",
+            "udp://tracker.skyts.net:6969/announce",
+            "http://example.com",
+        ];
+        let expected = [
+            "open.stealth.si:80",
+            "tracker.opentrackr.org:1337",
+            "tracker.tiny-vps.com:6969",
+            "tracker.internetwarriors.net:1337",
+            "tracker.skyts.net:6969",
+        ];
+        let actual = get_udp_trackers(trackers.into_iter());
+        assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
     }
-    if let Some(announce_list) = metainfo.announce_list() {
-        announce_list.flatten().filter_map(filter_url).collect()
-    } else if let Some(Some(url)) = metainfo.announce().map(filter_url) {
-        iter::once(url).collect()
-    } else {
-        Default::default()
+
+    #[test]
+    fn test_extract_http_trackers() {
+        let trackers = [
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://tracker.tiny-vps.com:6969",
+            "https://example.com",
+            "udp://tracker.internetwarriors.net:1337/announce",
+            "udp://tracker.skyts.net:6969/announce",
+            "http://example.com",
+        ];
+        let expected = ["https://example.com", "http://example.com"];
+        let actual = get_http_trackers(trackers.into_iter());
+        assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
     }
 }

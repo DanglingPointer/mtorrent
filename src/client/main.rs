@@ -3,7 +3,7 @@ use crate::utils::{ip, startup, upnp};
 use crate::{data, ops};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::net::TcpStream;
 use tokio::{runtime, task};
 
@@ -148,8 +148,15 @@ pub async fn single_torrent(
     };
 
     let tracker_ctx = ctx.clone();
+    let config_dir = PathBuf::from(output_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::run_periodic_announces(tracker_ctx, public_pwp_ip.port(), on_announce_response).await;
+        ops::run_periodic_announces(
+            tracker_ctx,
+            config_dir,
+            public_pwp_ip.port(),
+            on_announce_response,
+        )
+        .await;
     });
 
     local_task
