@@ -219,7 +219,7 @@ async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
 
         let peer = download::get_pieces(
             seeder,
-            (START_PIECE_INDEX..piece_count).collect::<Vec<_>>().iter(),
+            (START_PIECE_INDEX..piece_count).collect::<Vec<_>>().into_iter(),
         )
         .await
         .unwrap();

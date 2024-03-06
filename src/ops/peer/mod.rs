@@ -169,7 +169,7 @@ async fn run_download(
             download::Peer::Seeder(seeding_peer) => {
                 match with_ctx!(|ctx| ctrl::active_download_next_action(&remote_ip, ctx)) {
                     ctrl::SeederDownloadAction::RequestPieces(requests) => {
-                        peer = download::get_pieces(seeding_peer, requests.iter()).await?;
+                        peer = download::get_pieces(seeding_peer, requests.into_iter()).await?;
                     }
                     ctrl::SeederDownloadAction::WaitForUpdates(timeout) => {
                         peer = download::linger(seeding_peer.into(), timeout).await?;
@@ -261,7 +261,7 @@ pub async fn outgoing_pwp_connection(
     metainfo_storage: data::StorageClient,
     ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr) + Clone,
+    mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
     loop {
         let (download, upload, extensions) = from_outgoing_connection(
@@ -296,7 +296,7 @@ pub async fn incoming_pwp_connection(
     metainfo_storage: data::StorageClient,
     ctx_handle: ctx::Handle,
     pwp_worker_handle: runtime::Handle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr) + Clone,
+    mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
     let remote_ip = stream.peer_addr()?;
     let (download, upload, extensions) = from_incoming_connection(

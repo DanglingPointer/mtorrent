@@ -65,8 +65,6 @@ pub async fn send_handshake(
     let mut inner = peer.0;
     define_with_ctx!(inner.handle);
 
-    let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
-
     // set 0 ids for disabled extensions, and local ids for those enabled
     let mut extensions: HashMap<pwp::Extension, u8> =
         ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
@@ -77,7 +75,7 @@ pub async fn send_handshake(
         listen_port: Some(with_ctx!(|ctx| ip::any_socketaddr_from_hash(&ctx.metainfo).port())),
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(inner.rx.remote_ip().ip()),
-        metadata_size: Some(metadata_len),
+        metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
         ..Default::default()
     });
     inner
