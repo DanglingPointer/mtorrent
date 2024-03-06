@@ -311,7 +311,11 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
         } else {
             received
         };
-        log::trace!("{} => IGNORED {:?}", self.remote_ip, received);
+        if matches!(received, PeerMessage::KeepAlive) {
+            log::trace!("{} => {:?}", self.remote_ip, received);
+        } else {
+            log::error!("{} => unknown message: {:?}", self.remote_ip, received)
+        }
         Ok(())
     }
 }

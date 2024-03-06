@@ -78,6 +78,7 @@ pub async fn send_handshake(
         metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
         ..Default::default()
     });
+    log::debug!("Sending extended handshake to {}: {}", inner.rx.remote_ip(), local_handshake);
     inner
         .tx
         .send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0))
