@@ -1,10 +1,13 @@
 use super::ctrl;
+use crate::pwp::Bitfield;
 use crate::sec;
-use crate::utils::config;
 use crate::utils::peer_id::PeerId;
-use crate::{data, pwp, utils::meta};
+use crate::utils::{config, magnet, meta};
+use crate::{data, pwp};
 use core::fmt;
+use std::collections::HashSet;
 use std::io;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
@@ -31,6 +34,10 @@ impl<C> Handle<C> {
         let mut borrowed = self.ctx.borrow_mut();
         f(&mut borrowed)
     }
+
+    fn into_inner(self) -> Option<C> {
+        Some(Rc::into_inner(self.ctx)?.into_inner())
+    }
 }
 
 macro_rules! define_with_ctx {
@@ -44,6 +51,28 @@ macro_rules! define_with_ctx {
             };
         }
     };
+}
+
+pub struct PreliminaryCtx {
+    pub(super) magnet: magnet::MagnetLink,
+    pub(super) metainfo: Vec<u8>,
+    pub(super) metainfo_pieces: pwp::Bitfield,
+    pub(super) peers: HashSet<SocketAddr>,
+    pub(super) local_peer_id: PeerId,
+}
+
+impl PreliminaryCtx {
+    pub fn new(magnet: magnet::MagnetLink, local_peer_id: PeerId) -> Handle<Self> {
+        Handle {
+            ctx: Rc::new(RefCell::new(Self {
+                magnet,
+                metainfo: Vec::new(),
+                metainfo_pieces: Bitfield::new(),
+                peers: Default::default(),
+                local_peer_id,
+            })),
+        }
+    }
 }
 
 pub struct MainCtx {

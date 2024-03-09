@@ -1,0 +1,250 @@
+use super::super::{ctx, MAX_BLOCK_SIZE};
+use crate::{pwp, sec};
+use std::io;
+use tokio::time::Instant;
+
+type CtxHandle = ctx::Handle<ctx::PreliminaryCtx>;
+
+struct Data {
+    handle: CtxHandle,
+    rx: pwp::ExtendedRxChannel,
+    tx: pwp::ExtendedTxChannel,
+    remote_metadata_ext_id: u8,
+}
+
+pub struct DisabledPeer(Box<Data>);
+pub struct RejectingPeer(Box<Data>);
+pub struct UploadingPeer(Box<Data>);
+
+pub enum Peer {
+    Disabled(DisabledPeer),
+    Rejector(RejectingPeer),
+    Uploader(UploadingPeer),
+}
+
+impl From<DisabledPeer> for Peer {
+    fn from(peer: DisabledPeer) -> Self {
+        Peer::Disabled(peer)
+    }
+}
+
+impl From<RejectingPeer> for Peer {
+    fn from(peer: RejectingPeer) -> Self {
+        Peer::Rejector(peer)
+    }
+}
+
+impl From<UploadingPeer> for Peer {
+    fn from(peer: UploadingPeer) -> Self {
+        Peer::Uploader(peer)
+    }
+}
+
+macro_rules! to_enum {
+    ($inner:expr) => {
+        if $inner.remote_metadata_ext_id == 0 {
+            Peer::Disabled(DisabledPeer($inner))
+        } else {
+            Peer::Uploader(UploadingPeer($inner))
+        }
+    };
+}
+
+fn get_metadata_ext_id(hs: &pwp::HandshakeData) -> io::Result<u8> {
+    hs.extensions.get(&pwp::Extension::Metadata).cloned().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::Other, "peer does not support metadata extension")
+    })
+}
+
+fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) {
+    if ctx.metainfo_pieces.is_empty() {
+        ctx.metainfo.resize(metadata_size, 0);
+        let piece_count = (metadata_size + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
+        ctx.metainfo_pieces = pwp::Bitfield::repeat(false, piece_count);
+    } else if ctx.metainfo.len() != metadata_size {
+        log::error!(
+            "metadata size mismatch: expected {}, got {}",
+            ctx.metainfo.len(),
+            metadata_size
+        );
+        // TODO: what to do?
+    }
+}
+
+pub async fn new_peer(
+    mut handle: CtxHandle,
+    extended_chans: pwp::ExtendedChannels,
+) -> io::Result<Peer> {
+    define_with_ctx!(handle);
+    let pwp::ExtendedChannels(mut tx, mut rx) = extended_chans;
+    with_ctx!(|ctx| ctx.peers.insert(*rx.remote_ip()));
+
+    // send local handshake
+    let local_handshake = Box::new(pwp::HandshakeData {
+        extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    });
+    tx.send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0)).await?;
+
+    // try wait for remote handshake
+    let remote_metadata_ext_id = match rx.receive_message_timed(sec!(1)).await {
+        Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+            log::debug!("Received extended handshake from {}: {}", rx.remote_ip(), hs);
+            if let Some(metadata_size) = hs.metadata_size {
+                with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+            }
+            get_metadata_ext_id(&hs)?
+        }
+        Ok(_) | Err(pwp::ChannelError::Timeout) => 0,
+        Err(e) => return Err(e.into()),
+    };
+
+    let inner = Box::new(Data {
+        handle,
+        rx,
+        tx,
+        remote_metadata_ext_id,
+    });
+    Ok(to_enum!(inner))
+}
+
+pub async fn wait_until_enabled(peer: DisabledPeer) -> io::Result<UploadingPeer> {
+    let mut inner = peer.0;
+    define_with_ctx!(inner.handle);
+    while inner.remote_metadata_ext_id == 0 {
+        match inner.rx.receive_message().await? {
+            pwp::ExtendedMessage::Handshake(hs) => {
+                log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), hs);
+                if let Some(metadata_size) = hs.metadata_size {
+                    with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                }
+                if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
+                    inner.remote_metadata_ext_id = *id;
+                }
+            }
+            msg => log::debug!(
+                "Received {} from {} while waiting for metadata to be unabled",
+                msg,
+                inner.rx.remote_ip()
+            ),
+        }
+    }
+    Ok(UploadingPeer(inner))
+}
+
+pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io::Result<Peer> {
+    let mut inner = peer.0;
+    define_with_ctx!(inner.handle);
+    loop {
+        match inner.rx.receive_message_timed(until - Instant::now()).await {
+            Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+                if let Some(metadata_size) = hs.metadata_size {
+                    with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                }
+                if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
+                    inner.remote_metadata_ext_id = *id;
+                    if inner.remote_metadata_ext_id == 0 {
+                        break;
+                    }
+                }
+            }
+            Ok(pwp::ExtendedMessage::MetadataRequest { piece }) => {
+                inner
+                    .tx
+                    .send_message((
+                        pwp::ExtendedMessage::MetadataReject { piece },
+                        inner.remote_metadata_ext_id,
+                    ))
+                    .await?;
+            }
+            Ok(msg) => log::debug!(
+                "Received {} from {} while cooling off a rejecting peer",
+                msg,
+                inner.rx.remote_ip()
+            ),
+            Err(pwp::ChannelError::Timeout) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(to_enum!(inner))
+}
+
+pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
+    let mut inner = peer.0;
+    define_with_ctx!(inner.handle);
+
+    fn next_piece_to_request(ctx: &ctx::PreliminaryCtx) -> Option<usize> {
+        if ctx.metainfo_pieces.is_empty() {
+            Some(0)
+        } else {
+            ctx.metainfo_pieces.iter().position(|downloaded| downloaded == false)
+        }
+    }
+
+    while let Some(piece) = with_ctx!(|ctx| next_piece_to_request(ctx)) {
+        log::debug!("Requesting metadata piece {} from {}", piece, inner.tx.remote_ip());
+        inner
+            .tx
+            .send_message((
+                pwp::ExtendedMessage::MetadataRequest { piece },
+                inner.remote_metadata_ext_id,
+            ))
+            .await?;
+
+        loop {
+            match inner.rx.receive_message().await? {
+                pwp::ExtendedMessage::Handshake(hs) => {
+                    if let Some(metadata_size) = hs.metadata_size {
+                        with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                    }
+                    if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
+                        inner.remote_metadata_ext_id = *id;
+                        if inner.remote_metadata_ext_id == 0 {
+                            return Ok(Peer::Disabled(DisabledPeer(inner)));
+                        }
+                    }
+                }
+                pwp::ExtendedMessage::MetadataRequest { piece } => {
+                    inner
+                        .tx
+                        .send_message((
+                            pwp::ExtendedMessage::MetadataReject { piece },
+                            inner.remote_metadata_ext_id,
+                        ))
+                        .await?;
+                }
+                pwp::ExtendedMessage::MetadataBlock {
+                    piece: received_piece,
+                    total_size,
+                    data,
+                } => {
+                    log::debug!("Received metadata piece {} from {}", piece, inner.tx.remote_ip());
+                    with_ctx!(|ctx| {
+                        init_metadata(ctx, total_size);
+                        if let Some(mut downloaded) = ctx.metainfo_pieces.get_mut(received_piece) {
+                            if downloaded == false {
+                                let offset = received_piece * MAX_BLOCK_SIZE;
+                                if let Some(chunk) =
+                                    ctx.metainfo.get_mut(offset..offset + data.len())
+                                {
+                                    chunk.copy_from_slice(&data);
+                                    downloaded.set(true);
+                                }
+                            }
+                        }
+                    });
+                    if received_piece == piece {
+                        break;
+                    }
+                }
+                pwp::ExtendedMessage::MetadataReject { .. } => {
+                    return Ok(Peer::Rejector(RejectingPeer(inner)));
+                }
+                pwp::ExtendedMessage::PeerExchange(_) => (),
+            }
+        }
+    }
+    Ok(to_enum!(inner))
+}

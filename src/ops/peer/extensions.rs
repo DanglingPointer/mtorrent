@@ -148,6 +148,7 @@ pub async fn handle_incoming(
                     if serve_metadata
                         && inner.sent_metadata_pieces.get(piece).is_some_and(|sent| !sent)
                     {
+                        log::debug!("Serving metadata request from {remote_ip}: (piece={piece})");
                         let global_offset = piece * MAX_BLOCK_SIZE;
                         let length = cmp::min(MAX_BLOCK_SIZE, metadata_len - global_offset);
                         let data = inner.metadata_storage.read_block(global_offset, length).await?;
@@ -164,6 +165,7 @@ pub async fn handle_incoming(
                             .await?;
                         inner.sent_metadata_pieces.set(piece, true);
                     } else {
+                        log::debug!("Rejecting metadata request from {remote_ip}: (piece={piece})");
                         inner
                             .tx
                             .send_message((pwp::ExtendedMessage::MetadataReject { piece }, id))

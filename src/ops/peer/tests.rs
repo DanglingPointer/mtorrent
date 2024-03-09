@@ -1,9 +1,10 @@
 use super::*;
 use crate::ops::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
-use crate::utils::startup;
+use crate::utils::{magnet, startup};
 use crate::{ops::ctx, pwp, sec};
 use std::collections::HashMap;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use tokio::{join, net::TcpListener, runtime, select, time};
@@ -417,4 +418,44 @@ async fn test_send_metainfo_file_to_peer() {
         connecting_peer_downloading_metadata(addr, metainfo).await;
     };
     join!(sending_peer, requesting_peer);
+    std::fs::remove_dir_all("test_input3").unwrap();
+}
+
+#[tokio::test]
+async fn test_pass_metadata_from_peer_to_peer() {
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .init();
+
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43213));
+
+    let metainfo_filepath = "tests/assets/big_metainfo_file.torrent";
+    let magnet = "magnet:?xt=urn:btih:77c09d63baf907ceeed366e2bdd687ca37cc4098&dn=Star.Trek.Voyager.S05.DVDRip.x264-MARS%5brartv%5d&tr=http%3a%2f%2ftracker.trackerfix.com%3a80%2fannounce&tr=udp%3a%2f%2f9.rarbg.me%3a2750%2fannounce&tr=udp%3a%2f%2f9.rarbg.to%3a2930%2fannounce";
+
+    let magnet_link: magnet::MagnetLink = magnet.parse().unwrap();
+    let metainfo_content = fs::read(metainfo_filepath).unwrap();
+
+    let sending_peer = async move {
+        let (download, upload, extensions, handle, peer_ip) =
+            listening_seeder(addr, metainfo_filepath, "test_input4").await;
+        assert!(extensions.is_some());
+        let download = run_download(download.into(), peer_ip, handle.clone());
+        let upload = run_upload(upload.into(), peer_ip, handle.clone());
+        let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
+        let _ = join!(download, upload, extensions);
+    };
+    let receiving_peer = async move {
+        let mut ctx_handle = ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new());
+        let _ =
+            outgoing_preliminary_connection(addr, ctx_handle.clone(), runtime::Handle::current())
+                .await;
+        ctx_handle.with_ctx(|ctx| {
+            assert!(!ctx.metainfo_pieces.is_empty());
+            assert!(ctx.metainfo_pieces.all());
+            assert_eq!(metainfo_content, ctx.metainfo);
+        });
+    };
+    join!(sending_peer, receiving_peer);
+    std::fs::remove_dir_all("test_input4").unwrap();
 }

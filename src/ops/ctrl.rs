@@ -1,5 +1,6 @@
 use super::ctx;
 use crate::ops::MAX_BLOCK_SIZE;
+use crate::utils::meta;
 use crate::{pwp, sec};
 use std::cmp;
 use std::collections::HashSet;
@@ -181,6 +182,22 @@ pub fn active_upload_next_action(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> 
 
 pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
     ctx.accountant.missing_bytes() == 0 && ctx.peer_states.leeches_count() == 0
+}
+
+pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
+    if ctx.metainfo.is_empty() || ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
+        false
+    } else if let Some(metainfo) = meta::Metainfo::new(&ctx.metainfo) {
+        if metainfo.info_hash() == ctx.magnet.info_hash() {
+            true
+        } else {
+            // assuming the total length was correct
+            ctx.metainfo_pieces.fill(false);
+            false
+        }
+    } else {
+        false
+    }
 }
 
 pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool {
