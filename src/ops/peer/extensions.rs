@@ -4,7 +4,6 @@ use crate::utils::ip;
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::time::Duration;
 use std::{cmp, io};
 use tokio::time::Instant;
 
@@ -110,7 +109,7 @@ pub async fn share_peers(peer: Peer) -> io::Result<Peer> {
 
 pub async fn handle_incoming(
     peer: Peer,
-    min_duration: Duration,
+    until: Instant,
     serve_metadata: bool,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<Peer> {
@@ -119,13 +118,8 @@ pub async fn handle_incoming(
 
     let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
     let remote_ip = *inner.rx.remote_ip();
-    let start_time = Instant::now();
     loop {
-        match inner
-            .rx
-            .receive_message_timed(min_duration.saturating_sub(start_time.elapsed()))
-            .await
-        {
+        match inner.rx.receive_message_timed(until - Instant::now()).await {
             Err(pwp::ChannelError::Timeout) => break,
             Err(e) => return Err(e.into()),
             Ok(pwp::ExtendedMessage::Handshake(hs)) => {

@@ -9,7 +9,9 @@ use super::{ctrl, ctx};
 use crate::{data, pwp, sec};
 use std::io;
 use std::{net::SocketAddr, ops::Deref, time::Duration};
-use tokio::{net::TcpStream, runtime, time::sleep, try_join};
+use tokio::net::TcpStream;
+use tokio::time::{sleep, Instant};
+use tokio::{runtime, try_join};
 
 type CtxHandle = ctx::Handle<ctx::MainCtx>;
 
@@ -226,12 +228,17 @@ async fn run_extensions(
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     peer = extensions::send_handshake(peer, ALL_SUPPORTED_EXTENSIONS.iter()).await?;
+
     const PEX_INTERVAL: Duration = sec!(60);
+    let mut next_pex_time = Instant::now();
     loop {
-        peer = extensions::share_peers(peer).await?;
+        if Instant::now() >= next_pex_time {
+            peer = extensions::share_peers(peer).await?;
+            next_pex_time = Instant::now() + PEX_INTERVAL;
+        }
         peer = extensions::handle_incoming(
             peer,
-            PEX_INTERVAL,
+            next_pex_time,
             with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx)),
             &mut peer_discovered_callback,
         )
