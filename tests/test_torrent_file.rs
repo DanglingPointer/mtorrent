@@ -311,3 +311,26 @@ fn test_read_metainfo_and_spawn_single_file() {
 
     fs::remove_dir_all(parent_dir).unwrap();
 }
+
+#[test]
+fn test_read_incomplete_metainfo_file() {
+    let data = fs::read("tests/assets/incomplete.torrent").unwrap();
+    let info = meta::Metainfo::new(&data).unwrap();
+
+    let expected_metainfo: &[u8; 20] = &[
+        209, 68, 239, 216, 66, 44, 231, 247, 155, 34, 252, 154, 11, 67, 23, 64, 149, 2, 72, 89,
+    ];
+    assert_eq!(expected_metainfo, info.info_hash());
+    assert_eq!(1470069860, info.length().unwrap());
+    assert_eq!(
+        "[ Torrent911.com ] Spider-Man.No.Way.Home.2021.FRENCH.BDRip.XviD-EXTREME.avi",
+        info.name().unwrap()
+    );
+    assert_eq!(1048576, info.piece_length().unwrap());
+    assert_eq!(28040 / 20, info.pieces().unwrap().count());
+    assert_eq!(data.len(), info.size());
+
+    assert!(info.files().is_none());
+    assert!(info.announce().is_none());
+    assert!(info.announce_list().is_none());
+}

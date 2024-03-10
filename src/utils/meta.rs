@@ -20,6 +20,11 @@ impl Hash for Metainfo {
 
 impl Metainfo {
     pub fn new(file_content: &[u8]) -> Option<Self> {
+        Self::from_full_metainfo(file_content)
+            .or_else(|| Self::from_incomplete_metainfo(file_content))
+    }
+
+    fn from_full_metainfo(file_content: &[u8]) -> Option<Self> {
         let root_entity = benc::Element::from_bytes(file_content).ok()?;
         log::debug!("Metainfo file content:\n{root_entity}");
         let (root_dictionary, info_element) = match root_entity {
@@ -35,6 +40,20 @@ impl Metainfo {
         match (root_dictionary, info_element) {
             (Some(root), benc::Element::Dictionary(info)) => Some(Metainfo {
                 root: benc::convert_dictionary(root),
+                info: benc::convert_dictionary(info),
+                info_hash,
+                size: file_content.len(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn from_incomplete_metainfo(file_content: &[u8]) -> Option<Self> {
+        let info_element = benc::Element::from_bytes(file_content).ok()?;
+        let info_hash = Sha1::from(info_element.to_bytes()).digest().bytes();
+        match info_element {
+            benc::Element::Dictionary(info) => Some(Metainfo {
+                root: Default::default(),
                 info: benc::convert_dictionary(info),
                 info_hash,
                 size: file_content.len(),
