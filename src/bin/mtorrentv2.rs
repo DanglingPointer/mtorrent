@@ -18,14 +18,20 @@ fn main() -> io::Result<()> {
 
     let mut args = std::env::args();
 
-    let metainfo_path = args.nth(1).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "metainfo file not specified")
-    })?;
+    let metainfo_uri = args
+        .nth(1)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "metainfo uri not specified"))?;
 
     let output_dir = if let Some(arg) = args.next() {
         PathBuf::from(arg)
+    } else if Path::new(&metainfo_uri).is_file() {
+        if let Some(parent) = Path::new(&metainfo_uri).parent() {
+            parent.into()
+        } else {
+            std::env::current_dir()?
+        }
     } else {
-        Path::new(&metainfo_path).parent().map(Into::into).unwrap_or_default()
+        std::env::current_dir()?
     };
 
     let storage_runtime = worker::with_runtime(worker::rt::Config {
@@ -47,7 +53,7 @@ fn main() -> io::Result<()> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(
         client::main::single_torrent(
             peer_id,
-            metainfo_path,
+            &metainfo_uri,
             output_dir,
             pwp_runtime.runtime_handle(),
             storage_runtime.runtime_handle(),

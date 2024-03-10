@@ -15,7 +15,7 @@ pub enum ParseError {
     MalformedUri(url::ParseError),
     UnsupportedScheme(String),
     NoInfoHash,
-    InvalidInfoHash(Box<dyn Error>),
+    InvalidInfoHash(Box<dyn Error + Send + Sync>),
     InvalidPeerAddr(net::AddrParseError),
 }
 

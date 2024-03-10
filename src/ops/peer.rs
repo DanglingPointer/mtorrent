@@ -435,7 +435,6 @@ fn preliminary_ensure_peer_unique(
     }
 }
 
-#[allow(dead_code)]
 pub async fn outgoing_preliminary_connection(
     remote_ip: SocketAddr,
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
@@ -463,7 +462,6 @@ pub async fn outgoing_preliminary_connection(
     .await
 }
 
-#[allow(dead_code)]
 pub async fn incoming_preliminary_connection(
     stream: TcpStream,
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,

@@ -326,7 +326,6 @@ pub async fn make_periodic_announces(
     future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }
 
-#[allow(dead_code)]
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,

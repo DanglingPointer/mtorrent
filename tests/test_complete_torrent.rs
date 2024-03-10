@@ -320,7 +320,7 @@ enum ConnectionMode {
 }
 
 async fn launch_peers<P: Peer>(
-    metainfo_file: impl AsRef<Path>,
+    metainfo_file: &str,
     files_parentdir: impl AsRef<Path>,
     mode: ConnectionMode,
 ) {
@@ -348,7 +348,7 @@ async fn launch_peers<P: Peer>(
 
     let info_hash = *metainfo.info_hash();
     let remote_ip = {
-        let any = utils::ip::any_socketaddr_from_hash(&metainfo);
+        let any = utils::ip::any_socketaddr_from_hash(&metainfo_file);
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, any.port()))
     };
     match mode {

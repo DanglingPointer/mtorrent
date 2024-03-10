@@ -6,11 +6,11 @@ use crate::utils::{config, magnet, meta};
 use crate::{data, pwp};
 use core::fmt;
 use std::collections::HashSet;
-use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
+use std::{fs, io, mem};
 use tokio::time;
 
 pub struct Handle<C> {
@@ -33,10 +33,6 @@ impl<C> Handle<C> {
     {
         let mut borrowed = self.ctx.borrow_mut();
         f(&mut borrowed)
-    }
-
-    fn into_inner(self) -> Option<C> {
-        Some(Rc::into_inner(self.ctx)?.into_inner())
     }
 }
 
@@ -72,6 +68,18 @@ impl PreliminaryCtx {
                 local_peer_id,
             })),
         }
+    }
+}
+
+impl fmt::Display for PreliminaryCtx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Metainfo pieces: {}/{}\nPeers: {:?}",
+            self.metainfo_pieces.count_ones(),
+            self.metainfo_pieces.len(),
+            self.peers,
+        )
     }
 }
 
@@ -127,6 +135,28 @@ impl Drop for MainCtx {
     fn drop(&mut self) {
         log::info!("Final state dump:\n{}", self);
     }
+}
+
+pub async fn periodic_metadata_check(
+    mut ctx_handle: Handle<PreliminaryCtx>,
+    config_dir: impl AsRef<Path>,
+    metainfo_filepath: impl AsRef<Path>,
+) -> io::Result<impl IntoIterator<Item = SocketAddr>> {
+    define_with_ctx!(ctx_handle);
+
+    const INTERVAL: Duration = sec!(1);
+    while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
+        time::sleep(INTERVAL).await;
+        with_ctx!(|ctx| log::info!("Periodic state dump:\n{}", ctx));
+    }
+
+    with_ctx!(|ctx| {
+        fs::write(metainfo_filepath, &ctx.metainfo)?;
+        config::save_trackers(config_dir, ctx.magnet.trackers())?;
+        io::Result::Ok(())
+    })?;
+
+    Ok(with_ctx!(|ctx| mem::take(&mut ctx.peers)))
 }
 
 pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: impl AsRef<Path>) {

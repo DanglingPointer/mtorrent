@@ -1,5 +1,5 @@
 use crate::utils::peer_id::PeerId;
-use crate::utils::{ip, startup, upnp};
+use crate::utils::{ip, magnet, startup, upnp};
 use crate::{data, ops};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
@@ -45,10 +45,163 @@ fn peer_discovered_callback_factory(
 
 pub async fn single_torrent(
     local_peer_id: PeerId,
+    metainfo_uri: &str,
+    output_dir: impl AsRef<Path>,
+    pwp_runtime: runtime::Handle,
+    storage_runtime: runtime::Handle,
+) -> io::Result<()> {
+    let listener_addr = ip::any_socketaddr_from_hash(&metainfo_uri);
+    // get public ip to send correct listening port to trackers later
+    let public_pwp_ip = match upnp::PortOpener::new(
+        SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
+        igd::PortMappingProtocol::TCP,
+    )
+    .await
+    {
+        Ok(port_opener) => {
+            let public_ipv4 = port_opener.external_ip();
+            log::info!("UPnP succeeded, public ip: {}", public_ipv4);
+            pwp_runtime.spawn(async move {
+                if let Err(e) = port_opener.do_continuous_renewal().await {
+                    log::error!("UPnP port renewal failed: {e}");
+                }
+            });
+            SocketAddr::V4(public_ipv4)
+        }
+        Err(e) => {
+            log::error!("UPnP failed: {e}");
+            listener_addr
+        }
+    };
+
+    if Path::new(metainfo_uri).is_file() {
+        main_stage(
+            local_peer_id,
+            listener_addr,
+            public_pwp_ip,
+            metainfo_uri,
+            output_dir,
+            pwp_runtime,
+            storage_runtime,
+            std::iter::empty(),
+        )
+        .await?;
+    } else {
+        let (metainfo_filepath, peers) = preliminary_stage(
+            local_peer_id,
+            listener_addr,
+            public_pwp_ip,
+            metainfo_uri,
+            &output_dir,
+            &output_dir,
+            pwp_runtime.clone(),
+        )
+        .await?;
+        main_stage(
+            local_peer_id,
+            listener_addr,
+            public_pwp_ip,
+            metainfo_filepath,
+            &output_dir,
+            pwp_runtime,
+            storage_runtime,
+            peers.into_iter(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn preliminary_stage(
+    local_peer_id: PeerId,
+    listener_addr: SocketAddr,
+    public_pwp_ip: SocketAddr,
+    magnet_link: impl AsRef<str>,
+    config_dir: impl AsRef<Path>,
+    metainfo_dir: impl AsRef<Path>,
+    pwp_runtime: runtime::Handle,
+) -> io::Result<(impl AsRef<Path>, impl IntoIterator<Item = SocketAddr>)> {
+    let magnet_link: magnet::MagnetLink = magnet_link
+        .as_ref()
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))?;
+
+    let metainfo_filepath = metainfo_dir
+        .as_ref()
+        .join(format!("{}.torrent", magnet_link.name().unwrap_or("unknown")));
+
+    let local_task = task::LocalSet::new();
+
+    let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id);
+
+    let incoming_connection_pwp_runtime = pwp_runtime.clone();
+    let incoming_connection_ctx = ctx.clone();
+    let on_incoming_connection = move |stream: TcpStream| {
+        let pwp_runtime = incoming_connection_pwp_runtime.clone();
+        let ctx = incoming_connection_ctx.clone();
+        task::spawn_local(async move {
+            let peer_ip =
+                stream.peer_addr().map_or_else(|_| "<N/A>".to_owned(), |ip| format!("{ip}"));
+            match ops::incoming_preliminary_connection(stream, ctx, pwp_runtime).await {
+                Ok(_) => (),
+                Err(e) => log::error!("Incoming peer connection from {peer_ip} failed: {e}"),
+            }
+        });
+    };
+
+    local_task.spawn_local(async move {
+        match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
+            Ok(_) => (),
+            Err(e) => log::error!("TCP listener exited: {e}"),
+        }
+    });
+
+    let announce_response_pwp_runtime = pwp_runtime.clone();
+    let announce_response_ctx = ctx.clone();
+    let on_announce_response = move |response: ops::TrackerResponse| {
+        for peer_ip in response.peers {
+            let pwp_runtime = announce_response_pwp_runtime.clone();
+            let ctx = announce_response_ctx.clone();
+            task::spawn_local(async move {
+                match ops::outgoing_preliminary_connection(peer_ip, ctx, pwp_runtime).await {
+                    Ok(_) => (),
+                    Err(e) => log::error!("Outgoing peer connection to {peer_ip} failed: {e}"),
+                }
+            });
+        }
+    };
+
+    let tracker_ctx = ctx.clone();
+    let tracker_config_dir = PathBuf::from(config_dir.as_ref());
+    local_task.spawn_local(async move {
+        ops::make_preliminary_announces(
+            tracker_ctx,
+            tracker_config_dir,
+            public_pwp_ip.port(),
+            on_announce_response,
+        )
+        .await;
+    });
+
+    let metainfo_filepath_copy = metainfo_filepath.clone();
+    let peers = local_task
+        .run_until(async move {
+            ops::periodic_metadata_check(ctx, config_dir, metainfo_filepath_copy).await
+        })
+        .await?;
+    Ok((metainfo_filepath, peers))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn main_stage(
+    local_peer_id: PeerId,
+    listener_addr: SocketAddr,
+    public_pwp_ip: SocketAddr,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
+    extra_peers: impl Iterator<Item = SocketAddr>,
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)?;
 
@@ -67,30 +220,6 @@ pub async fn single_torrent(
     });
 
     let local_task = task::LocalSet::new();
-
-    let listener_addr = ip::any_socketaddr_from_hash(&metainfo);
-    // get public ip to send correct listening port to trackers later
-    let public_pwp_ip = match upnp::PortOpener::new(
-        SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
-        igd::PortMappingProtocol::TCP,
-    )
-    .await
-    {
-        Ok(port_opener) => {
-            let public_ipv4 = port_opener.external_ip();
-            log::info!("UPnP succeeded, public ip: {}", public_ipv4);
-            local_task.spawn_local(async move {
-                if let Err(e) = port_opener.do_continuous_renewal().await {
-                    log::error!("UPnP port renewal failed: {e}");
-                }
-            });
-            SocketAddr::V4(public_ipv4)
-        }
-        Err(e) => {
-            log::error!("UPnP failed: {e}");
-            listener_addr
-        }
-    };
 
     let ctx = ops::MainCtx::new(metainfo, local_peer_id)?;
 
@@ -141,12 +270,19 @@ pub async fn single_torrent(
         ctx.clone(),
         pwp_runtime.clone(),
     );
+
+    {
+        let _g = local_task.enter();
+        for peer_ip in extra_peers.into_iter() {
+            cb(&peer_ip);
+        }
+    }
+
     let on_announce_response = move |response: ops::TrackerResponse| {
         for peer_ip in response.peers {
             cb(&peer_ip);
         }
     };
-
     let tracker_ctx = ctx.clone();
     let config_dir = PathBuf::from(output_dir.as_ref());
     local_task.spawn_local(async move {

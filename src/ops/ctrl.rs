@@ -191,6 +191,7 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
         if metainfo.info_hash() == ctx.magnet.info_hash() {
             true
         } else {
+            log::error!("Metainfo info hash mismatch!");
             // assuming the total length was correct
             ctx.metainfo_pieces.fill(false);
             false
