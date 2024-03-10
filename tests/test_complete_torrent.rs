@@ -474,8 +474,14 @@ fn compare_input_and_output(
     }
 }
 
+macro_rules! with_timeout {
+    ($fut:expr) => {
+        tokio::time::timeout(sec!(60), $fut).await.expect("failed to finish in 60s");
+    };
+}
+
 #[tokio::test]
-async fn test_download_multifile_torrent_from_50_seeders() {
+async fn test_download_and_upload_multifile_torrent() {
     // these tests need to run sequentially because mtorrent
     // always listens on the same port for a given torrent
     let metainfo_file = "tests/assets/screenshots.torrent";
@@ -490,8 +496,11 @@ async fn test_download_multifile_torrent_from_50_seeders() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Seeder>(metainfo_file, data_dir, ConnectionMode::Outgoing { num_peers: 50 })
-            .await;
+        with_timeout!(launch_peers::<Seeder>(
+            metainfo_file,
+            data_dir,
+            ConnectionMode::Outgoing { num_peers: 50 },
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
@@ -516,14 +525,13 @@ async fn test_download_multifile_torrent_from_50_seeders() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Seeder>(
+        with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
             data_dir,
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
             },
-        )
-        .await;
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
@@ -543,8 +551,11 @@ async fn test_download_multifile_torrent_from_50_seeders() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Leech>(metainfo_file, output_dir, ConnectionMode::Outgoing { num_peers: 1 })
-            .await;
+        with_timeout!(launch_peers::<Leech>(
+            metainfo_file,
+            output_dir,
+            ConnectionMode::Outgoing { num_peers: 1 }
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
@@ -570,8 +581,11 @@ async fn test_download_and_upload_monofile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Seeder>(metainfo_file, data_dir, ConnectionMode::Outgoing { num_peers: 50 })
-            .await;
+        with_timeout!(launch_peers::<Seeder>(
+            metainfo_file,
+            data_dir,
+            ConnectionMode::Outgoing { num_peers: 50 }
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
@@ -596,14 +610,13 @@ async fn test_download_and_upload_monofile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Seeder>(
+        with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
             data_dir,
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
             },
-        )
-        .await;
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
@@ -623,8 +636,11 @@ async fn test_download_and_upload_monofile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrentv2'");
 
-        launch_peers::<Leech>(metainfo_file, output_dir, ConnectionMode::Outgoing { num_peers: 1 })
-            .await;
+        with_timeout!(launch_peers::<Leech>(
+            metainfo_file,
+            output_dir,
+            ConnectionMode::Outgoing { num_peers: 1 }
+        ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
         assert!(mtorrent_ecode.success());
