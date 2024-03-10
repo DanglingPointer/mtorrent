@@ -185,7 +185,7 @@ impl BlockAccountant {
 impl fmt::Display for BlockAccountant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let bitfield = self.generate_bitfield();
-        let piece_count = bitfield.iter().filter(|bit| *bit == true).count();
+        let piece_count = bitfield.count_ones();
         write!(f, "pieces={}/{}", piece_count, bitfield.len())?;
         write!(
             f,
