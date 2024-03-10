@@ -183,6 +183,47 @@ async fn listening_seeder(
     (download, upload, extensions, handle, peer_ip)
 }
 
+async fn run_listening_seeder(
+    listener_ip: SocketAddr,
+    metainfo_path: &'static str,
+    files_dir: &'static str,
+) -> io::Result<()> {
+    let metainfo = startup::read_metainfo(metainfo_path).unwrap();
+    let (content_storage, content_storage_server) =
+        startup::create_content_storage(&metainfo, files_dir).unwrap();
+    let (meta_storage, meta_storage_server) =
+        startup::create_metainfo_storage(metainfo_path).unwrap();
+    runtime::Handle::current().spawn(async move {
+        join!(content_storage_server.run(), meta_storage_server.run());
+    });
+
+    let piece_count = metainfo.pieces().unwrap().count();
+    let mut local_id = [0u8; 20];
+    local_id[..6].copy_from_slice("seeder".as_bytes());
+
+    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
+    handle.with_ctx(|ctx| {
+        for piece_index in 0..piece_count {
+            assert!(ctx.accountant.submit_piece(piece_index));
+            ctx.piece_tracker.forget_piece(piece_index);
+        }
+    });
+
+    let listener = TcpListener::bind(listener_ip).await.unwrap();
+    let (stream, _peer_ip) = listener.accept().await.unwrap();
+    incoming_pwp_connection(
+        stream,
+        content_storage,
+        meta_storage,
+        handle,
+        runtime::Handle::current(),
+        |_| (),
+    )
+    .await?;
+
+    Ok(())
+}
+
 async fn run_leech(peer_ip: SocketAddr, metainfo_path: &'static str) {
     let files_dir = "test_output";
     let (download, upload, mut handle, _ip) =
@@ -407,13 +448,7 @@ async fn test_send_metainfo_file_to_peer() {
     let metainfo = "tests/assets/big_metainfo_file.torrent";
 
     let sending_peer = time::timeout(sec!(30), async {
-        let (download, upload, extensions, handle, peer_ip) =
-            listening_seeder(addr, metainfo, "test_input3").await;
-        assert!(extensions.is_some());
-        let download = run_download(download.into(), peer_ip, handle.clone());
-        let upload = run_upload(upload.into(), peer_ip, handle.clone());
-        let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
-        let _ = join!(download, upload, extensions);
+        let _ = run_listening_seeder(addr, metainfo, "test_input3").await;
     });
     let requesting_peer = time::timeout(sec!(30), async {
         connecting_peer_downloading_metadata(addr, metainfo).await;
@@ -438,13 +473,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
     let metainfo_content = fs::read(metainfo_filepath).unwrap();
 
     let sending_peer = time::timeout(sec!(30), async move {
-        let (download, upload, extensions, handle, peer_ip) =
-            listening_seeder(addr, metainfo_filepath, "test_input4").await;
-        assert!(extensions.is_some());
-        let download = run_download(download.into(), peer_ip, handle.clone());
-        let upload = run_upload(upload.into(), peer_ip, handle.clone());
-        let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
-        let _ = join!(download, upload, extensions);
+        let _ = run_listening_seeder(addr, metainfo_filepath, "test_input4").await;
     });
     let receiving_peer = time::timeout(sec!(30), async move {
         let mut ctx_handle = ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new());
