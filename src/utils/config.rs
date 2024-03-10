@@ -121,11 +121,11 @@ pub fn save_state(
 
 pub fn save_trackers<T: Into<String>>(
     config_dir: impl AsRef<Path>,
-    trackers: impl Iterator<Item = T>,
+    trackers: impl IntoIterator<Item = T>,
 ) -> io::Result<()> {
     let config_path = config_dir.as_ref().join(FILENAME);
     let mut content = read_config_file(&config_path).unwrap_or_default();
-    content.trackers.extend(trackers.map(Into::into));
+    content.trackers.extend(trackers.into_iter().map(Into::into));
 
     let bencoded_content = encode_content(content);
     fs::write(config_path, bencoded_content.to_bytes())
@@ -167,7 +167,7 @@ mod tests {
         assert!(matches!(load_trackers(dir), Err(e) if e.kind() == io::ErrorKind::NotFound));
 
         let trackers = ["http://tracker1.com", "http://tracker2.com"];
-        save_trackers(dir, trackers.into_iter()).unwrap();
+        save_trackers(dir, trackers).unwrap();
         assert!(Path::new(dir).join(FILENAME).is_file());
 
         let loaded_trackers = load_trackers(dir).unwrap();
@@ -177,7 +177,7 @@ mod tests {
         );
 
         let new_trackers = ["http://tracker3.com", "http://tracker4.com"];
-        save_trackers(dir, new_trackers.into_iter()).unwrap();
+        save_trackers(dir, new_trackers).unwrap();
 
         let loaded_trackers = load_trackers(dir).unwrap();
         assert_eq!(

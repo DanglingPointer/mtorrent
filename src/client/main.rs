@@ -150,7 +150,7 @@ pub async fn single_torrent(
     let tracker_ctx = ctx.clone();
     let config_dir = PathBuf::from(output_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::run_periodic_announces(
+        ops::make_periodic_announces(
             tracker_ctx,
             config_dir,
             public_pwp_ip.port(),

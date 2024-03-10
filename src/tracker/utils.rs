@@ -1,5 +1,4 @@
 use crate::utils::meta::Metainfo;
-use std::collections::HashSet;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -24,29 +23,21 @@ pub fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &s
     }
 }
 
-pub fn get_udp_trackers<T: AsRef<str>>(trackers: impl Iterator<Item = T>) -> HashSet<String> {
-    trackers
-        .filter_map(|tracker| {
-            let tracker = tracker.as_ref();
-            let udp_addr = tracker.strip_prefix("udp://")?;
-            Some(udp_addr.strip_suffix("/announce").unwrap_or(udp_addr).to_owned())
-        })
-        .collect()
+pub fn get_udp_tracker_addr<'t, T: AsRef<str> + 't>(tracker: &'t T) -> Option<&'t str> {
+    let tracker = tracker.as_ref();
+    let udp_addr = tracker.strip_prefix("udp://")?;
+    Some(udp_addr.strip_suffix("/announce").unwrap_or(udp_addr))
 }
 
-pub fn get_http_trackers<T: AsRef<str>>(trackers: impl Iterator<Item = T>) -> HashSet<String> {
-    trackers
-        .filter_map(|tracker| {
-            let tracker = tracker.as_ref();
-            (tracker.starts_with("http://") || tracker.starts_with("https://"))
-                .then_some(tracker.to_owned())
-        })
-        .collect()
+pub fn get_http_tracker_addr<'t, T: AsRef<str> + 't>(tracker: &'t T) -> Option<&'t str> {
+    let tracker = tracker.as_ref();
+    (tracker.starts_with("http://") || tracker.starts_with("https://")).then_some(tracker)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_extract_udp_trackers() {
@@ -66,8 +57,11 @@ mod tests {
             "tracker.internetwarriors.net:1337",
             "tracker.skyts.net:6969",
         ];
-        let actual = get_udp_trackers(trackers.into_iter());
-        assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
+        let actual: HashSet<_> = trackers
+            .into_iter()
+            .filter_map(|tracker| get_udp_tracker_addr(&tracker).map(ToString::to_string))
+            .collect();
+        assert_eq!(actual, expected.into_iter().map(Into::into).collect());
     }
 
     #[test]
@@ -82,7 +76,10 @@ mod tests {
             "http://example.com",
         ];
         let expected = ["https://example.com", "http://example.com"];
-        let actual = get_http_trackers(trackers.into_iter());
+        let actual: HashSet<_> = trackers
+            .into_iter()
+            .filter_map(|tracker| get_http_tracker_addr(&tracker).map(ToString::to_string))
+            .collect();
         assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
     }
 }
