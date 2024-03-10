@@ -1,8 +1,9 @@
 use super::utils;
 use crate::sec;
+use core::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
-use std::{io, str};
+use std::{error, io, str};
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Instant};
 
@@ -171,9 +172,17 @@ pub enum ParseError {
     NonUtf8String,
 }
 
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl error::Error for ParseError {}
+
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
-        io::Error::new(io::ErrorKind::Other, format!("{:?}", e))
+        io::Error::new(io::ErrorKind::Other, Box::new(e))
     }
 }
 

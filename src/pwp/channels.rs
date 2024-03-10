@@ -284,7 +284,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             log::trace!("{} => {}", source, msg);
             sink.send(msg)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
             Ok(())
         }
 

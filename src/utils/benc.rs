@@ -1,5 +1,6 @@
 use core::fmt;
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::io::Write;
 use std::num::ParseIntError;
 use std::{io, str};
@@ -86,7 +87,7 @@ impl fmt::Display for Element {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ParseError {
     EmptySource,
     InvalidPrefix,
@@ -96,24 +97,39 @@ pub enum ParseError {
     InvalidStringLength,
     NoListPrefix,
     NoDictionaryPrefix,
-    ExternalError(String),
+    ExternalError(Box<dyn Error + Send + Sync>),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for ParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            ParseError::ExternalError(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 impl From<ParseIntError> for ParseError {
     fn from(e: ParseIntError) -> Self {
-        ParseError::ExternalError(format!("{}", e))
+        ParseError::ExternalError(Box::new(e))
     }
 }
 
 impl From<str::Utf8Error> for ParseError {
     fn from(e: str::Utf8Error) -> Self {
-        ParseError::ExternalError(format!("{}", e))
+        ParseError::ExternalError(Box::new(e))
     }
 }
 
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
-        io::Error::new(io::ErrorKind::Other, format!("{:?}", e))
+        io::Error::new(io::ErrorKind::Other, Box::new(e))
     }
 }
 
@@ -268,7 +284,7 @@ mod tests {
         assert!(parsed.is_err());
 
         if let ParseError::ExternalError(msg) = parsed.err().unwrap() {
-            assert_eq!("invalid digit found in string", msg);
+            assert_eq!("invalid digit found in string", format!("{msg}"));
         } else {
             panic!("Wrong error type");
         }
@@ -282,7 +298,7 @@ mod tests {
         assert!(parsed.is_err());
 
         if let ParseError::ExternalError(msg) = parsed.err().unwrap() {
-            assert_eq!("invalid utf-8 sequence of 1 bytes from index 0", msg);
+            assert_eq!("invalid utf-8 sequence of 1 bytes from index 0", format!("{msg}"));
         } else {
             panic!("Wrong error type");
         }
@@ -336,7 +352,7 @@ mod tests {
 
         let parsed = read_string(&input);
         assert!(parsed.is_err());
-        assert_eq!(ParseError::InvalidStringLength, parsed.err().unwrap());
+        assert!(matches!(parsed.err().unwrap(), ParseError::InvalidStringLength));
     }
 
     #[test]
@@ -370,7 +386,7 @@ mod tests {
 
         let parsed = read_list(input.as_bytes());
         assert!(parsed.is_err());
-        assert_eq!(ParseError::EmptySource, parsed.err().unwrap());
+        assert!(matches!(parsed.err().unwrap(), ParseError::EmptySource));
     }
 
     #[test]
@@ -465,7 +481,6 @@ mod tests {
         assert!(parsed.is_ok(), "Error: {:?}", parsed.err());
 
         let entity = parsed.unwrap();
-        println!("{}", entity.0);
         match entity.0 {
             Element::Dictionary(_) => (),
             _ => panic!(),

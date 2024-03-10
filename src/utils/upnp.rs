@@ -62,7 +62,7 @@ impl PortOpener {
                     "",
                 )
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
             self.autoclose_at = Instant::now() + Self::LEASE_DURATION;
             log::debug!("UPnP: port mapping renewed ({}:{})", self.proto, self.external_ip.port());
         }

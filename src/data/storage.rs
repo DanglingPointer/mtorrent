@@ -3,7 +3,7 @@ use crate::warn_stopwatch;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::{fmt, fs, io};
+use std::{error, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
 pub type StorageServer = GenericStorageServer<fs::File>;
@@ -143,8 +143,8 @@ impl StorageClient {
         result_receiver.await.map_err(Self::to_io_error_other)?
     }
 
-    fn to_io_error_other<E: fmt::Display>(e: E) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, format!("{e}"))
+    fn to_io_error_other<E: error::Error + Send + Sync + 'static>(e: E) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, Box::new(e))
     }
 }
 
@@ -153,6 +153,7 @@ type ReadResult = Result<Vec<u8>, Error>;
 type VerifyResult = Result<bool, Error>;
 
 #[allow(clippy::enum_variant_names)]
+#[derive(Debug)]
 enum Command {
     WriteBlock {
         global_offset: usize,

@@ -96,7 +96,7 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
 
     fn try_from((url, data): (&str, &AnnounceData)) -> Result<Self, Self::Error> {
         let mut request = http::TrackerRequestBuilder::try_from(url)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e}")))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))?;
         request
             .info_hash(&data.info_hash)
             .peer_id(data.local_peer_id.as_slice())
@@ -124,7 +124,7 @@ impl TryFrom<http::AnnounceResponseContent> for ResponseData {
 
     fn try_from(response: http::AnnounceResponseContent) -> Result<Self, Self::Error> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
-            || io::Error::new(io::ErrorKind::InvalidData, s.to_owned())
+            move || io::Error::new(io::ErrorKind::InvalidData, s)
         }
         Ok(Self {
             interval: sec!(

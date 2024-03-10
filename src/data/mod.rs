@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{error, fmt, io};
 
 mod block_accountant;
 mod piece_info;
@@ -36,6 +36,15 @@ impl fmt::Display for Error {
         match self {
             Error::IOError(e) => write!(f, "{e}"),
             Error::InvalidLocation => write!(f, "Invalid Location"),
+        }
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Error::IOError(e) => Some(e),
+            Error::InvalidLocation => None,
         }
     }
 }

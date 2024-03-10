@@ -59,7 +59,7 @@ pub struct MainCtx {
 impl MainCtx {
     pub fn new(metainfo: meta::Metainfo, local_peer_id: PeerId) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
-            || io::Error::new(io::ErrorKind::InvalidData, s.to_owned())
+            move || io::Error::new(io::ErrorKind::InvalidData, s)
         }
         let pieces = Rc::new(data::PieceInfo::new(
             metainfo.pieces().ok_or_else(make_error("no pieces in metainfo"))?,

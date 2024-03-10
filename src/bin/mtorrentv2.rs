@@ -12,7 +12,7 @@ fn main() -> io::Result<()> {
         // .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
         .init()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
 
     let _sw = info_stopwatch!("mtorrentv2");
 

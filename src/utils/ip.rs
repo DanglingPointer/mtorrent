@@ -14,14 +14,14 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
         .to_string();
     ipv4_string
         .parse::<Ipv4Addr>()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))
 }
 
 #[cfg(target_family = "windows")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     // naively uses first connected adapter
     ipconfig::get_adapters()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?
         .iter()
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)

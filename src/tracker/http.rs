@@ -4,7 +4,7 @@ use crate::utils::benc;
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::{fmt, io, str};
+use std::{error, fmt, io, str};
 
 #[derive(Debug)]
 pub enum Error {
@@ -21,6 +21,17 @@ impl fmt::Display for Error {
             Error::Benc(e) => write!(f, "[benc]{:?}", e),
             Error::Response(s) => write!(f, "[response]{}", s),
             Error::Unsupported => write!(f, "unsupported"),
+        }
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Error::Http(e) => Some(e),
+            Error::Benc(e) => Some(e),
+            Error::Response(_) => None,
+            Error::Unsupported => None,
         }
     }
 }
@@ -62,7 +73,7 @@ pub async fn do_announce_request(
     log::debug!("Received announce response: {entity}");
 
     let content = AnnounceResponseContent::from_benc(entity)
-        .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".to_string())))?;
+        .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))?;
 
     match content.failure_reason() {
         Some(reason) => Err(Error::Response(reason.to_string())),
@@ -372,7 +383,7 @@ mod tests {
 
         let entity = benc::Element::from_bytes(response_data.as_bytes()).unwrap();
         let response_content = AnnounceResponseContent::from_benc(entity)
-            .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".to_string())))
+            .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))
             .unwrap();
 
         let peers = response_content.peers().unwrap();
