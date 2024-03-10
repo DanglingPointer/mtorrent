@@ -328,10 +328,11 @@ async fn test_pass_partial_torrent_from_seeder_to_leech() {
         .with_module_level("mtorrent", log::LevelFilter::Info)
         .init();
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43210));
-    join!(
-        run_seeder(addr, "tests/assets/zeroed_example.torrent"),
-        run_leech(addr, "tests/assets/zeroed_example.torrent")
-    );
+    try_join!(
+        time::timeout(sec!(30), run_seeder(addr, "tests/assets/zeroed_example.torrent")),
+        time::timeout(sec!(30), run_leech(addr, "tests/assets/zeroed_example.torrent")),
+    )
+    .unwrap();
 }
 
 async fn run_peer(
@@ -366,7 +367,7 @@ async fn test_pass_full_torrent_from_peer_to_peer() {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43211));
     let metainfo = "tests/assets/zeroed_test.torrent";
 
-    let connecting_peer = async {
+    let connecting_peer = time::timeout(sec!(60), async {
         let (download, upload, mut handle, peer_ip) =
             connecting_peer(addr, metainfo, "test_output2").await;
         let run_peer_fut = run_peer(download, upload, handle.clone(), peer_ip);
@@ -382,14 +383,14 @@ async fn test_pass_full_torrent_from_peer_to_peer() {
         _ = run_peer_fut => (),
         _ = check_missing_bytes => (),
         }
-    };
-    let listening_peer = async {
+    });
+    let listening_peer = time::timeout(sec!(60), async {
         let (download, upload, extensions, handle, peer_ip) =
             listening_seeder(addr, metainfo, "test_input2").await;
         assert!(extensions.is_none());
         run_peer(download, upload, handle, peer_ip).await;
-    };
-    join!(listening_peer, connecting_peer);
+    });
+    try_join!(listening_peer, connecting_peer).unwrap();
 
     std::fs::remove_dir_all("test_output2").unwrap();
     std::fs::remove_dir_all("test_input2").unwrap();
@@ -405,7 +406,7 @@ async fn test_send_metainfo_file_to_peer() {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43212));
     let metainfo = "tests/assets/big_metainfo_file.torrent";
 
-    let sending_peer = async {
+    let sending_peer = time::timeout(sec!(30), async {
         let (download, upload, extensions, handle, peer_ip) =
             listening_seeder(addr, metainfo, "test_input3").await;
         assert!(extensions.is_some());
@@ -413,11 +414,11 @@ async fn test_send_metainfo_file_to_peer() {
         let upload = run_upload(upload.into(), peer_ip, handle.clone());
         let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
         let _ = join!(download, upload, extensions);
-    };
-    let requesting_peer = async {
+    });
+    let requesting_peer = time::timeout(sec!(30), async {
         connecting_peer_downloading_metadata(addr, metainfo).await;
-    };
-    join!(sending_peer, requesting_peer);
+    });
+    try_join!(sending_peer, requesting_peer).unwrap();
     std::fs::remove_dir_all("test_input3").unwrap();
 }
 
@@ -436,7 +437,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
     let magnet_link: magnet::MagnetLink = magnet.parse().unwrap();
     let metainfo_content = fs::read(metainfo_filepath).unwrap();
 
-    let sending_peer = async move {
+    let sending_peer = time::timeout(sec!(30), async move {
         let (download, upload, extensions, handle, peer_ip) =
             listening_seeder(addr, metainfo_filepath, "test_input4").await;
         assert!(extensions.is_some());
@@ -444,8 +445,8 @@ async fn test_pass_metadata_from_peer_to_peer() {
         let upload = run_upload(upload.into(), peer_ip, handle.clone());
         let extensions = run_extensions(extensions.unwrap(), peer_ip, handle, |_| ());
         let _ = join!(download, upload, extensions);
-    };
-    let receiving_peer = async move {
+    });
+    let receiving_peer = time::timeout(sec!(30), async move {
         let mut ctx_handle = ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new());
         let _ =
             outgoing_preliminary_connection(addr, ctx_handle.clone(), runtime::Handle::current())
@@ -455,7 +456,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
             assert!(ctx.metainfo_pieces.all());
             assert_eq!(metainfo_content, ctx.metainfo);
         });
-    };
-    join!(sending_peer, receiving_peer);
+    });
+    try_join!(sending_peer, receiving_peer).unwrap();
     std::fs::remove_dir_all("test_input4").unwrap();
 }
