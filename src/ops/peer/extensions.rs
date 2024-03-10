@@ -124,9 +124,13 @@ pub async fn handle_incoming(
             Err(e) => return Err(e.into()),
             Ok(pwp::ExtendedMessage::Handshake(hs)) => {
                 log::debug!("Received extended handshake from {remote_ip}: {hs}");
-                if !hs.extensions.is_empty() {
-                    inner.remote_extensions = hs.extensions;
-                    inner.remote_extensions.retain(|_ext, id| *id != 0); // id 0 means extension is disabled
+                // every subsequent handshake contains diff from the previous one
+                for (ext, id) in hs.extensions {
+                    if id == 0 {
+                        inner.remote_extensions.remove(&ext);
+                    } else {
+                        inner.remote_extensions.insert(ext, id);
+                    }
                 }
             }
             Ok(pwp::ExtendedMessage::PeerExchange(pex)) => {
