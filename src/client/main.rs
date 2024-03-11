@@ -97,6 +97,7 @@ pub async fn single_torrent(
             pwp_runtime.clone(),
         )
         .await?;
+        log::info!("Metadata downloaded successfully, starting content download");
         main_stage(
             local_peer_id,
             listener_addr,
@@ -124,11 +125,12 @@ async fn preliminary_stage(
     let magnet_link: magnet::MagnetLink = magnet_link
         .as_ref()
         .parse()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
+        .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
 
     let metainfo_filepath = metainfo_dir
         .as_ref()
-        .join(format!("{}.torrent", magnet_link.name().unwrap_or("unknown")));
+        .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
 
     let local_task = task::LocalSet::new();
 
@@ -203,7 +205,8 @@ async fn main_stage(
     storage_runtime: runtime::Handle,
     extra_peers: impl Iterator<Item = SocketAddr>,
 ) -> io::Result<()> {
-    let metainfo = startup::read_metainfo(&metainfo_filepath)?;
+    let metainfo = startup::read_metainfo(&metainfo_filepath)
+        .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
 
     let content_dir = Path::new(output_dir.as_ref())
         .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());

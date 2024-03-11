@@ -185,19 +185,17 @@ pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
 }
 
 pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
-    if ctx.metainfo.is_empty() || ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
+    if ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
         false
-    } else if let Some(metainfo) = meta::Metainfo::new(&ctx.metainfo) {
-        if metainfo.info_hash() == ctx.magnet.info_hash() {
-            true
-        } else {
-            log::error!("Metainfo info hash mismatch!");
-            // assuming the total length was correct
-            ctx.metainfo_pieces.fill(false);
-            false
-        }
     } else {
-        false
+        match meta::Metainfo::new(&ctx.metainfo) {
+            Some(metainfo) if metainfo.info_hash() == ctx.magnet.info_hash() => true,
+            _ => {
+                log::error!("Discarding corrupt metainfo");
+                ctx.metainfo_pieces.fill(false);
+                false
+            }
+        }
     }
 }
 

@@ -91,7 +91,7 @@ pub async fn new_peer(
     // try wait for remote handshake
     let remote_metadata_ext_id = match rx.receive_message_timed(sec!(1)).await {
         Ok(pwp::ExtendedMessage::Handshake(hs)) => {
-            log::debug!("Received extended handshake from {}: {}", rx.remote_ip(), hs);
+            log::debug!("Received initial extended handshake from {}: {}", rx.remote_ip(), hs);
             if let Some(metadata_size) = hs.metadata_size {
                 with_ctx!(|ctx| init_metadata(ctx, metadata_size));
             }
@@ -140,6 +140,11 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
     loop {
         match inner.rx.receive_message_timed(until - Instant::now()).await {
             Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+                log::debug!(
+                    "Received subsequent extended handshake from {}: {}",
+                    inner.rx.remote_ip(),
+                    hs
+                );
                 if let Some(metadata_size) = hs.metadata_size {
                     with_ctx!(|ctx| init_metadata(ctx, metadata_size));
                 }
@@ -151,6 +156,11 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
                 }
             }
             Ok(pwp::ExtendedMessage::MetadataRequest { piece }) => {
+                log::trace!(
+                    "Rejecting metadata request (piece={}) from {}",
+                    piece,
+                    inner.rx.remote_ip()
+                );
                 inner
                     .tx
                     .send_message((
@@ -183,6 +193,10 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
         }
     }
 
+    // At this point we MUST have pieces to request, otherwise we end up in an infinite loop
+    // that starves all other futures in the same (single-threaded) runtime
+    assert!(with_ctx!(|ctx| next_piece_to_request(ctx)).is_some(), "infinite loop");
+
     while let Some(piece) = with_ctx!(|ctx| next_piece_to_request(ctx)) {
         log::debug!("Requesting metadata piece {} from {}", piece, inner.tx.remote_ip());
         inner
@@ -196,6 +210,11 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
         loop {
             match inner.rx.receive_message().await? {
                 pwp::ExtendedMessage::Handshake(hs) => {
+                    log::debug!(
+                        "Received subsequent extended handshake from {}: {}",
+                        inner.rx.remote_ip(),
+                        hs
+                    );
                     if let Some(metadata_size) = hs.metadata_size {
                         with_ctx!(|ctx| init_metadata(ctx, metadata_size));
                     }
@@ -207,6 +226,11 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                     }
                 }
                 pwp::ExtendedMessage::MetadataRequest { piece } => {
+                    log::trace!(
+                        "Rejecting metadata request (piece={}) from {}",
+                        piece,
+                        inner.rx.remote_ip()
+                    );
                     inner
                         .tx
                         .send_message((
