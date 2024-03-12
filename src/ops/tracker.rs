@@ -53,14 +53,14 @@ struct AnnounceData {
 }
 
 impl AnnounceData {
-    fn new_main(ctx: &ctx::MainCtx, listener_port: u16) -> Self {
+    fn new_main(ctx: &ctx::MainCtx) -> Self {
         Self {
             info_hash: *ctx.metainfo.info_hash(),
             downloaded: ctx.accountant.accounted_bytes(),
             left: ctx.accountant.missing_bytes(),
             uploaded: ctx.peer_states.uploaded_bytes(),
-            local_peer_id: ctx.local_peer_id,
-            listener_port,
+            local_peer_id: *ctx.const_data.local_peer_id(),
+            listener_port: ctx.const_data.pwp_listener_public_addr().port(),
             event: if ctx.accountant.missing_bytes() == 0 {
                 Some(AnnounceEvent::Completed)
             } else if ctx.accountant.accounted_bytes() == 0 || ctx.peer_states.iter().count() == 0 {
@@ -71,14 +71,14 @@ impl AnnounceData {
         }
     }
 
-    fn new_preliminary(ctx: &ctx::PreliminaryCtx, listener_port: u16) -> Self {
+    fn new_preliminary(ctx: &ctx::PreliminaryCtx) -> Self {
         Self {
             info_hash: *ctx.magnet.info_hash(),
             downloaded: 0,
             left: 0,
             uploaded: 0,
-            local_peer_id: ctx.local_peer_id,
-            listener_port,
+            local_peer_id: *ctx.const_data.local_peer_id(),
+            listener_port: ctx.const_data.pwp_listener_public_addr().port(),
             event: Some(AnnounceEvent::Started),
         }
     }
@@ -186,12 +186,11 @@ async fn announce_periodically(
     tracker_type: TrackerType,
     tracker_addr: String,
     mut handle: ctx::Handle<ctx::MainCtx>,
-    listener_port: u16,
     mut callback: impl FnMut(ResponseData),
 ) {
     define_with_ctx!(handle);
     loop {
-        let request = with_ctx!(|ctx| AnnounceData::new_main(ctx, listener_port));
+        let request = with_ctx!(|ctx| AnnounceData::new_main(ctx));
         let response_result = match tracker_type {
             TrackerType::Http => http_announce(&tracker_addr, &request).await,
             TrackerType::Udp => udp_announce(&tracker_addr, &request).await,
@@ -221,11 +220,10 @@ async fn announce_once(
     tracker_type: TrackerType,
     tracker_addr: String,
     mut handle: ctx::Handle<ctx::PreliminaryCtx>,
-    listener_port: u16,
     mut callback: impl FnMut(ResponseData),
 ) {
     define_with_ctx!(handle);
-    let request = with_ctx!(|ctx| AnnounceData::new_preliminary(ctx, listener_port));
+    let request = with_ctx!(|ctx| AnnounceData::new_preliminary(ctx));
     let response_result = match tracker_type {
         TrackerType::Http => http_announce(&tracker_addr, &request).await,
         TrackerType::Udp => udp_announce(&tracker_addr, &request).await,
@@ -289,7 +287,6 @@ fn add_http_and_udp_trackers<'a>(
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     config_dir: impl AsRef<Path>,
-    public_listener_port: u16,
     callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
@@ -308,22 +305,10 @@ pub async fn make_periodic_announces(
     });
 
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Http,
-            tracker_addr,
-            ctx_handle.clone(),
-            public_listener_port,
-            callback.clone(),
-        )
+        announce_periodically(TrackerType::Http, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Udp,
-            tracker_addr,
-            ctx_handle.clone(),
-            public_listener_port,
-            callback.clone(),
-        )
+        announce_periodically(TrackerType::Udp, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }
@@ -331,7 +316,6 @@ pub async fn make_periodic_announces(
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,
-    public_listener_port: u16,
     callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
@@ -350,22 +334,10 @@ pub async fn make_preliminary_announces(
     });
 
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_once(
-            TrackerType::Http,
-            tracker_addr,
-            ctx_handle.clone(),
-            public_listener_port,
-            callback.clone(),
-        )
+        announce_once(TrackerType::Http, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_once(
-            TrackerType::Udp,
-            tracker_addr,
-            ctx_handle.clone(),
-            public_listener_port,
-            callback.clone(),
-        )
+        announce_once(TrackerType::Udp, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }

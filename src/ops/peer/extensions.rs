@@ -1,6 +1,5 @@
 use super::super::{ctx, MAX_BLOCK_SIZE};
-use super::ALL_SUPPORTED_EXTENSIONS;
-use crate::utils::ip;
+use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME};
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -57,8 +56,6 @@ pub async fn new_peer(
     Ok(Peer(inner))
 }
 
-const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
-
 pub async fn send_handshake(
     peer: Peer,
     enabled_extensions: impl IntoIterator<Item = &pwp::Extension>,
@@ -73,7 +70,7 @@ pub async fn send_handshake(
 
     let local_handshake = Box::new(pwp::HandshakeData {
         extensions,
-        listen_port: Some(with_ctx!(|ctx| ip::any_socketaddr_from_hash(&ctx.metainfo).port())),
+        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(inner.rx.remote_ip().ip()),
         metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),

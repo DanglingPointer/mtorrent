@@ -1,7 +1,7 @@
 use super::*;
 use crate::ops::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{magnet, startup};
+use crate::utils::{ip, magnet, startup};
 use crate::{ops::ctx, pwp, sec};
 use std::collections::HashMap;
 use std::fs;
@@ -34,7 +34,8 @@ async fn connecting_peer(
     let mut local_id = [0u8; 20];
     local_id[..5].copy_from_slice("leech".as_bytes());
 
-    let handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
+    let listener_addr_stub = ip::any_socketaddr_from_hash(&0);
+    let handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_addr_stub).unwrap();
 
     let (download, upload, _) = from_outgoing_connection(
         peer_ip,
@@ -160,7 +161,7 @@ async fn listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
+    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip).unwrap();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
@@ -201,7 +202,7 @@ async fn run_listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id)).unwrap();
+    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip).unwrap();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
@@ -476,7 +477,9 @@ async fn test_pass_metadata_from_peer_to_peer() {
         let _ = run_listening_seeder(addr, metainfo_filepath, "test_input4").await;
     });
     let receiving_peer = time::timeout(sec!(30), async move {
-        let mut ctx_handle = ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new());
+        let listener_addr_stub = ip::any_socketaddr_from_hash(&0);
+        let mut ctx_handle =
+            ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new(), listener_addr_stub);
         let _ =
             outgoing_preliminary_connection(addr, ctx_handle.clone(), runtime::Handle::current())
                 .await;

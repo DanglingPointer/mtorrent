@@ -1,4 +1,5 @@
 use super::super::{ctx, MAX_BLOCK_SIZE};
+use super::CLIENT_NAME;
 use crate::{pwp, sec};
 use std::io;
 use tokio::time::Instant;
@@ -91,6 +92,9 @@ pub async fn new_peer(
         extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())]
             .into_iter()
             .collect(),
+        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
+        client_type: Some(CLIENT_NAME.to_string()),
+        yourip: Some(rx.remote_ip().ip()),
         ..Default::default()
     });
     tx.send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0)).await?;

@@ -49,17 +49,35 @@ macro_rules! define_with_ctx {
     };
 }
 
+pub(super) struct ConstData {
+    local_peer_id: PeerId,
+    pwp_listener_public_addr: SocketAddr,
+}
+
+impl ConstData {
+    pub(super) fn local_peer_id(&self) -> &PeerId {
+        &self.local_peer_id
+    }
+    pub(super) fn pwp_listener_public_addr(&self) -> &SocketAddr {
+        &self.pwp_listener_public_addr
+    }
+}
+
 pub struct PreliminaryCtx {
     pub(super) magnet: magnet::MagnetLink,
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
     pub(super) known_peers: HashSet<SocketAddr>,
     pub(super) connected_peers: HashSet<SocketAddr>,
-    pub(super) local_peer_id: PeerId,
+    pub(super) const_data: ConstData,
 }
 
 impl PreliminaryCtx {
-    pub fn new(magnet: magnet::MagnetLink, local_peer_id: PeerId) -> Handle<Self> {
+    pub fn new(
+        magnet: magnet::MagnetLink,
+        local_peer_id: PeerId,
+        pwp_listener_public_addr: SocketAddr,
+    ) -> Handle<Self> {
         Handle {
             ctx: Rc::new(RefCell::new(Self {
                 magnet,
@@ -67,7 +85,10 @@ impl PreliminaryCtx {
                 metainfo_pieces: Bitfield::new(),
                 known_peers: Default::default(),
                 connected_peers: Default::default(),
-                local_peer_id,
+                const_data: ConstData {
+                    local_peer_id,
+                    pwp_listener_public_addr,
+                },
             })),
         }
     }
@@ -92,11 +113,15 @@ pub struct MainCtx {
     pub(super) metainfo: meta::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
     pub(super) pending_requests: pwp::PendingRequests,
-    pub(super) local_peer_id: PeerId,
+    pub(super) const_data: ConstData,
 }
 
 impl MainCtx {
-    pub fn new(metainfo: meta::Metainfo, local_peer_id: PeerId) -> io::Result<Handle<Self>> {
+    pub fn new(
+        metainfo: meta::Metainfo,
+        local_peer_id: PeerId,
+        pwp_listener_public_addr: SocketAddr,
+    ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
         }
@@ -117,7 +142,10 @@ impl MainCtx {
             metainfo,
             peer_states: Default::default(),
             pending_requests: Default::default(),
-            local_peer_id,
+            const_data: ConstData {
+                local_peer_id,
+                pwp_listener_public_addr,
+            },
         }));
         Ok(Handle { ctx })
     }

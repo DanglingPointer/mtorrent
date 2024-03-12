@@ -23,6 +23,8 @@ const EXTENSION_PROTOCOL_ENABLED: bool = true;
 const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
     &[pwp::Extension::Metadata, pwp::Extension::PeerExchange];
 
+const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
+
 fn main_ctx_ensure_peer_unique(remote_ip: SocketAddr, ctx: &ctx::MainCtx) -> io::Result<()> {
     if ctx.peer_states.get(&remote_ip).is_some() {
         Err(io::Error::new(
@@ -102,7 +104,7 @@ async fn from_outgoing_connection(
     with_ctx!(|ctx| main_ctx_ensure_peer_unique(remote_ip, ctx))?;
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), ctx.local_peer_id) });
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) =
         channels_from_outgoing_with_retries(
@@ -153,7 +155,7 @@ async fn from_incoming_connection(
     with_ctx!(|ctx| main_ctx_ensure_peer_unique(remote_ip, ctx))?;
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), ctx.local_peer_id) });
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
         &local_peer_id,
@@ -453,7 +455,7 @@ pub async fn outgoing_preliminary_connection(
     with_ctx!(|ctx| preliminary_ctx_ensure_peer_unique(remote_ip, ctx))?;
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.magnet.info_hash(), ctx.local_peer_id) });
+        with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) =
         channels_from_outgoing_with_retries(&local_peer_id, &info_hash, true, remote_ip).await?;
@@ -482,7 +484,7 @@ pub async fn incoming_preliminary_connection(
     with_ctx!(|ctx| preliminary_ctx_ensure_peer_unique(remote_ip, ctx))?;
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.local_peer_id) });
+        with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
         &local_peer_id,

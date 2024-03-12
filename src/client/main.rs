@@ -134,7 +134,7 @@ async fn preliminary_stage(
 
     let local_task = task::LocalSet::new();
 
-    let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id);
+    let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip);
 
     let incoming_connection_pwp_runtime = pwp_runtime.clone();
     let incoming_connection_ctx = ctx.clone();
@@ -176,13 +176,8 @@ async fn preliminary_stage(
     let tracker_ctx = ctx.clone();
     let tracker_config_dir = PathBuf::from(config_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::make_preliminary_announces(
-            tracker_ctx,
-            tracker_config_dir,
-            public_pwp_ip.port(),
-            on_announce_response,
-        )
-        .await;
+        ops::make_preliminary_announces(tracker_ctx, tracker_config_dir, on_announce_response)
+            .await;
     });
 
     let metainfo_filepath_copy = metainfo_filepath.clone();
@@ -224,7 +219,7 @@ async fn main_stage(
 
     let local_task = task::LocalSet::new();
 
-    let ctx = ops::MainCtx::new(metainfo, local_peer_id)?;
+    let ctx = ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip)?;
 
     let incoming_connection_content_storage = content_storage.clone();
     let incoming_connection_metainfo_storage = metainfo_storage.clone();
@@ -289,13 +284,7 @@ async fn main_stage(
     let tracker_ctx = ctx.clone();
     let config_dir = PathBuf::from(output_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::make_periodic_announces(
-            tracker_ctx,
-            config_dir,
-            public_pwp_ip.port(),
-            on_announce_response,
-        )
-        .await;
+        ops::make_periodic_announces(tracker_ctx, config_dir, on_announce_response).await;
     });
 
     local_task
