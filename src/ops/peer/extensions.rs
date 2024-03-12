@@ -61,7 +61,7 @@ const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_V
 
 pub async fn send_handshake(
     peer: Peer,
-    enabled_extensions: impl Iterator<Item = &pwp::Extension>,
+    enabled_extensions: impl IntoIterator<Item = &pwp::Extension>,
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
     define_with_ctx!(inner.handle);
@@ -69,7 +69,7 @@ pub async fn send_handshake(
     // set 0 ids for disabled extensions, and local ids for those enabled
     let mut extensions: HashMap<pwp::Extension, u8> =
         ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
-    extensions.extend(enabled_extensions.map(|e| (*e, e.local_id())));
+    extensions.extend(enabled_extensions.into_iter().map(|e| (*e, e.local_id())));
 
     let local_handshake = Box::new(pwp::HandshakeData {
         extensions,

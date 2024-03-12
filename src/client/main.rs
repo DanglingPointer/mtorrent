@@ -106,7 +106,7 @@ pub async fn single_torrent(
             &output_dir,
             pwp_runtime,
             storage_runtime,
-            peers.into_iter(),
+            peers,
         )
         .await?;
     }
@@ -203,7 +203,7 @@ async fn main_stage(
     output_dir: impl AsRef<Path>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
-    extra_peers: impl Iterator<Item = SocketAddr>,
+    extra_peers: impl IntoIterator<Item = SocketAddr>,
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
