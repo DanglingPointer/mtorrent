@@ -53,7 +53,8 @@ pub struct PreliminaryCtx {
     pub(super) magnet: magnet::MagnetLink,
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
-    pub(super) peers: HashSet<SocketAddr>,
+    pub(super) known_peers: HashSet<SocketAddr>,
+    pub(super) connected_peers: HashSet<SocketAddr>,
     pub(super) local_peer_id: PeerId,
 }
 
@@ -64,7 +65,8 @@ impl PreliminaryCtx {
                 magnet,
                 metainfo: Vec::new(),
                 metainfo_pieces: Bitfield::new(),
-                peers: Default::default(),
+                known_peers: Default::default(),
+                connected_peers: Default::default(),
                 local_peer_id,
             })),
         }
@@ -75,10 +77,10 @@ impl fmt::Display for PreliminaryCtx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Metainfo pieces: {}/{}\nPeers: {:?}",
+            "Metainfo pieces: {}/{}\nConnected peers: {:?}",
             self.metainfo_pieces.count_ones(),
             self.metainfo_pieces.len(),
-            self.peers,
+            self.connected_peers,
         )
     }
 }
@@ -156,7 +158,7 @@ pub async fn periodic_metadata_check(
         io::Result::Ok(())
     })?;
 
-    Ok(with_ctx!(|ctx| mem::take(&mut ctx.peers)))
+    Ok(with_ctx!(|ctx| mem::take(&mut ctx.known_peers)))
 }
 
 pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: impl AsRef<Path>) {

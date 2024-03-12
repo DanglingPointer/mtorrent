@@ -38,7 +38,7 @@ fn preliminary_ctx_ensure_peer_unique(
     remote_ip: SocketAddr,
     ctx: &ctx::PreliminaryCtx,
 ) -> io::Result<()> {
-    if ctx.peers.get(&remote_ip).is_some() {
+    if ctx.connected_peers.get(&remote_ip).is_some() {
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("already connected to {remote_ip}"),

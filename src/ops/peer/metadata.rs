@@ -12,6 +12,14 @@ struct Data {
     remote_metadata_ext_id: u8,
 }
 
+impl Drop for Data {
+    fn drop(&mut self) {
+        self.handle.with_ctx(|ctx| {
+            ctx.connected_peers.remove(self.rx.remote_ip());
+        });
+    }
+}
+
 pub struct DisabledPeer(Box<Data>);
 pub struct RejectingPeer(Box<Data>);
 pub struct UploadingPeer(Box<Data>);
@@ -77,7 +85,6 @@ pub async fn new_peer(
 ) -> io::Result<Peer> {
     define_with_ctx!(handle);
     let pwp::ExtendedChannels(mut tx, mut rx) = extended_chans;
-    with_ctx!(|ctx| ctx.peers.insert(*rx.remote_ip()));
 
     // send local handshake
     let local_handshake = Box::new(pwp::HandshakeData {
@@ -101,6 +108,13 @@ pub async fn new_peer(
         Err(e) => return Err(e.into()),
     };
 
+    with_ctx!(|ctx| {
+        // the bookkeeping below must be done _after_ the I/O operations above,
+        // otherwise it will be never undone in case of send/recv error
+        let peer_ip = rx.remote_ip();
+        ctx.known_peers.insert(*peer_ip);
+        ctx.connected_peers.insert(*peer_ip);
+    });
     let inner = Box::new(Data {
         handle,
         rx,
