@@ -13,4 +13,4 @@ pub(crate) use peer::{incoming_pwp_connection, outgoing_pwp_connection};
 pub(crate) use tracker::ResponseData as TrackerResponse;
 pub(crate) use tracker::{make_periodic_announces, make_preliminary_announces};
 
-const MAX_BLOCK_SIZE: usize = 16384;
+const MAX_BLOCK_SIZE: usize = 16 * 1024;

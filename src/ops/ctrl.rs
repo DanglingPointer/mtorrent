@@ -1,5 +1,4 @@
-use super::ctx;
-use crate::ops::MAX_BLOCK_SIZE;
+use super::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::meta;
 use crate::{pwp, sec};
 use core::fmt;

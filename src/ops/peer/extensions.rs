@@ -1,5 +1,5 @@
 use super::super::{ctx, MAX_BLOCK_SIZE};
-use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME};
+use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, MAX_PENDING_REQUESTS};
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -74,6 +74,7 @@ pub async fn send_handshake(
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(inner.rx.remote_ip().ip()),
         metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
+        request_limit: Some(MAX_PENDING_REQUESTS),
         ..Default::default()
     });
     log::debug!("Sending extended handshake to {}: {}", inner.rx.remote_ip(), local_handshake);

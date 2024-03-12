@@ -284,7 +284,7 @@ pub struct HandshakeData {
     pub yourip: Option<IpAddr>,
     pub ipv4: Option<Ipv4Addr>,
     pub ipv6: Option<Ipv6Addr>,
-    pub request_limit: Option<u32>,
+    pub request_limit: Option<usize>,
     pub metadata_size: Option<usize>,
 }
 
@@ -569,7 +569,7 @@ impl HandshakeData {
                 });
             }
             if let Some(Integer(max_requests)) = root.remove(Self::KEY_REQQ) {
-                ret.request_limit = Some(max_requests as u32);
+                ret.request_limit = Some(max_requests as usize);
             }
             if let Some(Integer(metasize)) = root.remove(Self::KEY_METADATA_SIZE) {
                 ret.metadata_size = Some(metasize as usize);

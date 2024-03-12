@@ -1,3 +1,4 @@
+use super::MAX_PENDING_REQUESTS;
 use crate::ops::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
@@ -188,7 +189,7 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
 pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
     let mut inner = inner!(peer);
     let current_state = inner.handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
-    // local pieces don't disappear, so xor yields all newly added pieces
+    // local pieces don't disappear, so xor yields the new pieces since last time
     inner.local_pieces_snapshot.bitxor_assign(&current_state);
     for (piece_index, status_changed) in inner.local_pieces_snapshot.iter().enumerate() {
         if *status_changed {
@@ -208,6 +209,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     let mut initial_state = inner.state.clone();
     define_with_ctx!(inner.handle);
 
+    let mut discarded_requests = 0u64;
     let collect_requests = async {
         let request_sink = request_sink; // move it, so that it's dropped at the end
         let start_time = Instant::now();
@@ -218,7 +220,9 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 .await
             {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    request_sink.send(info);
+                    if !request_sink.try_send(MAX_PENDING_REQUESTS, info) {
+                        discarded_requests = discarded_requests.saturating_add(1);
+                    }
                 }
                 Ok(pwp::DownloaderMessage::Cancel(info)) => {
                     request_sink.remove_all(&info);
@@ -240,7 +244,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         let mut request_src = request_src;
         let remote_ip = *inner.tx.remote_ip();
         while let Some(request) = request_src.next().await {
-            let _sw = debug_stopwatch!("Serving requet {} to {}", request, remote_ip);
+            let _sw = debug_stopwatch!("Serving request {} to {}", request, remote_ip);
             if request.block_length > MAX_BLOCK_SIZE {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -273,7 +277,11 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         Ok(())
     };
 
-    try_join!(collect_requests, process_requests)?;
+    let result = try_join!(collect_requests, process_requests);
+    if discarded_requests > 0 {
+        log::warn!("Discarded {} requests from {}", discarded_requests, inner.tx.remote_ip());
+    }
+    result?;
     update_state!(inner);
     Ok(to_enum!(inner))
 }

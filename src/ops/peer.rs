@@ -25,6 +25,8 @@ const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
 
 const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
+const MAX_PENDING_REQUESTS: usize = 1024 * 3;
+
 async fn channels_from_outgoing_with_retries(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],

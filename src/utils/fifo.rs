@@ -90,6 +90,15 @@ impl<T> Sender<T> {
         }
     }
 
+    pub fn try_send(&self, len_threshold: usize, item: T) -> bool {
+        if self.0.queue.len() < len_threshold {
+            self.send(item);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn remove_all(&self, item: &T) -> bool
     where
         T: PartialEq<T>,
