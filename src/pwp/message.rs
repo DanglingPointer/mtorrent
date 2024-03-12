@@ -538,7 +538,7 @@ impl HandshakeData {
             let mut root = benc::convert_dictionary(d);
             let mut ret = Self::default();
             if let Some(Integer(port)) = root.remove(Self::KEY_P) {
-                ret.listen_port = Some(port as u16);
+                ret.listen_port = port.try_into().ok();
             }
             if let Some(ByteString(v)) = root.remove(Self::KEY_V) {
                 ret.client_type = String::from_utf8(v).ok();
@@ -569,10 +569,10 @@ impl HandshakeData {
                 });
             }
             if let Some(Integer(max_requests)) = root.remove(Self::KEY_REQQ) {
-                ret.request_limit = Some(max_requests as usize);
+                ret.request_limit = max_requests.try_into().ok();
             }
             if let Some(Integer(metasize)) = root.remove(Self::KEY_METADATA_SIZE) {
-                ret.metadata_size = Some(metasize as usize);
+                ret.metadata_size = metasize.try_into().ok();
             }
             if let Some(Dictionary(d)) = root.remove(Self::KEY_M) {
                 ret.extensions = d
