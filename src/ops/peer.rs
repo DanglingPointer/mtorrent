@@ -25,31 +25,6 @@ const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
 
 const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
-fn main_ctx_ensure_peer_unique(remote_ip: SocketAddr, ctx: &ctx::MainCtx) -> io::Result<()> {
-    if ctx.peer_states.get(&remote_ip).is_some() {
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("already connected to {remote_ip}"),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn preliminary_ctx_ensure_peer_unique(
-    remote_ip: SocketAddr,
-    ctx: &ctx::PreliminaryCtx,
-) -> io::Result<()> {
-    if ctx.connected_peers.get(&remote_ip).is_some() {
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("already connected to {remote_ip}"),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 async fn channels_from_outgoing_with_retries(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
@@ -101,7 +76,7 @@ async fn from_outgoing_connection(
     extension_protocol_enabled: bool,
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
     define_with_ctx!(ctx_handle);
-    with_ctx!(|ctx| main_ctx_ensure_peer_unique(remote_ip, ctx))?;
+    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
@@ -114,7 +89,7 @@ async fn from_outgoing_connection(
             remote_ip,
         )
         .await?;
-    with_ctx!(|ctx| main_ctx_ensure_peer_unique(remote_ip, ctx))?;
+    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
     log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
@@ -152,7 +127,7 @@ async fn from_incoming_connection(
     define_with_ctx!(ctx_handle);
 
     let remote_ip = stream.peer_addr()?;
-    with_ctx!(|ctx| main_ctx_ensure_peer_unique(remote_ip, ctx))?;
+    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
@@ -452,14 +427,15 @@ pub async fn outgoing_preliminary_connection(
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    with_ctx!(|ctx| preliminary_ctx_ensure_peer_unique(remote_ip, ctx))?;
+    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) =
         channels_from_outgoing_with_retries(&local_peer_id, &info_hash, true, remote_ip).await?;
-    with_ctx!(|ctx| preliminary_ctx_ensure_peer_unique(remote_ip, ctx))?;
+
+    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
     log::info!("Successful outgoing connection to {remote_ip}");
 
     run_metadata_download(
@@ -481,7 +457,7 @@ pub async fn incoming_preliminary_connection(
     define_with_ctx!(ctx_handle);
 
     let remote_ip = stream.peer_addr()?;
-    with_ctx!(|ctx| preliminary_ctx_ensure_peer_unique(remote_ip, ctx))?;
+    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });

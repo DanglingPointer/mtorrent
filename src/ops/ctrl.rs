@@ -2,10 +2,11 @@ use super::ctx;
 use crate::ops::MAX_BLOCK_SIZE;
 use crate::utils::meta;
 use crate::{pwp, sec};
-use std::cmp;
+use core::fmt;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::{cmp, error, io};
 
 const MAX_SEEDER_COUNT: usize = 50;
 
@@ -201,4 +202,57 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
 
 pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool {
     true
+}
+
+const MAX_CONNECTED_PEERS_COUNT: usize = 50;
+
+#[derive(Debug)]
+pub enum GrantError {
+    ConnectionsLimitReached,
+    AlreadyConnected(SocketAddr),
+}
+
+impl fmt::Display for GrantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GrantError::ConnectionsLimitReached => write!(f, "connections limit reached"),
+            GrantError::AlreadyConnected(addr) => write!(f, "already connected to {addr}"),
+        }
+    }
+}
+
+impl error::Error for GrantError {}
+
+impl From<GrantError> for io::Error {
+    fn from(value: GrantError) -> Self {
+        io::Error::new(io::ErrorKind::PermissionDenied, Box::new(value))
+    }
+}
+
+pub fn grant_preliminary_connection_permission(
+    ctx: &ctx::PreliminaryCtx,
+    candidate: &SocketAddr,
+) -> Result<(), GrantError> {
+    if ctx.connected_peers.len() >= MAX_CONNECTED_PEERS_COUNT {
+        Err(GrantError::ConnectionsLimitReached)
+    } else {
+        match ctx.connected_peers.get(candidate) {
+            Some(_) => Err(GrantError::AlreadyConnected(*candidate)),
+            None => Ok(()),
+        }
+    }
+}
+
+pub fn grant_main_connection_permission(
+    ctx: &ctx::MainCtx,
+    candidate: &SocketAddr,
+) -> Result<(), GrantError> {
+    if ctx.peer_states.iter().count() >= MAX_CONNECTED_PEERS_COUNT {
+        Err(GrantError::ConnectionsLimitReached)
+    } else {
+        match ctx.peer_states.get(candidate) {
+            Some(_) => Err(GrantError::AlreadyConnected(*candidate)),
+            None => Ok(()),
+        }
+    }
 }
