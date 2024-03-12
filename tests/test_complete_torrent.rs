@@ -490,11 +490,11 @@ async fn test_download_and_upload_multifile_torrent() {
         let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
         let data_dir = "tests/assets/screenshots";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -502,7 +502,7 @@ async fn test_download_and_upload_multifile_torrent() {
             ConnectionMode::Outgoing { num_peers: 50 },
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         compare_input_and_output(data_dir, output_dir, torrent_name);
@@ -519,11 +519,11 @@ async fn test_download_and_upload_multifile_torrent() {
 
         let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -533,7 +533,7 @@ async fn test_download_and_upload_multifile_torrent() {
             },
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         tracker.kill().unwrap();
@@ -545,11 +545,11 @@ async fn test_download_and_upload_multifile_torrent() {
         let output_dir = "test_accept_1_leech_and_upload_multifile_torrent";
         let data_dir = "tests/assets";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(data_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Leech>(
             metainfo_file,
@@ -557,7 +557,7 @@ async fn test_download_and_upload_multifile_torrent() {
             ConnectionMode::Outgoing { num_peers: 1 }
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         compare_input_and_output(output_dir, data_dir, torrent_name);
@@ -575,11 +575,11 @@ async fn test_download_and_upload_monofile_torrent() {
         let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
         let data_dir = "tests/assets/pcap";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -587,7 +587,7 @@ async fn test_download_and_upload_monofile_torrent() {
             ConnectionMode::Outgoing { num_peers: 50 }
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         compare_input_and_output(data_dir, output_dir, torrent_name);
@@ -604,11 +604,11 @@ async fn test_download_and_upload_monofile_torrent() {
 
         let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -618,7 +618,7 @@ async fn test_download_and_upload_monofile_torrent() {
             },
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         tracker.kill().unwrap();
@@ -630,11 +630,11 @@ async fn test_download_and_upload_monofile_torrent() {
         let output_dir = "test_accept_1_leech_and_upload_monofile_torrent";
         let data_dir = "tests/assets";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrentv2"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(data_dir)
             .spawn()
-            .expect("failed to execute 'mtorrentv2'");
+            .expect("failed to execute 'mtorrent'");
 
         with_timeout!(launch_peers::<Leech>(
             metainfo_file,
@@ -642,7 +642,7 @@ async fn test_download_and_upload_monofile_torrent() {
             ConnectionMode::Outgoing { num_peers: 1 }
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrentv2'");
+        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         compare_input_and_output(output_dir, data_dir, torrent_name);
