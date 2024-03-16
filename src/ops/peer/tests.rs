@@ -173,6 +173,7 @@ async fn listening_seeder(
     let (stream, peer_ip) = listener.accept().await.unwrap();
     let (download, upload, extensions) = from_incoming_connection(
         stream,
+        peer_ip,
         content_storage,
         meta_storage,
         handle.clone(),
@@ -211,9 +212,10 @@ async fn run_listening_seeder(
     });
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
-    let (stream, _peer_ip) = listener.accept().await.unwrap();
+    let (stream, peer_ip) = listener.accept().await.unwrap();
     incoming_pwp_connection(
         stream,
+        peer_ip,
         content_storage,
         meta_storage,
         handle,

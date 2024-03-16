@@ -120,6 +120,7 @@ async fn from_outgoing_connection(
 
 async fn from_incoming_connection(
     stream: TcpStream,
+    remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
     mut ctx_handle: MainHandle,
@@ -128,7 +129,6 @@ async fn from_incoming_connection(
 ) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
     define_with_ctx!(ctx_handle);
 
-    let remote_ip = stream.peer_addr()?;
     with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
@@ -138,6 +138,7 @@ async fn from_incoming_connection(
         &local_peer_id,
         Some(&info_hash),
         extension_protocol_enabled,
+        remote_ip,
         stream,
     )
     .await?;
@@ -320,15 +321,16 @@ pub async fn outgoing_pwp_connection(
 
 pub async fn incoming_pwp_connection(
     stream: TcpStream,
+    remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
     ctx_handle: MainHandle,
     pwp_worker_handle: runtime::Handle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
-    let remote_ip = stream.peer_addr()?;
     let (download, upload, extensions) = from_incoming_connection(
         stream,
+        remote_ip,
         content_storage.clone(),
         metainfo_storage.clone(),
         ctx_handle.clone(),
@@ -435,7 +437,13 @@ pub async fn outgoing_preliminary_connection(
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
     let (download_chans, upload_chans, extended_chans, runner) =
-        channels_from_outgoing_with_retries(&local_peer_id, &info_hash, true, remote_ip).await?;
+        channels_from_outgoing_with_retries(
+            &local_peer_id,
+            &info_hash,
+            true, // extension_protocol_enabled
+            remote_ip,
+        )
+        .await?;
 
     with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
     log::info!("Successful outgoing connection to {remote_ip}");
@@ -453,12 +461,12 @@ pub async fn outgoing_preliminary_connection(
 
 pub async fn incoming_preliminary_connection(
     stream: TcpStream,
+    remote_ip: SocketAddr,
     mut ctx_handle: PreliminaryHandle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
 
-    let remote_ip = stream.peer_addr()?;
     with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
 
     let (info_hash, local_peer_id) =
@@ -468,6 +476,7 @@ pub async fn incoming_preliminary_connection(
         &local_peer_id,
         Some(&info_hash),
         true, // extension_protocol_enabled
+        remote_ip,
         stream,
     )
     .await?;

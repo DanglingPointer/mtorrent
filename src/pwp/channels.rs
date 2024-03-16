@@ -120,6 +120,7 @@ pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
+    remote_ip: SocketAddr,
     socket: TcpStream,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionRunner)> {
     let local_handshake = Handshake {
@@ -127,7 +128,6 @@ pub async fn channels_from_incoming(
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
         reserved: reserved_bits(extension_protocol_enabled),
     };
-    let remote_ip = socket.peer_addr()?;
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
         do_handshake_incoming(&remote_ip, socket, &local_handshake, info_hash.is_none()),

@@ -273,7 +273,7 @@ async fn listening_peer<P: Peer>(
                 index, listening_addr, remote_addr
             );
             let (download_chans, upload_chans, _, runner) =
-                pwp::channels_from_incoming(&[index + b'0'; 20], None, false, stream)
+                pwp::channels_from_incoming(&[index + b'0'; 20], None, false, remote_addr, stream)
                     .await
                     .unwrap();
             P::run(index, download_chans, upload_chans, runner, storage, info).await;

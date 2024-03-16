@@ -13,13 +13,12 @@ fn peer_discovered_callback_factory(
     ctx_handle: ops::Handle<ops::MainCtx>,
     pwp_worker_handle: runtime::Handle,
 ) -> impl FnMut(&SocketAddr) + Clone {
+    let captures = (content_storage, metainfo_storage, ctx_handle, pwp_worker_handle);
     move |remote_ip| {
-        let content_storage = content_storage.clone();
-        let metainfo_storage = metainfo_storage.clone();
-        let ctx_handle = ctx_handle.clone();
-        let pwp_worker_handle = pwp_worker_handle.clone();
+        let captures_clone = captures.clone();
         let remote_ip = *remote_ip;
         task::spawn_local(async move {
+            let (content_storage, metainfo_storage, ctx_handle, pwp_worker_handle) = captures_clone;
             let cb = peer_discovered_callback_factory(
                 content_storage.clone(),
                 metainfo_storage.clone(),
@@ -136,15 +135,12 @@ async fn preliminary_stage(
 
     let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip);
 
-    let incoming_connection_pwp_runtime = pwp_runtime.clone();
-    let incoming_connection_ctx = ctx.clone();
-    let on_incoming_connection = move |stream: TcpStream| {
-        let pwp_runtime = incoming_connection_pwp_runtime.clone();
-        let ctx = incoming_connection_ctx.clone();
+    let captures = (pwp_runtime.clone(), ctx.clone());
+    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
+        let captures_clone = captures.clone();
         task::spawn_local(async move {
-            let peer_ip =
-                stream.peer_addr().map_or_else(|_| "<N/A>".to_owned(), |ip| format!("{ip}"));
-            match ops::incoming_preliminary_connection(stream, ctx, pwp_runtime).await {
+            let (pwp_runtime, ctx) = captures_clone;
+            match ops::incoming_preliminary_connection(stream, peer_ip, ctx, pwp_runtime).await {
                 Ok(_) => (),
                 Err(e) => log::error!("Incoming peer connection from {peer_ip} failed: {e}"),
             }
@@ -221,18 +217,12 @@ async fn main_stage(
 
     let ctx = ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip)?;
 
-    let incoming_connection_content_storage = content_storage.clone();
-    let incoming_connection_metainfo_storage = metainfo_storage.clone();
-    let incoming_connection_pwp_runtime = pwp_runtime.clone();
-    let incoming_connection_ctx = ctx.clone();
-    let on_incoming_connection = move |stream: TcpStream| {
-        let content_storage = incoming_connection_content_storage.clone();
-        let metainfo_storage = incoming_connection_metainfo_storage.clone();
-        let pwp_runtime = incoming_connection_pwp_runtime.clone();
-        let ctx = incoming_connection_ctx.clone();
+    let captures =
+        (content_storage.clone(), metainfo_storage.clone(), pwp_runtime.clone(), ctx.clone());
+    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
+        let captures_clone = captures.clone();
         task::spawn_local(async move {
-            let peer_ip =
-                stream.peer_addr().map_or_else(|_| "<N/A>".to_owned(), |ip| format!("{ip}"));
+            let (content_storage, metainfo_storage, pwp_runtime, ctx) = captures_clone;
             let cb = peer_discovered_callback_factory(
                 content_storage.clone(),
                 metainfo_storage.clone(),
@@ -241,6 +231,7 @@ async fn main_stage(
             );
             match ops::incoming_pwp_connection(
                 stream,
+                peer_ip,
                 content_storage,
                 metainfo_storage,
                 ctx,
