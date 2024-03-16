@@ -1,7 +1,7 @@
 use bitvec::prelude::*;
 use std::io;
+use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::net::TcpStream;
 
 pub type ReservedBits = BitArray<[u8; 8], Lsb0>;
 
@@ -32,15 +32,18 @@ impl Default for Handshake {
     }
 }
 
-pub(super) async fn do_handshake_incoming(
-    mut socket: TcpStream,
+pub(super) async fn do_handshake_incoming<S>(
+    remote_ip: &SocketAddr,
+    mut socket: S,
     local_handshake: &Handshake,
     use_remote_info_hash: bool,
-) -> io::Result<(TcpStream, Handshake)> {
+) -> io::Result<(S, Handshake)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
     // Read remote handshake up until peer id,
     // then send entire local handshake (with either local info_hash or remote one),
     // then read remote peer id.
-    let remote_ip = socket.peer_addr()?;
     log::debug!("Receiving incoming handshake from {}", remote_ip);
 
     let mut remote_handshake = Handshake::default();
@@ -77,15 +80,18 @@ pub(super) async fn do_handshake_incoming(
     }
 }
 
-pub(super) async fn do_handshake_outgoing(
-    socket: TcpStream,
+pub(super) async fn do_handshake_outgoing<S>(
+    remote_ip: &SocketAddr,
+    socket: S,
     local_handshake: &Handshake,
     expected_remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(TcpStream, Handshake)> {
+) -> io::Result<(S, Handshake)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
     // Send local hanshake up until peer id,
     // then wait for the entire remote handshake,
     // then send local peer id.
-    let remote_ip = socket.peer_addr()?;
     log::debug!("Starting outgoing handshake with {}", remote_ip);
 
     let mut writer = BufWriter::new(socket);
@@ -154,23 +160,13 @@ mod tests {
     use super::*;
     use futures::join;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use tokio::net::TcpListener;
+    use tokio::io::duplex;
 
-    async fn connect_server_and_client(listener_port: u16) -> (TcpStream, TcpStream) {
-        let server_addr = SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, listener_port));
-        let listener = TcpListener::bind(server_addr).await.unwrap();
-
-        let (server_stream, client_stream): (TcpStream, TcpStream) =
-            join!(async { listener.accept().await.unwrap().0 }, async {
-                TcpStream::connect(server_addr).await.unwrap()
-            });
-
-        (server_stream, client_stream)
-    }
+    const IP: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
 
     #[tokio::test]
     async fn test_handshake_specified_server_info_hash() {
-        let (server_stream, client_stream) = connect_server_and_client(6882).await;
+        let (server_stream, client_stream) = duplex(1024);
 
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
@@ -184,13 +180,22 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            do_handshake_outgoing(client_stream, &client_hs_data, Some(&server_hs_data.peer_id))
+            do_handshake_outgoing(
+                &IP,
+                client_stream,
+                &client_hs_data,
+                Some(&server_hs_data.peer_id),
+            )
+            .await
+            .unwrap()
+            .1
+        };
+        let server_hs_fut = async {
+            do_handshake_incoming(&IP, server_stream, &server_hs_data, false)
                 .await
                 .unwrap()
                 .1
         };
-        let server_hs_fut =
-            async { do_handshake_incoming(server_stream, &server_hs_data, false).await.unwrap().1 };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             join!(client_hs_fut, server_hs_fut);
@@ -203,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handshake_any_server_info_hash() {
-        let (server_stream, client_stream) = connect_server_and_client(6883).await;
+        let (server_stream, client_stream) = duplex(1024);
 
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
@@ -217,13 +222,22 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            do_handshake_outgoing(client_stream, &client_hs_data, Some(&server_hs_data.peer_id))
+            do_handshake_outgoing(
+                &IP,
+                client_stream,
+                &client_hs_data,
+                Some(&server_hs_data.peer_id),
+            )
+            .await
+            .unwrap()
+            .1
+        };
+        let server_hs_fut = async {
+            do_handshake_incoming(&IP, server_stream, &server_hs_data, true)
                 .await
                 .unwrap()
                 .1
         };
-        let server_hs_fut =
-            async { do_handshake_incoming(server_stream, &server_hs_data, true).await.unwrap().1 };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             join!(client_hs_fut, server_hs_fut);
@@ -236,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handshake_peer_id_doesnt_match() {
-        let (server_stream, client_stream) = connect_server_and_client(6884).await;
+        let (server_stream, client_stream) = duplex(1024);
 
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
@@ -251,12 +265,12 @@ mod tests {
 
         let client_hs_fut = async {
             let result =
-                do_handshake_outgoing(client_stream, &client_hs_data, Some(&[0u8; 20])).await;
+                do_handshake_outgoing(&IP, client_stream, &client_hs_data, Some(&[0u8; 20])).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("remote peer_id doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(server_stream, &server_hs_data, true).await;
+            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, true).await;
             assert!(result.is_err());
         };
         join!(client_hs_fut, server_hs_fut);
@@ -264,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handshake_info_hash_doesnt_match() {
-        let (server_stream, client_stream) = connect_server_and_client(6885).await;
+        let (server_stream, client_stream) = duplex(1024);
 
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
@@ -278,11 +292,11 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            let result = do_handshake_outgoing(client_stream, &client_hs_data, None).await;
+            let result = do_handshake_outgoing(&IP, client_stream, &client_hs_data, None).await;
             assert!(result.is_err());
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(server_stream, &server_hs_data, false).await;
+            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, false).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("info_hash doesn't match", error.to_string())
         };
@@ -297,7 +311,7 @@ mod tests {
             \x2d\x42\x54\x37\x61\x35\x57\x2d\x11\xb4\x8d\x05\x19\x2c\x3e\x33\
             \x88\x7c\x4b\xca";
 
-        let (mut server_stream, client_stream) = connect_server_and_client(6886).await;
+        let (mut server_stream, client_stream) = duplex(1024);
 
         let client_hs_data = Handshake {
             peer_id: [1u8; 20],
@@ -306,8 +320,12 @@ mod tests {
             reserved: BitArray::ZERO,
         };
 
-        let client_hs_fut =
-            async { do_handshake_outgoing(client_stream, &client_hs_data, None).await.unwrap().1 };
+        let client_hs_fut = async {
+            do_handshake_outgoing(&IP, client_stream, &client_hs_data, None)
+                .await
+                .unwrap()
+                .1
+        };
 
         let server_fut = async {
             server_stream.write_all(&server_hs_msg[..]).await.unwrap();

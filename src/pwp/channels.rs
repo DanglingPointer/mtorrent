@@ -127,13 +127,13 @@ pub async fn channels_from_incoming(
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
         reserved: reserved_bits(extension_protocol_enabled),
     };
+    let remote_ip = socket.peer_addr()?;
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
-        do_handshake_incoming(socket, &local_handshake, info_hash.is_none()),
+        do_handshake_incoming(&remote_ip, socket, &local_handshake, info_hash.is_none()),
     )
     .await??;
 
-    let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();
 
     Ok(setup_channels(ingress, egress, remote_ip, remote_handshake, extension_protocol_enabled))
@@ -152,9 +152,11 @@ pub async fn channels_from_outgoing(
         reserved: reserved_bits(extension_protocol_enabled),
     };
     let socket = TcpStream::connect(remote_addr).await?;
-    let (socket, remote_handshake) =
-        timeout(HANDSHAKE_TIMEOUT, do_handshake_outgoing(socket, &local_handshake, remote_peer_id))
-            .await??;
+    let (socket, remote_handshake) = timeout(
+        HANDSHAKE_TIMEOUT,
+        do_handshake_outgoing(&remote_addr, socket, &local_handshake, remote_peer_id),
+    )
+    .await??;
 
     let remote_ip = socket.peer_addr()?;
     let (ingress, egress) = socket.into_split();
