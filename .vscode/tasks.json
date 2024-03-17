@@ -27,6 +27,20 @@
 		},
 		{
 			"type": "cargo",
+			"command": "nextest",
+			"args": [
+				"run",
+				"--all-targets",
+				"--all-features",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "test",
+			"label": "rust: cargo nextest"
+		},
+		{
+			"type": "cargo",
 			"command": "run",
 			"args": [
 				"--release",
