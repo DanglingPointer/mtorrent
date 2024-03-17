@@ -155,6 +155,28 @@ pub async fn channels_from_outgoing(
     Ok(setup_channels(socket, remote_ip, remote_handshake, extension_protocol_enabled))
 }
 
+#[cfg(test)]
+pub fn channels_from_mock<S>(
+    peer_addr: SocketAddr,
+    remote_handshake: Handshake,
+    extension_protocol_enabled: bool,
+    mock_socket: S,
+) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>)
+where
+    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
+{
+    let (download, upload, extensions, runner) =
+        setup_channels(mock_socket, peer_addr, remote_handshake, extension_protocol_enabled);
+    tokio::task::spawn(async {
+        timeout(sec!(30), async move {
+            let _ = runner.await;
+        })
+        .await
+        .unwrap();
+    });
+    (download, upload, extensions)
+}
+
 // ------
 
 struct PeerInfo {

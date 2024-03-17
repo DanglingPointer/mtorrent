@@ -5,7 +5,7 @@ mod peer_states;
 mod requests;
 
 pub use channels::*;
-pub use handshake::Handshake;
+pub use handshake::{reserved_bits, Handshake};
 pub use message::{
     Bitfield, BlockInfo, DownloaderMessage, ExtendedMessage, Extension, HandshakeData,
     PeerExchangeData, UploaderMessage,
