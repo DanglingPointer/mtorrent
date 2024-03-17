@@ -36,7 +36,7 @@ async fn channels_from_outgoing_with_retries(
     pwp::DownloadChannels,
     pwp::UploadChannels,
     Option<pwp::ExtendedChannels>,
-    pwp::ConnectionRunner,
+    impl pwp::ConnectionRunner,
 )> {
     log::debug!("Connecting to {remote_ip}...");
     const MAX_RETRY_COUNT: usize = 3;
@@ -95,7 +95,7 @@ async fn from_outgoing_connection(
     log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.run().await {
+        if let Err(e) = runner.await {
             log::debug!("Peer runner exited: {}", e);
         }
     });
@@ -145,7 +145,7 @@ async fn from_incoming_connection(
     log::info!("Successful incoming connection from {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.run().await {
+        if let Err(e) = runner.await {
             log::debug!("Peer runner exited: {}", e);
         }
     });
@@ -368,7 +368,7 @@ async fn run_metadata_download(
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
-    runner: pwp::ConnectionRunner,
+    runner: impl pwp::ConnectionRunner,
     ctx_handle: PreliminaryHandle,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
@@ -376,7 +376,7 @@ async fn run_metadata_download(
         io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
     })?;
     pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.run().await {
+        if let Err(e) = runner.await {
             log::debug!("Peer runner exited: {}", e);
         }
     });

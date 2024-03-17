@@ -2,6 +2,7 @@ use crate::pwp::handshake::*;
 use crate::pwp::message::*;
 use crate::sec;
 use futures::channel::mpsc;
+use futures::Future;
 use futures::{select, select_biased, FutureExt, SinkExt, StreamExt};
 use std::future;
 use std::net::SocketAddr;
@@ -9,7 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::net::{tcp, TcpStream};
+use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
@@ -76,41 +77,33 @@ pub struct ExtendedChannels(pub ExtendedTxChannel, pub ExtendedRxChannel);
 
 // ------
 
-pub struct Runner<I, E>
-where
-    I: AsyncReadExt,
-    E: AsyncWriteExt,
-{
-    receiver: IngressStream<I>,
-    sender: EgressStream<E>,
-}
+pub trait ConnectionRunner: Future<Output = io::Result<()>> + Send + 'static {}
 
-impl<I, E> Runner<I, E>
+impl<T> ConnectionRunner for T where T: Future<Output = io::Result<()>> + Send + 'static {}
+
+async fn run_connection<I, E>(
+    mut receiver: IngressStream<I>,
+    mut sender: EgressStream<E>,
+) -> io::Result<()>
 where
-    I: AsyncReadExt + Unpin,
-    E: AsyncWriteExt + Unpin,
+    I: AsyncReadExt + Unpin + Send,
+    E: AsyncWriteExt + Unpin + Send,
 {
-    pub async fn run(self) -> io::Result<()> {
-        let read_fut = async {
-            let mut receiver = self.receiver;
-            loop {
-                receiver.read_one_message().await?;
-            }
-        };
-        let write_fut = async {
-            let mut sender = self.sender;
-            loop {
-                sender.write_one_message().await?;
-            }
-        };
-        select! {
-            read_result = read_fut.fuse() => read_result,
-            write_result = write_fut.fuse() => write_result,
+    let read_fut = async move {
+        loop {
+            receiver.read_one_message().await?;
         }
+    };
+    let write_fut = async move {
+        loop {
+            sender.write_one_message().await?;
+        }
+    };
+    select! {
+        read_result = read_fut.fuse() => read_result,
+        write_result = write_fut.fuse() => write_result,
     }
 }
-
-pub type ConnectionRunner = Runner<tcp::OwnedReadHalf, tcp::OwnedWriteHalf>;
 
 // ------
 
@@ -122,7 +115,8 @@ pub async fn channels_from_incoming(
     extension_protocol_enabled: bool,
     remote_ip: SocketAddr,
     socket: TcpStream,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionRunner)> {
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+{
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
@@ -133,10 +127,7 @@ pub async fn channels_from_incoming(
         do_handshake_incoming(&remote_ip, socket, &local_handshake, info_hash.is_none()),
     )
     .await??;
-
-    let (ingress, egress) = socket.into_split();
-
-    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake, extension_protocol_enabled))
+    Ok(setup_channels(socket, remote_ip, remote_handshake, extension_protocol_enabled))
 }
 
 pub async fn channels_from_outgoing(
@@ -145,7 +136,8 @@ pub async fn channels_from_outgoing(
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionRunner)> {
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+{
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
@@ -159,9 +151,7 @@ pub async fn channels_from_outgoing(
     .await??;
 
     let remote_ip = socket.peer_addr()?;
-    let (ingress, egress) = socket.into_split();
-
-    Ok(setup_channels(ingress, egress, remote_ip, remote_handshake, extension_protocol_enabled))
+    Ok(setup_channels(socket, remote_ip, remote_handshake, extension_protocol_enabled))
 }
 
 // ------
@@ -173,17 +163,16 @@ struct PeerInfo {
 
 const MAX_INCOMING_QUEUE: usize = 20;
 
-fn setup_channels<I, E>(
-    ingress: I,
-    egress: E,
+fn setup_channels<S>(
+    stream: S,
     remote_ip: SocketAddr,
     remote_handshake: Handshake,
     extended_protocol_enabled: bool,
-) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, Runner<I, E>)
+) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)
 where
-    I: AsyncReadExt,
-    E: AsyncWriteExt,
+    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
+    let (ingress, egress) = tokio::io::split(stream);
     let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
     let info = Rc::new(PeerInfo {
@@ -262,11 +251,11 @@ where
         DownloadChannels(download_tx, download_rx),
         UploadChannels(upload_tx, upload_rx),
         extended_channels,
-        Runner { receiver, sender },
+        run_connection(receiver, sender),
     )
 }
 
-struct IngressStream<S: AsyncReadExt> {
+struct IngressStream<S: AsyncReadExt + Unpin> {
     source: S,
     remote_ip: SocketAddr,
     ul_msg_sink: mpsc::Sender<UploaderMessage>,
@@ -322,7 +311,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
     }
 }
 
-struct EgressStream<S: AsyncWriteExt> {
+struct EgressStream<S: AsyncWriteExt + Unpin> {
     sink: BufWriter<S>,
     remote_ip: SocketAddr,
     dl_msg_source: mpsc::Receiver<Option<DownloaderMessage>>,
@@ -414,79 +403,27 @@ mod tests {
     use futures::executor::LocalPool;
     use futures::join;
     use futures::task::LocalSpawnExt;
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::pin::Pin;
     use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite, ReadBuf};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio::{io, task, time};
+    use tokio_test::io::Builder as MockBuilder;
 
-    struct ErrorStream;
-    impl ErrorStream {
-        const ERROR_KIND: io::ErrorKind = io::ErrorKind::OutOfMemory;
-    }
-    impl AsyncRead for ErrorStream {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            Poll::Ready(Err(io::Error::from(Self::ERROR_KIND)))
-        }
-    }
-    impl AsyncWrite for ErrorStream {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            Poll::Ready(Err(io::Error::from(Self::ERROR_KIND)))
-        }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Ready(Err(io::Error::from(Self::ERROR_KIND)))
-        }
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    struct PendingStream;
-    impl AsyncRead for PendingStream {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            Poll::Pending
-        }
-    }
-    impl AsyncWrite for PendingStream {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            Poll::Pending
-        }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Pending
-        }
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Pending
-        }
-    }
-
-    type FakeSocket = Cursor<Vec<u8>>;
-
-    async fn fake_socket_containing(msgs: Vec<PeerMessage>) -> FakeSocket {
-        let mut socket = BufWriter::new(FakeSocket::default());
+    async fn buffer_with(msgs: &[PeerMessage]) -> Vec<u8> {
+        let mut socket = BufWriter::new(Cursor::<Vec<u8>>::default());
         for msg in msgs {
             msg.write_to(&mut socket).await.unwrap();
         }
-        socket.rewind().await.unwrap();
-        socket.into_inner()
+        socket.into_inner().into_inner()
+    }
+
+    macro_rules! msgs {
+        ($($arg:expr),+ $(,)? ) => {
+            buffer_with(&[$($arg),+]).await.as_ref()
+        };
     }
 
     struct FakeSink(mpsc::UnboundedSender<u8>);
@@ -514,6 +451,15 @@ mod tests {
             Poll::Ready(Ok(()))
         }
     }
+    impl AsyncRead for FakeSink {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
 
     const HANDSHAKE_WITH_BEP10_SUPPORT: Handshake = Handshake {
         reserved: ReservedBits {
@@ -526,10 +472,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_downloader_message() {
-        let ingress = fake_socket_containing(vec![PeerMessage::Interested]).await;
-        let (mut download, mut upload, extended, mut runner) = setup_channels(
-            ingress,
-            PendingStream {},
+        let socket = MockBuilder::new().read(msgs![PeerMessage::Interested]).build();
+        let (mut download, mut upload, extended, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
@@ -542,7 +487,7 @@ mod tests {
         };
 
         let run_fut = async move {
-            runner.receiver.read_one_message().await.unwrap();
+            let _ = runner.await;
         };
 
         let download_fut = async move {
@@ -555,10 +500,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_uploader_message() {
-        let ingress = fake_socket_containing(vec![PeerMessage::Unchoke]).await;
-        let (mut download, mut upload, extended, mut runner) = setup_channels(
-            ingress,
-            PendingStream {},
+        let socket = MockBuilder::new().read(msgs![PeerMessage::Unchoke]).build();
+        let (mut download, mut upload, extended, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
@@ -571,7 +515,7 @@ mod tests {
         };
 
         let run_fut = async move {
-            runner.receiver.read_one_message().await.unwrap();
+            let _ = runner.await;
         };
 
         let upload_fut = async move {
@@ -584,22 +528,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_extended_message() {
-        let ingress = fake_socket_containing(vec![
-            PeerMessage::Extended {
-                id: 0,
-                data: Vec::from(
-                    b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e",
-                ),
-            },
-            PeerMessage::Extended {
-                id: Extension::Metadata.local_id(),
-                data: Vec::from("d8:msg_typei2e5:piecei3ee"),
-            },
-        ])
-        .await;
-        let (mut download, mut upload, extended, mut runner) = setup_channels(
-            ingress,
-            PendingStream {},
+        let socket = MockBuilder::new()
+            .read(msgs![
+                PeerMessage::Extended {
+                    id: 0,
+                    data: Vec::from(
+                        b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e",
+                    ),
+                },
+                PeerMessage::Extended {
+                    id: Extension::Metadata.local_id(),
+                    data: Vec::from("d8:msg_typei2e5:piecei3ee"),
+                },
+            ])
+            .build();
+
+        let (mut download, mut upload, extended, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
             true,
@@ -624,8 +569,7 @@ mod tests {
         };
 
         let run_fut = async move {
-            runner.receiver.read_one_message().await.unwrap();
-            runner.receiver.read_one_message().await.unwrap();
+            let _ = runner.await;
         };
 
         let upload_fut = async move {
@@ -643,31 +587,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_uploader_and_downloader_and_extended_messages() {
-        let ingress = fake_socket_containing(vec![
-            PeerMessage::KeepAlive,
-            PeerMessage::Interested,
-            PeerMessage::Unchoke,
-            PeerMessage::KeepAlive,
-            PeerMessage::Extended {
-                id: 0,
-                data: Vec::from(b"d1:md11:ut_metadatai1eee"),
-            },
-        ])
-        .await;
+        let socket = MockBuilder::new()
+            .read(msgs![
+                PeerMessage::KeepAlive,
+                PeerMessage::Interested,
+                PeerMessage::Unchoke,
+                PeerMessage::KeepAlive,
+                PeerMessage::Extended {
+                    id: 0,
+                    data: Vec::from(b"d1:md11:ut_metadatai1eee"),
+                },
+            ])
+            .build();
         let (mut download, mut upload, extended, runner) = setup_channels(
-            ingress,
-            PendingStream {},
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
             true,
         );
 
-        let upload_fut = async {
+        let upload_fut = async move {
             let result = upload.1.receive_message().await;
             assert!(matches!(result, Ok(DownloaderMessage::Interested)));
         };
 
-        let download_fut = async {
+        let download_fut = async move {
             let result = download.1.receive_message().await;
             assert!(matches!(result, Ok(UploaderMessage::Unchoke)));
         };
@@ -683,7 +627,7 @@ mod tests {
         };
 
         let run_fut = async move {
-            let result = runner.run().await;
+            let result = runner.await;
             let error = result.unwrap_err();
             assert_eq!(io::ErrorKind::UnexpectedEof, error.kind());
         };
@@ -693,28 +637,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_error() {
+        let socket = MockBuilder::new()
+            .read_error(io::Error::from(io::ErrorKind::OutOfMemory))
+            .build();
         let (mut download, mut upload, _, runner) = setup_channels(
-            ErrorStream {},
-            PendingStream {},
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
         );
 
-        let download_fut = async {
+        let download_fut = async move {
             let result = download.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
-        let upload_fut = async {
+        let upload_fut = async move {
             let result = upload.1.receive_message().await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
-        let run_fut = async {
-            let result = runner.run().await;
+        let run_fut = async move {
+            let result = runner.await;
             let error = result.unwrap_err();
-            assert_eq!(ErrorStream::ERROR_KIND, error.kind(), "{}", error);
+            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{}", error);
         };
 
         join!(download_fut, upload_fut, run_fut);
@@ -722,65 +668,59 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_downloader_message() {
-        let (mut download, upload, _, mut runner) = setup_channels(
-            PendingStream {},
-            FakeSocket::default(),
+        let socket = MockBuilder::new().write(msgs![PeerMessage::Interested]).wait(sec!(0)).build();
+        let (mut download, _upload, _, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
         );
 
-        let send_msg_fut = async {
-            let result = download.0.send_message(DownloaderMessage::Interested).await;
-            assert!(result.is_ok());
-        };
+        task::spawn(async move {
+            let _ = runner.await;
+        });
 
-        let run_fut = async {
-            runner.sender.write_one_message().await.unwrap();
-            assert!(!runner.sender.sink.get_ref().get_ref().is_empty());
-
-            runner.sender.sink.rewind().await.unwrap();
-            let sent_message = PeerMessage::read_from(&mut runner.sender.sink).await.unwrap();
-            assert!(matches!(sent_message, PeerMessage::Interested));
-        };
-
-        join!(send_msg_fut, run_fut);
-        drop(upload);
+        let result = download.0.send_message(DownloaderMessage::Interested).await;
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[tokio::test]
     async fn test_write_uploader_message() {
-        let (download, mut upload, _, mut runner) = setup_channels(
-            PendingStream {},
-            FakeSocket::default(),
+        let socket = MockBuilder::new().write(msgs![PeerMessage::Unchoke]).wait(sec!(0)).build();
+        let (_download, mut upload, _, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
         );
 
-        let send_msg_fut = async {
-            let result = upload.0.send_message(UploaderMessage::Unchoke).await;
-            assert!(result.is_ok());
-        };
+        task::spawn(async move {
+            let _ = runner.await;
+        });
 
-        let run_fut = async {
-            runner.sender.write_one_message().await.unwrap();
-            assert!(!runner.sender.sink.get_ref().get_ref().is_empty());
-
-            runner.sender.sink.rewind().await.unwrap();
-            let sent_message = PeerMessage::read_from(&mut runner.sender.sink).await.unwrap();
-            assert!(matches!(sent_message, PeerMessage::Unchoke));
-        };
-
-        join!(send_msg_fut, run_fut);
-        drop(download);
+        let result = upload.0.send_message(UploaderMessage::Unchoke).await;
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[tokio::test]
     async fn test_write_extended_messages() {
-        let (_download, _upload, extended, mut runner) = setup_channels(
-            PendingStream {},
-            FakeSocket::default(),
+        let socket = MockBuilder::new()
+            .write(msgs![
+                PeerMessage::Extended {
+                    id: 1,
+                    data: Vec::from("d8:msg_typei2e5:piecei3ee"),
+                },
+                PeerMessage::Extended {
+                    id: 0,
+                    data: Vec::from(
+                        b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e"
+                    ),
+                }
+            ])
+            .wait(sec!(0))
+            .build();
+        let (_download, _upload, extended, runner) = setup_channels(
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
             true,
@@ -788,91 +728,67 @@ mod tests {
         assert!(extended.is_some());
         let ExtendedChannels(mut tx, _rx) = extended.unwrap();
 
-        let send_msg_fut = async {
-            let result = tx.send_message((ExtendedMessage::MetadataReject { piece: 3 }, 1)).await;
-            assert!(result.is_ok());
+        task::spawn(async move {
+            let _ = runner.await;
+        });
 
-            let hs_data = HandshakeData {
-                extensions: HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
-                listen_port: Some(6881),
-                client_type: Some("µTorrent 1.2".to_owned()),
-                ..Default::default()
-            };
-            let result = tx.send_message((ExtendedMessage::Handshake(Box::new(hs_data)), 42)).await;
-            assert!(result.is_ok());
+        let result = tx.send_message((ExtendedMessage::MetadataReject { piece: 3 }, 1)).await;
+        assert!(result.is_ok());
+
+        let hs_data = HandshakeData {
+            extensions: HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
+            listen_port: Some(6881),
+            client_type: Some("µTorrent 1.2".to_owned()),
+            ..Default::default()
         };
-
-        let run_fut = async {
-            runner.sender.write_one_message().await.unwrap();
-            runner.sender.write_one_message().await.unwrap();
-            assert!(!runner.sender.sink.get_ref().get_ref().is_empty());
-
-            runner.sender.sink.rewind().await.unwrap();
-            let sent_message = PeerMessage::read_from(&mut runner.sender.sink).await.unwrap();
-            assert!(
-                matches!(
-                    sent_message,
-                    PeerMessage::Extended {
-                        id: 1,
-                        ref data
-                    } if data == &Vec::from("d8:msg_typei2e5:piecei3ee"),
-                ),
-                "{sent_message:?}"
-            );
-            let sent_message = PeerMessage::read_from(&mut runner.sender.sink).await.unwrap();
-            assert!(
-                matches!(
-                    sent_message,
-                    PeerMessage::Extended {
-                        id: 0,
-                        ref data
-                    } if data == &Vec::from(b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e"),
-                ),
-                "{sent_message:?}"
-            );
-        };
-
-        join!(send_msg_fut, run_fut);
+        let result = tx.send_message((ExtendedMessage::Handshake(Box::new(hs_data)), 42)).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_write_error() {
+        let socket = MockBuilder::new()
+            .write_error(io::Error::from(io::ErrorKind::OutOfMemory))
+            .build();
         let (mut download, upload, _, runner) = setup_channels(
-            PendingStream {},
-            ErrorStream {},
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
         );
 
-        let send_msg_fut = async {
+        let send_msg_fut = async move {
             let result = download.0.send_message(DownloaderMessage::Interested).await;
             assert!(matches!(result, Err(ChannelError::ConnectionClosed)));
         };
 
-        let run_fut = async {
-            let result = runner.run().await;
+        let run_fut = async move {
+            let result = runner.await;
             let error = result.unwrap_err();
-            assert_eq!(ErrorStream::ERROR_KIND, error.kind(), "{}", error);
+            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{}", error);
         };
 
         join!(send_msg_fut, run_fut);
         drop(upload);
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     #[tokio::test]
     async fn test_writing_downloader_messages_takes_priority_over_uploader_messages() {
+        let socket = MockBuilder::new()
+            .write(msgs![PeerMessage::Interested])
+            .write(msgs![PeerMessage::Piece {
+                index: 0,
+                begin: 0,
+                block: vec![0u8; 1024]
+            }])
+            .wait(sec!(0))
+            .build();
         let (mut download, mut upload, _, runner) = setup_channels(
-            PendingStream {},
-            FakeSocket::default(),
+            socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
             false,
         );
-
-        let runner = Rc::new(RefCell::new(runner));
-        let runner_copy = runner.clone();
 
         let send_uploader_msg_fut = async move {
             upload
@@ -892,41 +808,17 @@ mod tests {
             download.0.send_message(DownloaderMessage::Interested).await.unwrap();
         };
         let runner_fut = async move {
-            while runner_copy.borrow_mut().sender.write_one_message().await.is_ok() {}
+            let _ = runner.await;
         };
         let mut pool = LocalPool::new();
 
-        // given
-        pool.spawner().spawn_local(send_downloader_msg_fut).unwrap();
         pool.spawner().spawn_local(send_uploader_msg_fut).unwrap();
+        pool.spawner().spawn_local(send_downloader_msg_fut).unwrap();
         pool.run_until_stalled();
 
-        // when
         pool.spawner().spawn_local(runner_fut).unwrap();
         pool.run_until_stalled();
         drop(pool);
-
-        // then
-        let mut transmitted_data = runner.borrow().sender.sink.get_ref().clone();
-
-        transmitted_data.rewind().await.unwrap();
-
-        let first_msg = PeerMessage::read_from(&mut transmitted_data).await.unwrap();
-        assert!(matches!(first_msg, PeerMessage::Interested), "{:?}", first_msg);
-
-        let second_msg = PeerMessage::read_from(&mut transmitted_data).await.unwrap();
-        if let PeerMessage::Piece {
-            index,
-            begin,
-            block,
-        } = second_msg
-        {
-            assert_eq!(0, index);
-            assert_eq!(0, begin);
-            assert_eq!(vec![0u8; 1024], block);
-        } else {
-            panic!("{:?}", second_msg);
-        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -937,7 +829,6 @@ mod tests {
                 let (writer, mut reader) = mpsc::unbounded::<u8>();
 
                 let (_download, _upload, _, runner) = setup_channels(
-                    PendingStream {},
                     FakeSink(writer),
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
@@ -945,7 +836,7 @@ mod tests {
                 );
 
                 task::spawn_local(async move {
-                    let _ = runner.run().await;
+                    let _ = runner.await;
                 });
 
                 time::sleep(sec!(30)).await;
@@ -973,34 +864,30 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_receiver_times_out_after_2_min() {
-        task::LocalSet::new()
-            .run_until(async {
-                let (_download, _upload, _, runner) = setup_channels(
-                    PendingStream {},
-                    FakeSocket::default(),
-                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
-                    Default::default(),
-                    false,
-                );
+        let (sock1, _sock2) = io::duplex(0);
+        let (_download, _upload, _, runner) = setup_channels(
+            sock1,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+            false,
+        );
 
-                let (mut result_sender, mut result_receiver) = mpsc::channel::<io::Result<()>>(1);
+        let (mut result_sender, mut result_receiver) = mpsc::channel::<io::Result<()>>(1);
 
-                task::spawn_local(async move {
-                    let result = runner.run().await;
-                    result_sender.try_send(result).unwrap();
-                });
+        task::spawn(async move {
+            let result = runner.await;
+            result_sender.try_send(result).unwrap();
+        });
 
-                time::sleep(sec!(120)).await;
-                assert!(result_receiver.try_next().is_err());
+        time::sleep(sec!(120)).await;
+        assert!(result_receiver.try_next().is_err());
 
-                task::yield_now().await;
-                let error = result_receiver
-                    .try_next()
-                    .expect("Runner not finished")
-                    .expect("channel closed");
-                assert_eq!(io::ErrorKind::TimedOut, error.unwrap_err().kind());
-            })
-            .await;
+        task::yield_now().await;
+        let error = result_receiver
+            .try_next()
+            .expect("Runner not finished")
+            .expect("channel closed");
+        assert_eq!(io::ErrorKind::TimedOut, error.unwrap_err().kind());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1009,9 +896,9 @@ mod tests {
             .run_until(async {
                 const TIMEOUT: Duration = sec!(10);
 
+                let (sock1, _sock2) = io::duplex(0);
                 let (mut download, mut _upload, _, _runner) = setup_channels(
-                    PendingStream {},
-                    PendingStream {},
+                    sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
                     false,
@@ -1045,9 +932,9 @@ mod tests {
             .run_until(async {
                 const TIMEOUT: Duration = sec!(10);
 
+                let (sock1, _sock2) = io::duplex(0);
                 let (mut _download, mut upload, _, _runner) = setup_channels(
-                    PendingStream {},
-                    PendingStream {},
+                    sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
                     false,

@@ -22,7 +22,7 @@ trait Peer {
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
-        runner: pwp::ConnectionRunner,
+        runner: impl pwp::ConnectionRunner,
         storage: data::StorageClient,
         info: Rc<data::PieceInfo>,
     ) -> impl Future<Output = ()>;
@@ -37,12 +37,12 @@ impl Peer for Leech {
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
-        runner: pwp::ConnectionRunner,
+        runner: impl pwp::ConnectionRunner + 'static,
         storage: data::StorageClient,
         info: Rc<data::PieceInfo>,
     ) {
         task::spawn_local(async move {
-            let _ = runner.run().await;
+            let _ = runner.await;
         });
 
         task::spawn_local(async move {
@@ -162,12 +162,12 @@ impl Peer for Seeder {
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
-        runner: pwp::ConnectionRunner,
+        runner: impl pwp::ConnectionRunner,
         storage: data::StorageClient,
         info: Rc<data::PieceInfo>,
     ) {
         task::spawn_local(async move {
-            let _ = runner.run().await;
+            let _ = runner.await;
         });
 
         let piece_count = info.piece_count();

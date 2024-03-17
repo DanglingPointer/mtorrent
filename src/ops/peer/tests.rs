@@ -69,7 +69,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     let extended_chans = extended_chans.unwrap();
 
     runtime::Handle::current().spawn(async move {
-        let _ = runner.run().await;
+        let _ = runner.await;
     });
 
     let download_fut = async {
