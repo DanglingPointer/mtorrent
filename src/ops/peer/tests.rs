@@ -1,5 +1,5 @@
 use super::*;
-use crate::ops::MAX_BLOCK_SIZE;
+use crate::pwp::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{ip, magnet, startup};
 use crate::{ops::ctx, pwp, sec};

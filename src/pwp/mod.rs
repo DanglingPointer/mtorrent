@@ -12,3 +12,5 @@ pub use message::{
 };
 pub(crate) use peer_states::*;
 pub(crate) use requests::PendingRequests;
+
+pub(crate) const MAX_BLOCK_SIZE: usize = 16 * 1024;

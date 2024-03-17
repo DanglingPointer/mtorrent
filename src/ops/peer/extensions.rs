@@ -1,4 +1,4 @@
-use super::super::{ctx, MAX_BLOCK_SIZE};
+use super::super::ctx;
 use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, MAX_PENDING_REQUESTS};
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
@@ -147,8 +147,8 @@ pub async fn handle_incoming(
                         && inner.sent_metadata_pieces.get(piece).is_some_and(|sent| !sent)
                     {
                         log::debug!("Serving metadata request from {remote_ip}: (piece={piece})");
-                        let global_offset = piece * MAX_BLOCK_SIZE;
-                        let length = cmp::min(MAX_BLOCK_SIZE, metadata_len - global_offset);
+                        let global_offset = piece * pwp::MAX_BLOCK_SIZE;
+                        let length = cmp::min(pwp::MAX_BLOCK_SIZE, metadata_len - global_offset);
                         let data = inner.metadata_storage.read_block(global_offset, length).await?;
                         inner
                             .tx

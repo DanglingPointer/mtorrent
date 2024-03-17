@@ -1,5 +1,6 @@
-use crate::pwp::handshake::*;
-use crate::pwp::message::*;
+use super::handshake::*;
+use super::message::*;
+use super::MAX_BLOCK_SIZE;
 use crate::sec;
 use futures::channel::mpsc;
 use futures::Future;
@@ -9,7 +10,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, io};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -162,6 +163,7 @@ struct PeerInfo {
 }
 
 const MAX_INCOMING_QUEUE: usize = 20;
+const BUFFER_SIZE: usize = MAX_BLOCK_SIZE + 512; // data + some header
 
 fn setup_channels<S>(
     stream: S,
@@ -215,14 +217,14 @@ where
         };
 
     let receiver = IngressStream {
-        source: ingress,
+        source: BufReader::with_capacity(BUFFER_SIZE, ingress),
         remote_ip,
         ul_msg_sink: remote_uploader_msg_in,
         dl_msg_sink: remote_downloader_msg_in,
         ext_msg_sink: remote_extended_msg_in,
     };
     let sender = EgressStream {
-        sink: BufWriter::new(egress),
+        sink: BufWriter::with_capacity(BUFFER_SIZE, egress),
         remote_ip,
         dl_msg_source: local_downloader_msg_out,
         ul_msg_source: local_uploader_msg_out,
@@ -256,7 +258,7 @@ where
 }
 
 struct IngressStream<S: AsyncReadExt + Unpin> {
-    source: S,
+    source: BufReader<S>,
     remote_ip: SocketAddr,
     ul_msg_sink: mpsc::Sender<UploaderMessage>,
     dl_msg_sink: mpsc::Sender<DownloaderMessage>,
@@ -279,7 +281,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
             Ok(())
         }
 
-        timeout(Self::RECV_TIMEOUT, self.source.read(&mut [0u8; 0])).await??;
+        timeout(Self::RECV_TIMEOUT, self.source.fill_buf()).await??;
         let received = PeerMessage::read_from(&mut self.source).await?;
 
         let received = match UploaderMessage::try_from(received) {

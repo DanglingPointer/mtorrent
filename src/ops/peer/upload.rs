@@ -1,5 +1,5 @@
+use super::super::ctx;
 use super::MAX_PENDING_REQUESTS;
-use crate::ops::{ctx, MAX_BLOCK_SIZE};
 use crate::utils::fifo;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
@@ -245,7 +245,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         let remote_ip = *inner.tx.remote_ip();
         while let Some(request) = request_src.next().await {
             let _sw = debug_stopwatch!("Serving request {} to {}", request, remote_ip);
-            if request.block_length > MAX_BLOCK_SIZE {
+            if request.block_length > pwp::MAX_BLOCK_SIZE {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("received too big request: {request}"),

@@ -1,4 +1,4 @@
-use super::{ctx, MAX_BLOCK_SIZE};
+use super::ctx;
 use crate::utils::meta;
 use crate::{pwp, sec};
 use core::fmt;
@@ -44,7 +44,7 @@ fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
     // libtorrent supports max 250 queued requests, hence:
     // 250 * 16kB == piece_len * piece_count
     let max_request_count =
-        cmp::min(50, cmp::max(1, MAX_BLOCK_SIZE * 250 / ctx.pieces.piece_len(0)));
+        cmp::min(50, cmp::max(1, pwp::MAX_BLOCK_SIZE * 250 / ctx.pieces.piece_len(0)));
     let available_pieces: HashSet<usize> =
         if let Some(it) = ctx.piece_tracker.get_peer_pieces(peer_ip) {
             it.collect()

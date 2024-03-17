@@ -1,4 +1,4 @@
-use super::super::{ctx, MAX_BLOCK_SIZE};
+use super::super::ctx;
 use super::CLIENT_NAME;
 use crate::{pwp, sec};
 use std::io;
@@ -68,7 +68,7 @@ fn get_metadata_ext_id(hs: &pwp::HandshakeData) -> io::Result<u8> {
 fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) {
     if ctx.metainfo_pieces.is_empty() {
         ctx.metainfo.resize(metadata_size, 0);
-        let piece_count = (metadata_size + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
+        let piece_count = (metadata_size + pwp::MAX_BLOCK_SIZE - 1) / pwp::MAX_BLOCK_SIZE;
         ctx.metainfo_pieces = pwp::Bitfield::repeat(false, piece_count);
     } else if ctx.metainfo.len() != metadata_size {
         log::error!(
@@ -267,7 +267,7 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                         init_metadata(ctx, total_size);
                         if let Some(mut downloaded) = ctx.metainfo_pieces.get_mut(received_piece) {
                             if downloaded == false {
-                                let offset = received_piece * MAX_BLOCK_SIZE;
+                                let offset = received_piece * pwp::MAX_BLOCK_SIZE;
                                 if let Some(chunk) =
                                     ctx.metainfo.get_mut(offset..offset + data.len())
                                 {

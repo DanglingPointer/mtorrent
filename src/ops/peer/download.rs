@@ -1,4 +1,4 @@
-use crate::ops::{ctx, MAX_BLOCK_SIZE};
+use crate::ops::ctx;
 use crate::utils::fifo;
 use crate::{data, debug_stopwatch, pwp, sec};
 use futures::prelude::*;
@@ -170,11 +170,11 @@ pub async fn get_pieces(
         piece_len: usize,
     ) -> impl Iterator<Item = pwp::BlockInfo> {
         (0..piece_len)
-            .step_by(MAX_BLOCK_SIZE)
+            .step_by(pwp::MAX_BLOCK_SIZE)
             .map(move |in_piece_offset| pwp::BlockInfo {
                 piece_index,
                 in_piece_offset,
-                block_length: cmp::min(MAX_BLOCK_SIZE, piece_len - in_piece_offset),
+                block_length: cmp::min(pwp::MAX_BLOCK_SIZE, piece_len - in_piece_offset),
             })
     }
 
