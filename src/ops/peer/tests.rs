@@ -35,18 +35,30 @@ async fn connecting_peer(
     local_id[..5].copy_from_slice("leech".as_bytes());
 
     let listener_addr_stub = ip::any_socketaddr_from_hash(&0);
-    let handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_addr_stub).unwrap();
+    let mut handle =
+        ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_addr_stub).unwrap();
+    define_with_ctx!(handle);
 
-    let (download, upload, _) = from_outgoing_connection(
+    let (info_hash, local_peer_id) =
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
+
+    let (download_chans, upload_chans, _extended_chans) = channels_for_outgoing_connection(
+        &local_peer_id,
+        &info_hash,
+        false, //extension_protocol_enabled
         peer_ip,
-        storage.clone(),
-        storage, // hack
-        handle.clone(),
         runtime::Handle::current(),
-        false, // extension protocol
     )
     .await
     .unwrap();
+
+    let pwp::DownloadChannels(tx, rx) = download_chans;
+    let download_fut = download::new_peer(handle.clone(), rx, tx, storage.clone());
+
+    let pwp::UploadChannels(tx, rx) = upload_chans;
+    let upload_fut = upload::new_peer(handle.clone(), rx, tx, storage);
+
+    let (download, upload) = try_join!(download_fut, upload_fut).unwrap();
     (download, upload, handle, peer_ip)
 }
 
@@ -162,7 +174,8 @@ async fn listening_seeder(
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
     let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip).unwrap();
-    handle.with_ctx(|ctx| {
+    define_with_ctx!(handle);
+    with_ctx!(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
             ctx.piece_tracker.forget_piece(piece_index);
@@ -171,17 +184,38 @@ async fn listening_seeder(
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    let (download, upload, extensions) = from_incoming_connection(
-        stream,
+
+    let (info_hash, local_peer_id) =
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
+
+    let (download_chans, upload_chans, extended_chans) = channels_for_incoming_connection(
+        &local_peer_id,
+        &info_hash,
+        true, // extension_protocol_enabled
         peer_ip,
-        content_storage,
-        meta_storage,
-        handle.clone(),
+        stream,
         runtime::Handle::current(),
-        true, // extension protocol
     )
     .await
     .unwrap();
+
+    let pwp::DownloadChannels(tx, rx) = download_chans;
+    let download_fut = download::new_peer(handle.clone(), rx, tx, content_storage.clone());
+
+    let pwp::UploadChannels(tx, rx) = upload_chans;
+    let upload_fut = upload::new_peer(handle.clone(), rx, tx, content_storage);
+
+    let handle_copy = handle.clone();
+    let extensions_fut = async move {
+        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
+            Ok(Some(extensions::new_peer(handle_copy, rx, tx, meta_storage).await?))
+        } else {
+            Ok(None)
+        }
+    };
+
+    let (download, upload, extensions) =
+        try_join!(download_fut, upload_fut, extensions_fut).unwrap();
     (download, upload, extensions, handle, peer_ip)
 }
 

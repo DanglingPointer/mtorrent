@@ -27,22 +27,18 @@ const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_V
 
 const MAX_PENDING_REQUESTS: usize = 1024 * 3;
 
-async fn channels_from_outgoing_with_retries(
+async fn channels_for_outgoing_connection(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_ip: SocketAddr,
-) -> io::Result<(
-    pwp::DownloadChannels,
-    pwp::UploadChannels,
-    Option<pwp::ExtendedChannels>,
-    impl pwp::ConnectionRunner,
-)> {
+    pwp_worker_handle: runtime::Handle,
+) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
     const MAX_RETRY_COUNT: usize = 3;
     let mut attempts_left = MAX_RETRY_COUNT;
     let mut reconnect_interval = sec!(2);
-    loop {
+    let (download_chans, upload_chans, extended_chans, runner) = loop {
         match pwp::channels_from_outgoing(
             local_peer_id,
             info_hash,
@@ -52,7 +48,7 @@ async fn channels_from_outgoing_with_retries(
         )
         .await
         {
-            Ok(channels) => return Ok(channels),
+            Ok(channels) => break channels,
             Err(e) => match e.kind() {
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
                     if attempts_left > 0 =>
@@ -64,34 +60,7 @@ async fn channels_from_outgoing_with_retries(
                 _ => return Err(e),
             },
         }
-    }
-}
-
-// ------------------------------------------------------------------------------------------------
-
-async fn from_outgoing_connection(
-    remote_ip: SocketAddr,
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    mut ctx_handle: MainHandle,
-    pwp_worker_handle: runtime::Handle,
-    extension_protocol_enabled: bool,
-) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
-    define_with_ctx!(ctx_handle);
-    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
-
-    let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
-
-    let (download_chans, upload_chans, extended_chans, runner) =
-        channels_from_outgoing_with_retries(
-            &local_peer_id,
-            &info_hash,
-            extension_protocol_enabled,
-            remote_ip,
-        )
-        .await?;
-    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
+    };
     log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
@@ -100,43 +69,20 @@ async fn from_outgoing_connection(
         }
     });
 
-    let pwp::DownloadChannels(tx, rx) = download_chans;
-    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
-
-    let pwp::UploadChannels(tx, rx) = upload_chans;
-    let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
-
-    let extensions_fut = async move {
-        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
-            Ok(Some(extensions::new_peer(ctx_handle, rx, tx, metainfo_storage).await?))
-        } else {
-            Ok(None)
-        }
-    };
-
-    let (seeder, leech, ext) = try_join!(download_fut, upload_fut, extensions_fut)?;
-    Ok((seeder, leech, ext))
+    Ok((download_chans, upload_chans, extended_chans))
 }
 
-async fn from_incoming_connection(
-    stream: TcpStream,
-    remote_ip: SocketAddr,
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    mut ctx_handle: MainHandle,
-    pwp_worker_handle: runtime::Handle,
+async fn channels_for_incoming_connection(
+    local_peer_id: &[u8; 20],
+    info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
-) -> io::Result<(download::IdlePeer, upload::IdlePeer, Option<extensions::Peer>)> {
-    define_with_ctx!(ctx_handle);
-
-    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
-
-    let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
-
+    remote_ip: SocketAddr,
+    stream: TcpStream,
+    pwp_worker_handle: runtime::Handle,
+) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
-        &local_peer_id,
-        Some(&info_hash),
+        local_peer_id,
+        Some(info_hash),
         extension_protocol_enabled,
         remote_ip,
         stream,
@@ -150,22 +96,7 @@ async fn from_incoming_connection(
         }
     });
 
-    let pwp::DownloadChannels(tx, rx) = download_chans;
-    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
-
-    let pwp::UploadChannels(tx, rx) = upload_chans;
-    let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
-
-    let extensions_fut = async move {
-        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
-            Ok(Some(extensions::new_peer(ctx_handle, rx, tx, metainfo_storage).await?))
-        } else {
-            Ok(None)
-        }
-    };
-
-    let (seeder, leech, ext) = try_join!(download_fut, upload_fut, extensions_fut)?;
-    Ok((seeder, leech, ext))
+    Ok((download_chans, upload_chans, extended_chans))
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -284,29 +215,79 @@ macro_rules! maybe_run_extensions {
 
 // ------------------------------------------------------------------------------------------------
 
+async fn run_peer_connection(
+    download_chans: pwp::DownloadChannels,
+    upload_chans: pwp::UploadChannels,
+    extended_chans: Option<pwp::ExtendedChannels>,
+    content_storage: data::StorageClient,
+    metainfo_storage: data::StorageClient,
+    ctx_handle: MainHandle,
+    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+) -> io::Result<()> {
+    let remote_ip = *download_chans.0.remote_ip();
+
+    let pwp::DownloadChannels(tx, rx) = download_chans;
+    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
+
+    let pwp::UploadChannels(tx, rx) = upload_chans;
+    let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
+
+    let handle_copy = ctx_handle.clone();
+    let extensions_fut = async move {
+        if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
+            Ok(Some(extensions::new_peer(handle_copy, rx, tx, metainfo_storage).await?))
+        } else {
+            Ok(None)
+        }
+    };
+
+    let (download, upload, extensions) = try_join!(download_fut, upload_fut, extensions_fut)?;
+    try_join!(
+        run_download(download.into(), remote_ip, ctx_handle.clone()),
+        run_upload(upload.into(), remote_ip, ctx_handle.clone()),
+        maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_callback),
+    )?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------------------------------------
+
 pub async fn outgoing_pwp_connection(
     remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    ctx_handle: MainHandle,
+    mut ctx_handle: MainHandle,
     pwp_worker_handle: runtime::Handle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
+    define_with_ctx!(ctx_handle);
+
     loop {
-        let (download, upload, extensions) = from_outgoing_connection(
+        with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
+
+        let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
+            &local_peer_id,
+            &info_hash,
+            EXTENSION_PROTOCOL_ENABLED,
             remote_ip,
+            pwp_worker_handle.clone(),
+        )
+        .await?;
+        with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
+
+        let run_result = run_peer_connection(
+            download_chans,
+            upload_chans,
+            extended_chans,
             content_storage.clone(),
             metainfo_storage.clone(),
             ctx_handle.clone(),
-            pwp_worker_handle.clone(),
-            EXTENSION_PROTOCOL_ENABLED,
+            &mut peer_discovered_callback,
         )
-        .await?;
-        let run_result = try_join!(
-            run_download(download.into(), remote_ip, ctx_handle.clone()),
-            run_upload(upload.into(), remote_ip, ctx_handle.clone()),
-            maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_callback),
-        );
+        .await;
+
         match run_result {
             Err(e) if e.kind() != io::ErrorKind::Other => {
                 // ErrorKind::Other means we disconnected the peer intentionally
@@ -324,25 +305,37 @@ pub async fn incoming_pwp_connection(
     remote_ip: SocketAddr,
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
-    ctx_handle: MainHandle,
+    mut ctx_handle: MainHandle,
     pwp_worker_handle: runtime::Handle,
     mut peer_discovered_callback: impl FnMut(&SocketAddr),
 ) -> io::Result<()> {
-    let (download, upload, extensions) = from_incoming_connection(
-        stream,
+    define_with_ctx!(ctx_handle);
+
+    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
+    let (info_hash, local_peer_id) =
+        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
+
+    let (download_chans, upload_chans, extended_chans) = channels_for_incoming_connection(
+        &local_peer_id,
+        &info_hash,
+        EXTENSION_PROTOCOL_ENABLED,
         remote_ip,
+        stream,
+        pwp_worker_handle.clone(),
+    )
+    .await?;
+
+    let run_result = run_peer_connection(
+        download_chans,
+        upload_chans,
+        extended_chans,
         content_storage.clone(),
         metainfo_storage.clone(),
         ctx_handle.clone(),
-        pwp_worker_handle.clone(),
-        EXTENSION_PROTOCOL_ENABLED,
+        &mut peer_discovered_callback,
     )
-    .await?;
-    let run_result = try_join!(
-        run_download(download.into(), remote_ip, ctx_handle.clone()),
-        run_upload(upload.into(), remote_ip, ctx_handle.clone()),
-        maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_callback),
-    );
+    .await;
+
     match run_result {
         Err(e) if e.kind() != io::ErrorKind::Other => {
             // ErrorKind::Other means we disconnected the peer intentionally
@@ -368,18 +361,11 @@ async fn run_metadata_download(
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
-    runner: impl pwp::ConnectionRunner,
     ctx_handle: PreliminaryHandle,
-    pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
     let extended_chans = extended_chans.ok_or_else(|| {
         io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
     })?;
-    pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.await {
-            log::debug!("Peer runner exited: {}", e);
-        }
-    });
 
     async fn handle_download(download_chans: pwp::DownloadChannels) -> io::Result<()> {
         let pwp::DownloadChannels(tx, mut rx) = download_chans;
@@ -431,32 +417,22 @@ pub async fn outgoing_preliminary_connection(
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
 
+    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
-    let (download_chans, upload_chans, extended_chans, runner) =
-        channels_from_outgoing_with_retries(
-            &local_peer_id,
-            &info_hash,
-            true, // extension_protocol_enabled
-            remote_ip,
-        )
-        .await?;
-
-    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
-    log::info!("Successful outgoing connection to {remote_ip}");
-
-    run_metadata_download(
-        download_chans,
-        upload_chans,
-        extended_chans,
-        runner,
-        ctx_handle,
+    let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
+        &local_peer_id,
+        &info_hash,
+        true, // extension_protocol_enabled
+        remote_ip,
         pwp_worker_handle,
     )
-    .await
+    .await?;
+    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
+
+    run_metadata_download(download_chans, upload_chans, extended_chans, ctx_handle).await
 }
 
 pub async fn incoming_preliminary_connection(
@@ -468,27 +444,18 @@ pub async fn incoming_preliminary_connection(
     define_with_ctx!(ctx_handle);
 
     with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
-
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
-    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
+    let (download_chans, upload_chans, extended_chans) = channels_for_incoming_connection(
         &local_peer_id,
-        Some(&info_hash),
+        &info_hash,
         true, // extension_protocol_enabled
         remote_ip,
         stream,
-    )
-    .await?;
-    log::info!("Successful incoming connection from {remote_ip}");
-
-    run_metadata_download(
-        download_chans,
-        upload_chans,
-        extended_chans,
-        runner,
-        ctx_handle,
         pwp_worker_handle,
     )
-    .await
+    .await?;
+
+    run_metadata_download(download_chans, upload_chans, extended_chans, ctx_handle).await
 }
