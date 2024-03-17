@@ -210,7 +210,7 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: imp
     });
 
     #[cfg(debug_assertions)]
-    const INTERVAL: Duration = sec!(5);
+    const INTERVAL: Duration = sec!(3);
 
     #[cfg(not(debug_assertions))]
     const INTERVAL: Duration = sec!(10);
