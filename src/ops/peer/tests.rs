@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
+use tokio::task;
 use tokio::{join, net::TcpListener, runtime, select, time};
 
 const PIECE_LENGTH: usize = 2_097_152;
@@ -484,13 +485,18 @@ async fn test_send_metainfo_file_to_peer() {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43212));
     let metainfo = "tests/assets/big_metainfo_file.torrent";
 
-    let sending_peer = time::timeout(sec!(30), async {
+    let tasks = task::LocalSet::new();
+    tasks.spawn_local(async move {
         let _ = run_listening_seeder(addr, metainfo, "test_input3").await;
     });
-    let requesting_peer = time::timeout(sec!(30), async {
-        connecting_peer_downloading_metadata(addr, metainfo).await;
-    });
-    try_join!(sending_peer, requesting_peer).unwrap();
+    tasks
+        .run_until(time::timeout(sec!(30), async move {
+            task::yield_now().await;
+            connecting_peer_downloading_metadata(addr, metainfo).await;
+        }))
+        .await
+        .unwrap();
+
     std::fs::remove_dir_all("test_input3").unwrap();
 }
 
@@ -509,22 +515,29 @@ async fn test_pass_metadata_from_peer_to_peer() {
     let magnet_link: magnet::MagnetLink = magnet.parse().unwrap();
     let metainfo_content = fs::read(metainfo_filepath).unwrap();
 
-    let sending_peer = time::timeout(sec!(30), async move {
+    let tasks = task::LocalSet::new();
+    tasks.spawn_local(async move {
         let _ = run_listening_seeder(addr, metainfo_filepath, "test_input4").await;
     });
-    let receiving_peer = time::timeout(sec!(30), async move {
-        let listener_addr_stub = ip::any_socketaddr_from_hash(&0);
-        let mut ctx_handle =
-            ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new(), listener_addr_stub);
-        let _ =
-            outgoing_preliminary_connection(addr, ctx_handle.clone(), runtime::Handle::current())
-                .await;
-        ctx_handle.with_ctx(|ctx| {
-            assert!(!ctx.metainfo_pieces.is_empty());
-            assert!(ctx.metainfo_pieces.all());
-            assert_eq!(metainfo_content, ctx.metainfo);
-        });
-    });
-    try_join!(sending_peer, receiving_peer).unwrap();
+    tasks
+        .run_until(time::timeout(sec!(30), async move {
+            let listener_addr_stub = ip::any_socketaddr_from_hash(&0);
+            let mut ctx_handle =
+                ctx::PreliminaryCtx::new(magnet_link, PeerId::generate_new(), listener_addr_stub);
+            let _ = outgoing_preliminary_connection(
+                addr,
+                ctx_handle.clone(),
+                runtime::Handle::current(),
+            )
+            .await;
+            ctx_handle.with_ctx(|ctx| {
+                assert!(!ctx.metainfo_pieces.is_empty());
+                assert!(ctx.metainfo_pieces.all());
+                assert_eq!(metainfo_content, ctx.metainfo);
+            });
+        }))
+        .await
+        .unwrap();
+
     std::fs::remove_dir_all("test_input4").unwrap();
 }
