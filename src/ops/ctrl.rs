@@ -204,18 +204,19 @@ pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool 
 }
 
 const MAX_CONNECTED_PEERS_COUNT: usize = 50;
+const MAX_CONNECTIONS_IN_PROGRESS: usize = 100;
 
 #[derive(Debug)]
 pub enum GrantError {
     ConnectionsLimitReached,
-    AlreadyConnected(SocketAddr),
+    DuplicateConnection(SocketAddr),
 }
 
 impl fmt::Display for GrantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GrantError::ConnectionsLimitReached => write!(f, "connections limit reached"),
-            GrantError::AlreadyConnected(addr) => write!(f, "already connected to {addr}"),
+            GrantError::DuplicateConnection(addr) => write!(f, "already connected to {addr}"),
         }
     }
 }
@@ -232,13 +233,13 @@ pub fn grant_preliminary_connection_permission(
     ctx: &ctx::PreliminaryCtx,
     candidate: &SocketAddr,
 ) -> Result<(), GrantError> {
-    if ctx.connected_peers.len() >= MAX_CONNECTED_PEERS_COUNT {
+    // check duplicate before connections limit
+    if ctx.connected_peers.get(candidate).is_some() {
+        Err(GrantError::DuplicateConnection(*candidate))
+    } else if ctx.connected_peers.len() >= MAX_CONNECTED_PEERS_COUNT {
         Err(GrantError::ConnectionsLimitReached)
     } else {
-        match ctx.connected_peers.get(candidate) {
-            Some(_) => Err(GrantError::AlreadyConnected(*candidate)),
-            None => Ok(()),
-        }
+        Ok(())
     }
 }
 
@@ -246,12 +247,14 @@ pub fn grant_main_connection_permission(
     ctx: &ctx::MainCtx,
     candidate: &SocketAddr,
 ) -> Result<(), GrantError> {
-    if ctx.peer_states.iter().count() >= MAX_CONNECTED_PEERS_COUNT {
-        Err(GrantError::ConnectionsLimitReached)
-    } else {
-        match ctx.peer_states.get(candidate) {
-            Some(_) => Err(GrantError::AlreadyConnected(*candidate)),
-            None => Ok(()),
-        }
+    // check duplicate before connections limit
+    if ctx.peer_states.get(candidate).is_some() || ctx.connecting_to.contains(candidate) {
+        return Err(GrantError::DuplicateConnection(*candidate));
     }
+    if ctx.peer_states.iter().count() >= MAX_CONNECTED_PEERS_COUNT
+        || ctx.connecting_to.len() >= MAX_CONNECTIONS_IN_PROGRESS
+    {
+        return Err(GrantError::ConnectionsLimitReached);
+    }
+    Ok(())
 }
