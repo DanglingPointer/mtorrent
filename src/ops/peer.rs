@@ -12,7 +12,7 @@ use crate::{data, pwp, sec};
 use std::io;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
-use tokio::time::{sleep, Instant};
+use tokio::time::{self, Instant};
 use tokio::{runtime, try_join};
 
 type MainHandle = ctx::Handle<ctx::MainCtx>;
@@ -27,6 +27,15 @@ const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_V
 
 const MAX_PENDING_REQUESTS: usize = 1024 * 3;
 
+macro_rules! marshal_stream {
+    ($stream:expr, $rt_handle:expr) => {{
+        // note: EnterGuard must NEVER live across a suspension point
+        let _g = $rt_handle.enter();
+        let std_stream = $stream.into_std()?;
+        TcpStream::from_std(std_stream)?
+    }};
+}
+
 async fn channels_for_outgoing_connection(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
@@ -38,22 +47,14 @@ async fn channels_for_outgoing_connection(
     const MAX_RETRY_COUNT: usize = 3;
     let mut attempts_left = MAX_RETRY_COUNT;
     let mut reconnect_interval = sec!(2);
-    let (download_chans, upload_chans, extended_chans, runner) = loop {
-        match pwp::channels_from_outgoing(
-            local_peer_id,
-            info_hash,
-            extension_protocol_enabled,
-            remote_ip,
-            None,
-        )
-        .await
-        {
-            Ok(channels) => break channels,
+    let stream = loop {
+        match time::timeout(sec!(30), TcpStream::connect(remote_ip)).await? {
+            Ok(stream) => break stream,
             Err(e) => match e.kind() {
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
                     if attempts_left > 0 =>
                 {
-                    sleep(reconnect_interval).await;
+                    time::sleep(reconnect_interval).await;
                     attempts_left -= 1;
                     reconnect_interval *= 2;
                 }
@@ -61,6 +62,17 @@ async fn channels_for_outgoing_connection(
             },
         }
     };
+    // re-register socket so that it will be polled on PWP thread
+    let stream = marshal_stream!(stream, pwp_worker_handle);
+    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_outgoing(
+        local_peer_id,
+        info_hash,
+        extension_protocol_enabled,
+        remote_ip,
+        stream,
+        None,
+    )
+    .await?;
     log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_worker_handle.spawn(async move {
@@ -80,6 +92,8 @@ async fn channels_for_incoming_connection(
     stream: TcpStream,
     pwp_worker_handle: runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
+    // re-register socket so that it will be polled on PWP thread
+    let stream = marshal_stream!(stream, pwp_worker_handle);
     let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
         local_peer_id,
         Some(info_hash),

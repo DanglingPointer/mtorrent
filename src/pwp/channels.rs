@@ -11,7 +11,6 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
@@ -110,13 +109,15 @@ where
 
 const HANDSHAKE_TIMEOUT: Duration = sec!(30);
 
-pub async fn channels_from_incoming(
+pub async fn channels_from_incoming<S>(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
-    remote_ip: SocketAddr,
-    socket: TcpStream,
+    remote_addr: SocketAddr,
+    socket: S,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
@@ -125,34 +126,34 @@ pub async fn channels_from_incoming(
     };
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
-        do_handshake_incoming(&remote_ip, socket, &local_handshake, info_hash.is_none()),
+        do_handshake_incoming(&remote_addr, socket, &local_handshake, info_hash.is_none()),
     )
     .await??;
-    Ok(setup_channels(socket, remote_ip, remote_handshake, extension_protocol_enabled))
+    Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
 }
 
-pub async fn channels_from_outgoing(
+pub async fn channels_from_outgoing<S>(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
+    socket: S,
     remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
         reserved: reserved_bits(extension_protocol_enabled),
     };
-    let socket = TcpStream::connect(remote_addr).await?;
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
         do_handshake_outgoing(&remote_addr, socket, &local_handshake, remote_peer_id),
     )
     .await??;
-
-    let remote_ip = socket.peer_addr()?;
-    Ok(setup_channels(socket, remote_ip, remote_handshake, extension_protocol_enabled))
+    Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
 }
 
 #[cfg(test)]

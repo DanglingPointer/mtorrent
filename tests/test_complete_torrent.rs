@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{cmp, process};
 use std::{fs, io, iter};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::{task, time};
 
@@ -294,11 +294,9 @@ async fn connecting_peer<P: Peer>(
 ) {
     println!("Peer {} connecting to {}...", index, remote_ip);
     let start_time = time::Instant::now();
-    let (download_chans, upload_chans, _, runner) = loop {
-        let connect_result =
-            pwp::channels_from_outgoing(&[index + b'0'; 20], &info_hash, false, remote_ip, None)
-                .await;
-        if let Ok(result) = connect_result {
+    let stream = loop {
+        let connect_result = time::timeout(sec!(10), TcpStream::connect(remote_ip)).await;
+        if let Ok(Ok(result)) = connect_result {
             break result;
         }
         if start_time.elapsed() > sec!(10) {
@@ -306,6 +304,16 @@ async fn connecting_peer<P: Peer>(
         }
         time::sleep(sec!(1)).await;
     };
+    let (download_chans, upload_chans, _, runner) = pwp::channels_from_outgoing(
+        &[index + b'0'; 20],
+        &info_hash,
+        false,
+        remote_ip,
+        stream,
+        None,
+    )
+    .await
+    .expect("connecting peer failed to create channels");
     println!("Peer {} connected to {}", index, remote_ip);
     P::run(index, download_chans, upload_chans, runner, storage, info).await;
 }
