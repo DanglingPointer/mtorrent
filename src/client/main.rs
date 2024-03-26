@@ -1,53 +1,12 @@
+use crate::ops;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{ip, magnet, startup, upnp};
-use crate::{data, ops};
+use crate::utils::{fifo, ip, magnet, startup, upnp};
+use futures::StreamExt;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use tokio::net::TcpStream;
 use tokio::{runtime, task};
-
-fn peer_discovered_callback_factory(
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    ctx_handle: ops::Handle<ops::MainCtx>,
-    pwp_worker_handle: runtime::Handle,
-) -> impl FnMut(&SocketAddr) + Clone {
-    let captures = (content_storage, metainfo_storage, ctx_handle, pwp_worker_handle);
-    move |remote_ip| {
-        let captures_clone = captures.clone();
-        let remote_ip = *remote_ip;
-        task::spawn_local(async move {
-            let (content_storage, metainfo_storage, ctx_handle, pwp_worker_handle) = captures_clone;
-            let cb = peer_discovered_callback_factory(
-                content_storage.clone(),
-                metainfo_storage.clone(),
-                ctx_handle.clone(),
-                pwp_worker_handle.clone(),
-            );
-            match ops::outgoing_pwp_connection(
-                remote_ip,
-                content_storage,
-                metainfo_storage,
-                ctx_handle,
-                pwp_worker_handle,
-                cb,
-            )
-            .await
-            {
-                Ok(_) => (),
-                Err(e) => {
-                    let lvl = if e.kind() == io::ErrorKind::Other {
-                        log::Level::Error
-                    } else {
-                        log::Level::Debug
-                    };
-                    log::log!(lvl, "Outgoing peer connection to {remote_ip} failed: {e}")
-                }
-            }
-        });
-    }
-}
 
 pub async fn single_torrent(
     local_peer_id: PeerId,
@@ -119,6 +78,20 @@ pub async fn single_torrent(
     Ok(())
 }
 
+const MAX_PRELIMINARY_CONNECTIONS: usize = 10;
+const MAX_PEER_CONNECTIONS: usize = 50;
+
+macro_rules! log {
+    ($e:expr, $($arg:tt)+) => {{
+        let lvl = if $e.kind() == io::ErrorKind::Other {
+            log::Level::Error
+        } else {
+            log::Level::Debug
+        };
+        log::log!(lvl, $($arg)+);
+    }}
+}
+
 async fn preliminary_stage(
     local_peer_id: PeerId,
     listener_addr: SocketAddr,
@@ -142,18 +115,41 @@ async fn preliminary_stage(
 
     let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip);
 
-    let captures = (pwp_runtime.clone(), ctx.clone());
-    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        let captures_clone = captures.clone();
-        task::spawn_local(async move {
-            let (pwp_runtime, ctx) = captures_clone;
-            match ops::incoming_preliminary_connection(stream, peer_ip, ctx, pwp_runtime).await {
-                Ok(_) => (),
-                Err(e) => log::error!("Incoming peer connection from {peer_ip} failed: {e}"),
+    let (peer_discovered_sink, mut peer_discovered_src) = fifo::channel::<SocketAddr>();
+    let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
+        MAX_PRELIMINARY_CONNECTIONS,
+        ops::PreliminaryConnectionData {
+            ctx_handle: ctx.clone(),
+            pwp_worker_handle: pwp_runtime,
+        },
+    );
+    local_task.spawn_local(async move {
+        while let Some(peer_addr) = peer_discovered_src.next().await {
+            if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
+                task::spawn_local(async move {
+                    ops::outgoing_preliminary_connection(peer_addr, permit).await.unwrap_or_else(
+                        |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
+                    );
+                });
+            } else {
+                log::debug!("Outgoing connection to {peer_addr} denied");
             }
-        });
-    };
+        }
+    });
 
+    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
+        if let Some(permit) = incoming_ctrl.issue_permit() {
+            task::spawn_local(async move {
+                ops::incoming_preliminary_connection(stream, peer_ip, permit)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log!(e, "Incoming peer connection from {peer_ip} failed: {e}")
+                    });
+            });
+        } else {
+            log::debug!("Incoming connection from {peer_ip} denied");
+        }
+    };
     local_task.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
@@ -161,25 +157,10 @@ async fn preliminary_stage(
         }
     });
 
-    let announce_response_pwp_runtime = pwp_runtime.clone();
-    let announce_response_ctx = ctx.clone();
-    let on_announce_response = move |response: ops::TrackerResponse| {
-        for peer_ip in response.peers {
-            let pwp_runtime = announce_response_pwp_runtime.clone();
-            let ctx = announce_response_ctx.clone();
-            task::spawn_local(async move {
-                match ops::outgoing_preliminary_connection(peer_ip, ctx, pwp_runtime).await {
-                    Ok(_) => (),
-                    Err(e) => log::error!("Outgoing peer connection to {peer_ip} failed: {e}"),
-                }
-            });
-        }
-    };
-
     let tracker_ctx = ctx.clone();
     let tracker_config_dir = PathBuf::from(config_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::make_preliminary_announces(tracker_ctx, tracker_config_dir, on_announce_response)
+        ops::make_preliminary_announces(tracker_ctx, tracker_config_dir, peer_discovered_sink)
             .await;
     });
 
@@ -222,44 +203,44 @@ async fn main_stage(
 
     let local_task = task::LocalSet::new();
 
-    let ctx = ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip)?;
+    let ctx: ops::Handle<_> = ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip)?;
 
-    let captures =
-        (content_storage.clone(), metainfo_storage.clone(), pwp_runtime.clone(), ctx.clone());
-    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        let captures_clone = captures.clone();
-        task::spawn_local(async move {
-            let (content_storage, metainfo_storage, pwp_runtime, ctx) = captures_clone;
-            let cb = peer_discovered_callback_factory(
-                content_storage.clone(),
-                metainfo_storage.clone(),
-                ctx.clone(),
-                pwp_runtime.clone(),
-            );
-            match ops::incoming_pwp_connection(
-                stream,
-                peer_ip,
-                content_storage,
-                metainfo_storage,
-                ctx,
-                pwp_runtime,
-                cb,
-            )
-            .await
-            {
-                Ok(_) => (),
-                Err(e) => {
-                    let lvl = if e.kind() == io::ErrorKind::Other {
-                        log::Level::Error
-                    } else {
-                        log::Level::Debug
-                    };
-                    log::log!(lvl, "Incoming peer connection from {peer_ip} failed: {e}")
-                }
+    let (peer_discovered_sink, mut peer_discovered_src) = fifo::channel::<SocketAddr>();
+    let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
+        MAX_PEER_CONNECTIONS,
+        ops::MainConnectionData {
+            content_storage,
+            metainfo_storage,
+            ctx_handle: ctx.clone(),
+            pwp_worker_handle: pwp_runtime,
+            peer_discovered_channel: peer_discovered_sink.clone(),
+        },
+    );
+    local_task.spawn_local(async move {
+        while let Some(peer_addr) = peer_discovered_src.next().await {
+            if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
+                task::spawn_local(async move {
+                    ops::outgoing_pwp_connection(peer_addr, permit).await.unwrap_or_else(|e| {
+                        log!(e, "Outgoing peer connection to {peer_addr} failed: {e}")
+                    });
+                });
+            } else {
+                log::debug!("Outgoing connection to {peer_addr} denied");
             }
-        });
-    };
+        }
+    });
 
+    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
+        if let Some(permit) = incoming_ctrl.issue_permit() {
+            task::spawn_local(async move {
+                ops::incoming_pwp_connection(stream, peer_ip, permit).await.unwrap_or_else(|e| {
+                    log!(e, "Incoming peer connection from {peer_ip} failed: {e}")
+                });
+            });
+        } else {
+            log::info!("Incoming connection from {peer_ip} rejected");
+        }
+    };
     local_task.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
@@ -267,29 +248,14 @@ async fn main_stage(
         }
     });
 
-    let mut cb = peer_discovered_callback_factory(
-        content_storage.clone(),
-        metainfo_storage.clone(),
-        ctx.clone(),
-        pwp_runtime.clone(),
-    );
-
-    {
-        let _g = local_task.enter();
-        for peer_ip in extra_peers.into_iter() {
-            cb(&peer_ip);
-        }
+    for peer_ip in extra_peers.into_iter() {
+        peer_discovered_sink.send(peer_ip);
     }
 
-    let on_announce_response = move |response: ops::TrackerResponse| {
-        for peer_ip in response.peers {
-            cb(&peer_ip);
-        }
-    };
     let tracker_ctx = ctx.clone();
     let config_dir = PathBuf::from(output_dir.as_ref());
     local_task.spawn_local(async move {
-        ops::make_periodic_announces(tracker_ctx, config_dir, on_announce_response).await;
+        ops::make_periodic_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
     });
 
     local_task

@@ -1,5 +1,6 @@
 use super::super::ctx;
 use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, MAX_PENDING_REQUESTS};
+use crate::utils::fifo;
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -109,7 +110,7 @@ pub async fn handle_incoming(
     peer: Peer,
     until: Instant,
     serve_metadata: bool,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+    peer_discovered_channel: &fifo::Sender<SocketAddr>,
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
     define_with_ctx!(inner.handle);
@@ -137,7 +138,7 @@ pub async fn handle_incoming(
                     let connected_peers: HashSet<SocketAddr> =
                         with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
                     for peer_addr in pex.added.difference(&connected_peers) {
-                        peer_discovered_callback(peer_addr);
+                        peer_discovered_channel.send(*peer_addr);
                     }
                 };
             }

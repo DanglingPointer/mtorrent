@@ -1,6 +1,6 @@
 use crate::pwp::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{magnet, startup};
+use crate::utils::{fifo, magnet, startup};
 use crate::{ops::ctx, pwp, sec};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -134,19 +134,21 @@ async fn run_listening_seeder(
             ctx.piece_tracker.forget_piece(piece_index);
         }
     });
+    let (sink, _src) = fifo::channel();
+    let (_outgoing_ctrl, mut incoming_ctrl) = super::super::connection_control(
+        50,
+        super::MainConnectionData {
+            content_storage,
+            metainfo_storage: meta_storage,
+            ctx_handle: handle,
+            pwp_worker_handle: runtime::Handle::current(),
+            peer_discovered_channel: sink,
+        },
+    );
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    super::incoming_pwp_connection(
-        stream,
-        peer_ip,
-        content_storage,
-        meta_storage,
-        handle,
-        runtime::Handle::current(),
-        |_| (),
-    )
-    .await?;
+    super::incoming_pwp_connection(stream, peer_ip, incoming_ctrl.issue_permit().unwrap()).await?;
 
     Ok(())
 }
@@ -256,6 +258,7 @@ async fn pass_torrent_from_peer_to_peer(
             pwp::channels_from_mock(uploader_ip, remote_hs, false, downloader_sock);
         let mut ctx_handle =
             ctx::MainCtx::new(metainfo, PeerId::from(&downloader_peer_id), downloader_ip).unwrap();
+        let (sink, _src) = fifo::channel();
         let run_future = super::run_peer_connection(
             dlchans,
             ulchans,
@@ -263,7 +266,7 @@ async fn pass_torrent_from_peer_to_peer(
             content_storage.clone(),
             content_storage, // metainfo storage (hack)
             ctx_handle.clone(),
-            |_| (),
+            sink,
         );
         task::spawn_local(async move {
             let _ = run_future.await;
@@ -308,6 +311,7 @@ async fn pass_torrent_from_peer_to_peer(
             }
         });
 
+        let (sink, _src) = fifo::channel();
         let _ = super::run_peer_connection(
             dlchans,
             ulchans,
@@ -315,7 +319,7 @@ async fn pass_torrent_from_peer_to_peer(
             content_storage.clone(),
             content_storage, // metainfo storage (hack)
             ctx_handle,
-            |_| (),
+            sink,
         )
         .await;
     };
@@ -415,6 +419,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
             pwp::channels_from_mock(downloader_ip, remote_hs, true, uploader_sock);
         let ctx_handle =
             ctx::MainCtx::new(metainfo, PeerId::from(&uploader_peer_id), uploader_ip).unwrap();
+        let (sink, _src) = fifo::channel();
         let _ = super::run_peer_connection(
             dlchans,
             ulchans,
@@ -422,7 +427,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
             metainfo_storage.clone(), // content storage (hack)
             metainfo_storage,
             ctx_handle,
-            |_| (),
+            sink,
         )
         .await;
     };

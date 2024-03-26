@@ -6,6 +6,7 @@ pub mod magnet;
 // pub mod matcher;
 pub mod meta;
 pub mod peer_id;
+pub mod set;
 pub mod startup;
 pub mod stopwatch;
 pub mod time;

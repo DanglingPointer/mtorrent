@@ -6,7 +6,9 @@ mod upload;
 #[cfg(test)]
 mod tests;
 
+use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
+use crate::utils::fifo;
 use crate::utils::peer_id::PeerId;
 use crate::{data, pwp, sec};
 use std::io;
@@ -187,7 +189,7 @@ async fn run_extensions(
     mut peer: extensions::Peer,
     remote_ip: SocketAddr,
     mut ctx_handle: MainHandle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+    peer_discovered_channel: fifo::Sender<SocketAddr>,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     peer = extensions::send_handshake(peer, ALL_SUPPORTED_EXTENSIONS).await?;
@@ -203,23 +205,18 @@ async fn run_extensions(
             peer,
             next_pex_time,
             with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx)),
-            &mut peer_discovered_callback,
+            &peer_discovered_channel,
         )
         .await?;
     }
 }
 
 macro_rules! maybe_run_extensions {
-    ($peer:expr, $remote_ip:expr, $ctx_handle:expr, $peer_discovered_callback:expr) => {
+    ($peer:expr, $remote_ip:expr, $ctx_handle:expr, $peer_discovered_channel:expr) => {
         async {
             if let Some(peer) = $peer {
-                run_extensions(
-                    peer,
-                    $remote_ip,
-                    $ctx_handle.clone(),
-                    &mut $peer_discovered_callback,
-                )
-                .await
+                run_extensions(peer, $remote_ip, $ctx_handle.clone(), $peer_discovered_channel)
+                    .await
             } else {
                 Ok(())
             }
@@ -236,7 +233,7 @@ async fn run_peer_connection(
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
     ctx_handle: MainHandle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+    peer_discovered_channel: fifo::Sender<SocketAddr>,
 ) -> io::Result<()> {
     let remote_ip = *download_chans.0.remote_ip();
 
@@ -259,55 +256,49 @@ async fn run_peer_connection(
     try_join!(
         run_download(download.into(), remote_ip, ctx_handle.clone()),
         run_upload(upload.into(), remote_ip, ctx_handle.clone()),
-        maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_callback),
+        maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_channel),
     )?;
     Ok(())
 }
 
 // ------------------------------------------------------------------------------------------------
 
+pub struct MainConnectionData {
+    pub content_storage: data::StorageClient,
+    pub metainfo_storage: data::StorageClient,
+    pub ctx_handle: MainHandle,
+    pub pwp_worker_handle: runtime::Handle,
+    pub peer_discovered_channel: fifo::Sender<SocketAddr>,
+}
+
 pub async fn outgoing_pwp_connection(
     remote_ip: SocketAddr,
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    mut ctx_handle: MainHandle,
-    pwp_worker_handle: runtime::Handle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+    permit: OutgoingConnectionPermit<MainConnectionData>,
 ) -> io::Result<()> {
-    define_with_ctx!(ctx_handle);
+    let mut handle = permit.0.ctx_handle.clone();
+    define_with_ctx!(handle);
 
     loop {
-        with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
-
-        let (info_hash, local_peer_id) = with_ctx!(|ctx| {
-            ctx.connecting_to.insert(remote_ip);
-            (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id())
-        });
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
         let connect_result = channels_for_outgoing_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
             remote_ip,
-            pwp_worker_handle.clone(),
+            permit.0.pwp_worker_handle.clone(),
         )
         .await;
-        with_ctx!(|ctx| ctx.connecting_to.remove(&remote_ip));
         let (download_chans, upload_chans, extended_chans) = connect_result?;
-
-        if let Err(e) = with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip)) {
-            if matches!(e, ctrl::GrantError::DuplicateConnection(_)) {
-                return Err(e.into());
-            }
-        }
 
         let run_result = run_peer_connection(
             download_chans,
             upload_chans,
             extended_chans,
-            content_storage.clone(),
-            metainfo_storage.clone(),
-            ctx_handle.clone(),
-            &mut peer_discovered_callback,
+            permit.0.content_storage.clone(),
+            permit.0.metainfo_storage.clone(),
+            permit.0.ctx_handle.clone(),
+            permit.0.peer_discovered_channel.clone(),
         )
         .await;
 
@@ -326,15 +317,11 @@ pub async fn outgoing_pwp_connection(
 pub async fn incoming_pwp_connection(
     stream: TcpStream,
     remote_ip: SocketAddr,
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    mut ctx_handle: MainHandle,
-    pwp_worker_handle: runtime::Handle,
-    mut peer_discovered_callback: impl FnMut(&SocketAddr),
+    permit: IncomingConnectionPermit<MainConnectionData>,
 ) -> io::Result<()> {
-    define_with_ctx!(ctx_handle);
+    let mut handle = permit.0.ctx_handle.clone();
+    define_with_ctx!(handle);
 
-    with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
 
@@ -344,7 +331,7 @@ pub async fn incoming_pwp_connection(
         EXTENSION_PROTOCOL_ENABLED,
         remote_ip,
         stream,
-        pwp_worker_handle.clone(),
+        permit.0.pwp_worker_handle.clone(),
     )
     .await?;
 
@@ -352,10 +339,10 @@ pub async fn incoming_pwp_connection(
         download_chans,
         upload_chans,
         extended_chans,
-        content_storage.clone(),
-        metainfo_storage.clone(),
-        ctx_handle.clone(),
-        &mut peer_discovered_callback,
+        permit.0.content_storage.clone(),
+        permit.0.metainfo_storage.clone(),
+        permit.0.ctx_handle.clone(),
+        permit.0.peer_discovered_channel.clone(),
     )
     .await;
 
@@ -363,15 +350,7 @@ pub async fn incoming_pwp_connection(
         Err(e) if e.kind() != io::ErrorKind::Other => {
             // ErrorKind::Other means we disconnected the peer intentionally
             log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
-            outgoing_pwp_connection(
-                remote_ip,
-                content_storage,
-                metainfo_storage,
-                ctx_handle,
-                pwp_worker_handle,
-                peer_discovered_callback,
-            )
-            .await
+            outgoing_pwp_connection(remote_ip, OutgoingConnectionPermit(permit.0)).await
         }
         Err(e) => Err(e),
         _ => Ok(()),
@@ -434,14 +413,18 @@ async fn run_metadata_download(
     Ok(())
 }
 
+pub struct PreliminaryConnectionData {
+    pub ctx_handle: PreliminaryHandle,
+    pub pwp_worker_handle: runtime::Handle,
+}
+
 pub async fn outgoing_preliminary_connection(
     remote_ip: SocketAddr,
-    mut ctx_handle: PreliminaryHandle,
-    pwp_worker_handle: runtime::Handle,
+    permit: OutgoingConnectionPermit<PreliminaryConnectionData>,
 ) -> io::Result<()> {
-    define_with_ctx!(ctx_handle);
+    let mut handle = permit.0.ctx_handle.clone();
+    define_with_ctx!(handle);
 
-    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
@@ -450,23 +433,21 @@ pub async fn outgoing_preliminary_connection(
         &info_hash,
         true, // extension_protocol_enabled
         remote_ip,
-        pwp_worker_handle,
+        permit.0.pwp_worker_handle.clone(),
     )
     .await?;
-    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, ctx_handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
 }
 
 pub async fn incoming_preliminary_connection(
     stream: TcpStream,
     remote_ip: SocketAddr,
-    mut ctx_handle: PreliminaryHandle,
-    pwp_worker_handle: runtime::Handle,
+    permit: IncomingConnectionPermit<PreliminaryConnectionData>,
 ) -> io::Result<()> {
-    define_with_ctx!(ctx_handle);
+    let mut handle = permit.0.ctx_handle.clone();
+    define_with_ctx!(handle);
 
-    with_ctx!(|ctx| ctrl::grant_preliminary_connection_permission(ctx, &remote_ip))?;
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
@@ -476,9 +457,9 @@ pub async fn incoming_preliminary_connection(
         true, // extension_protocol_enabled
         remote_ip,
         stream,
-        pwp_worker_handle,
+        permit.0.pwp_worker_handle.clone(),
     )
     .await?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, ctx_handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
 }

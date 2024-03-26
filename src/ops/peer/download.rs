@@ -234,8 +234,7 @@ pub async fn get_pieces(
                 divide_piece_into_blocks(piece_index, piece_len)
                     .filter(|block| with_ctx!(|ctx| !ctx.accountant.has_exact_block(block)))
                     .collect();
-            if requests.len() > 250 {
-                // libtorrent supports max 250 outstanding requests
+            if requests.len() > 1024 {
                 log::warn!("About to send {} requests to {}", requests.len(), inner.tx.remote_ip());
             }
             for block in &requests {
