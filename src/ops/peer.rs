@@ -305,8 +305,7 @@ pub async fn outgoing_pwp_connection(
         match run_result {
             Err(e) if e.kind() != io::ErrorKind::Other => {
                 // ErrorKind::Other means we disconnected the peer intentionally
-                log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting in 1s...");
-                time::sleep(sec!(1)).await;
+                log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...")
             }
             Err(e) => return Err(e),
             _ => break,
@@ -350,8 +349,7 @@ pub async fn incoming_pwp_connection(
     match run_result {
         Err(e) if e.kind() != io::ErrorKind::Other => {
             // ErrorKind::Other means we disconnected the peer intentionally
-            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting in 1s...");
-            time::sleep(sec!(1)).await;
+            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
             outgoing_pwp_connection(remote_ip, OutgoingConnectionPermit(permit.0)).await
         }
         Err(e) => Err(e),
