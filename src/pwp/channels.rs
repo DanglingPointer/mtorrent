@@ -3,9 +3,8 @@ use super::message::*;
 use super::MAX_BLOCK_SIZE;
 use crate::sec;
 use futures::channel::mpsc;
-use futures::Future;
 use futures::{select_biased, try_join, FutureExt, SinkExt, StreamExt};
-use std::future;
+use std::future::{self, Future};
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -414,9 +413,7 @@ impl From<ChannelError> for io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor::LocalPool;
     use futures::join;
-    use futures::task::LocalSpawnExt;
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};
@@ -424,19 +421,21 @@ mod tests {
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio::{io, task, time};
+    use tokio_test::assert_pending;
     use tokio_test::io::Builder as MockBuilder;
+    use tokio_test::task::spawn;
 
-    async fn buffer_with(msgs: &[PeerMessage]) -> Vec<u8> {
+    fn buffer_with(msgs: &[PeerMessage]) -> Vec<u8> {
         let mut socket = BufWriter::new(Cursor::<Vec<u8>>::default());
         for msg in msgs {
-            msg.write_to(&mut socket).await.unwrap();
+            msg.write_to(&mut socket).now_or_never().unwrap().unwrap();
         }
         socket.into_inner().into_inner()
     }
 
     macro_rules! msgs {
         ($($arg:expr),+ $(,)? ) => {
-            buffer_with(&[$($arg),+]).await.as_ref()
+            buffer_with(&[$($arg),+]).as_ref()
         };
     }
 
@@ -788,51 +787,44 @@ mod tests {
 
     #[tokio::test]
     async fn test_writing_downloader_messages_takes_priority_over_uploader_messages() {
-        let socket = MockBuilder::new()
-            .write(msgs![PeerMessage::Interested])
-            .write(msgs![PeerMessage::Piece {
-                index: 0,
-                begin: 0,
-                block: vec![0u8; 1024]
-            }])
-            .wait(sec!(0))
-            .build();
-        let (mut download, mut upload, _, runner) = setup_channels(
-            socket,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
-            Default::default(),
-            false,
-        );
+        for _ in 0..50 {
+            let socket = MockBuilder::new()
+                .write(msgs![PeerMessage::Interested])
+                .write(msgs![PeerMessage::Piece {
+                    index: 0,
+                    begin: 0,
+                    block: vec![0u8; 1024]
+                }])
+                .wait(sec!(0))
+                .build();
+            let (mut download, mut upload, _, runner) = setup_channels(
+                socket,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+                Default::default(),
+                false,
+            );
 
-        let send_uploader_msg_fut = async move {
-            upload
-                .0
-                .send_message(UploaderMessage::Block(
-                    BlockInfo {
-                        piece_index: 0,
-                        in_piece_offset: 0,
-                        block_length: 16384,
-                    },
-                    vec![0u8; 1024],
-                ))
-                .await
-                .unwrap();
-        };
-        let send_downloader_msg_fut = async move {
-            download.0.send_message(DownloaderMessage::Interested).await.unwrap();
-        };
-        let runner_fut = async move {
-            let _ = runner.await;
-        };
-        let mut pool = LocalPool::new();
+            let mut send_uploader_msg_fut = spawn(upload.0.send_message(UploaderMessage::Block(
+                BlockInfo {
+                    piece_index: 0,
+                    in_piece_offset: 0,
+                    block_length: 16384,
+                },
+                vec![0u8; 1024],
+            )));
+            let mut send_downloader_msg_fut =
+                spawn(download.0.send_message(DownloaderMessage::Interested));
+            let mut runner_fut = spawn(runner);
 
-        pool.spawner().spawn_local(send_uploader_msg_fut).unwrap();
-        pool.spawner().spawn_local(send_downloader_msg_fut).unwrap();
-        pool.run_until_stalled();
+            assert_pending!(send_uploader_msg_fut.poll());
+            assert_pending!(send_downloader_msg_fut.poll());
 
-        pool.spawner().spawn_local(runner_fut).unwrap();
-        pool.run_until_stalled();
-        drop(pool);
+            while matches!(send_uploader_msg_fut.poll(), Poll::Pending)
+                && matches!(send_downloader_msg_fut.poll(), Poll::Pending)
+            {
+                assert_pending!(runner_fut.poll());
+            }
+        }
     }
 
     #[tokio::test(start_paused = true)]

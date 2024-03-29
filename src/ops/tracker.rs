@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
-use std::{cmp, io};
+use std::{cmp, fmt, io};
 use tokio::net::UdpSocket;
 use tokio::time;
 
@@ -126,10 +126,18 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
 
 // ------------------------------------------------------------------------------------------------
 
-#[derive(Debug)]
 struct ResponseData {
     interval: Duration,
     peers: Vec<SocketAddr>,
+}
+
+impl fmt::Debug for ResponseData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("")
+            .field("interval", &self.interval)
+            .field("peers", &self.peers)
+            .finish()
+    }
 }
 
 impl TryFrom<http::AnnounceResponseContent> for ResponseData {

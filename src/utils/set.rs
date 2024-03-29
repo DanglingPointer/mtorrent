@@ -3,15 +3,14 @@ use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::hash::Hash;
 
+/// Unordered set that never leaks references to its content
 pub struct Set<T>(UnsafeCell<HashSet<T>>);
 
-impl<T> Default for Set<T> {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
-
 impl<T: Eq + Hash> Set<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn contains<Q: ?Sized>(&self, value: &Q) -> bool
     where
         T: Borrow<Q>,
@@ -33,5 +32,11 @@ impl<T: Eq + Hash> Set<T> {
     {
         let inner = unsafe { &mut *self.0.get() };
         inner.remove(value)
+    }
+}
+
+impl<T> Default for Set<T> {
+    fn default() -> Self {
+        Self(Default::default())
     }
 }

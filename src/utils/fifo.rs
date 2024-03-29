@@ -67,6 +67,8 @@ struct ChannelData<T> {
     queue: Queue<T>,
     waker: Cell<Option<Waker>>,
     sender_count: Cell<usize>,
+    #[cfg(debug_assertions)]
+    has_receiver: Cell<bool>,
 }
 
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -74,6 +76,8 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         queue: Default::default(),
         waker: Cell::new(None),
         sender_count: Cell::new(1),
+        #[cfg(debug_assertions)]
+        has_receiver: Cell::new(true),
     });
     let sender = Sender(state.clone());
     let receiver = Receiver(state);
@@ -84,12 +88,15 @@ pub struct Sender<T>(Rc<ChannelData<T>>);
 
 impl<T> Sender<T> {
     pub fn send(&self, item: T) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.0.has_receiver.get());
         self.0.queue.push(item);
         if let Some(waker) = self.0.waker.take() {
             waker.wake();
         }
     }
 
+    #[must_use]
     pub fn try_send(&self, len_threshold: usize, item: T) -> bool {
         if self.0.queue.len() < len_threshold {
             self.send(item);
@@ -150,12 +157,21 @@ impl<T> futures::Stream for Receiver<T> {
     }
 }
 
+#[cfg(debug_assertions)]
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        self.0.has_receiver.set(false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::prelude::*;
     use static_assertions::*;
     use std::{rc::Rc, sync::Arc};
+    use tokio_test::task::spawn;
+    use tokio_test::{assert_pending, assert_ready};
 
     #[test]
     fn test_queue_is_send_but_not_sync() {
@@ -205,5 +221,39 @@ mod tests {
         let (result1, result2) = tokio::join!(fut1, fut2);
         assert_eq!((0..42).collect::<Vec<i32>>(), result1);
         assert_eq!((42..84).collect::<Vec<i32>>(), result2);
+    }
+
+    #[tokio::test]
+    async fn test_sender_notifies_receiver() {
+        let (sender, receiver) = channel::<i32>();
+
+        let mut receiver = spawn(receiver);
+        assert_pending!(receiver.poll_next());
+
+        sender.send(42);
+        assert!(receiver.is_woken());
+        assert_eq!(Some(42), assert_ready!(receiver.poll_next()));
+        assert_pending!(receiver.poll_next());
+
+        drop(sender);
+        assert!(receiver.is_woken());
+        assert_eq!(None, assert_ready!(receiver.poll_next()));
+    }
+
+    #[tokio::test]
+    async fn test_receiver_drains_queue_after_sender_dies() {
+        let (sender, receiver) = channel::<i32>();
+
+        for i in 0..42 {
+            sender.send(i);
+        }
+        drop(sender);
+
+        let mut receiver = spawn(receiver);
+        for i in 0..42 {
+            let received = assert_ready!(receiver.poll_next());
+            assert_eq!(Some(i), received);
+        }
+        assert_eq!(None, assert_ready!(receiver.poll_next()));
     }
 }

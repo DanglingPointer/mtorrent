@@ -147,7 +147,7 @@ async fn preliminary_stage(
                     });
             });
         } else {
-            log::debug!("Incoming connection from {peer_ip} denied");
+            log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
     local_task.spawn_local(async move {

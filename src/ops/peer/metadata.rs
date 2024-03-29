@@ -265,14 +265,14 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                     log::debug!("Received metadata piece {} from {}", piece, inner.tx.remote_ip());
                     with_ctx!(|ctx| {
                         init_metadata(ctx, total_size);
-                        if let Some(mut downloaded) = ctx.metainfo_pieces.get_mut(received_piece) {
-                            if downloaded == false {
+                        if let Some(mut has_piece) = ctx.metainfo_pieces.get_mut(received_piece) {
+                            if has_piece == false {
                                 let offset = received_piece * pwp::MAX_BLOCK_SIZE;
                                 if let Some(chunk) =
                                     ctx.metainfo.get_mut(offset..offset + data.len())
                                 {
                                     chunk.copy_from_slice(&data);
-                                    downloaded.set(true);
+                                    has_piece.set(true);
                                 }
                             }
                         }

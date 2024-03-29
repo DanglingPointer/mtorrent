@@ -10,7 +10,7 @@ pub fn connection_control<D>(
     connection_limit: usize,
     connection_data: D,
 ) -> (OutgoingConnectionControl<D>, IncomingConnectionControl<D>) {
-    let state = SharedState::new(State {
+    let state = Rc::new(State {
         budget: Cell::new(connection_limit),
         used_addrs: Default::default(),
         waker: Default::default(),
@@ -31,11 +31,16 @@ struct State<D> {
     data: D,
 }
 
-type SharedState<D> = Rc<State<D>>;
-
 pub(super) struct ConnectionPermit<D> {
-    state: SharedState<D>,
+    state: Rc<State<D>>,
     addr: Option<SocketAddr>,
+}
+
+#[cfg(test)]
+impl<D: std::fmt::Debug> std::fmt::Debug for ConnectionPermit<D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionPermit").field("addr", &self.addr).finish()
+    }
 }
 
 impl<D> Deref for ConnectionPermit<D> {
@@ -58,15 +63,17 @@ impl<D> Drop for ConnectionPermit<D> {
     }
 }
 
+#[cfg_attr(test, derive(Debug))]
 pub struct OutgoingConnectionPermit<D>(pub(super) ConnectionPermit<D>);
+#[cfg_attr(test, derive(Debug))]
 pub struct IncomingConnectionPermit<D>(pub(super) ConnectionPermit<D>);
 
 pub struct OutgoingConnectionControl<D> {
-    state: SharedState<D>,
+    state: Rc<State<D>>,
 }
 
 impl<D> OutgoingConnectionControl<D> {
-    /// Wait for available connection slot or returns None if already connected to 'addr'
+    /// Wait for available connection slot or return None if already connected to 'addr'
     pub async fn issue_permit(&mut self, addr: SocketAddr) -> Option<OutgoingConnectionPermit<D>> {
         // must use `&mut self` because we store only 1 waker
         poll_fn(move |cx| {
@@ -90,7 +97,7 @@ impl<D> OutgoingConnectionControl<D> {
 }
 
 pub struct IncomingConnectionControl<D> {
-    state: SharedState<D>,
+    state: Rc<State<D>>,
 }
 
 impl<D> IncomingConnectionControl<D> {
@@ -111,16 +118,9 @@ impl<D> IncomingConnectionControl<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sec;
-    use futures::prelude::*;
     use std::str::FromStr;
-    use tokio::{pin, select, task, time::sleep};
-
-    macro_rules! with_timeout {
-        ($fut:expr) => {
-            tokio::time::timeout(sec!(60), $fut).await
-        };
-    }
+    use tokio_test::task::spawn;
+    use tokio_test::{assert_pending, assert_ready};
     macro_rules! addr {
         ($addr:literal) => {
             SocketAddr::from_str($addr).unwrap()
@@ -149,89 +149,70 @@ mod tests {
         assert!(permit3.is_some());
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_outgoing_control_respects_budget() {
-        let (mut out_ctrl, _in_ctrl) = connection_control(2, ());
+    #[test]
+    fn test_notify_when_outgoing_connection_drops() {
+        let (mut out_ctrl, _in_ctrl) = connection_control(1, ());
 
-        // when
-        let permit1 =
-            with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:1111"))).expect("timed out");
+        let permit1 = {
+            let mut fut1 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:1111")));
+            assert_ready!(fut1.poll())
+        };
         assert!(permit1.is_some());
-        let permit2 =
-            with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:2222"))).expect("timed out");
-        assert!(permit2.is_some());
 
-        // then
-        let permit3 = with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:3333")));
-        assert!(permit3.is_err());
+        let mut fut2 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:2222")));
+        assert_pending!(fut2.poll());
 
-        // when
-        drop(permit2);
-
-        // then
-        let permit3 =
-            with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:3333"))).expect("timed out");
-        assert!(permit3.is_some());
-        let permit4 = with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:4444")));
-        assert!(permit4.is_err());
+        drop(permit1);
+        assert!(fut2.is_woken());
+        let permit2 = assert_ready!(fut2.poll());
+        assert!(permit2.is_some(), "permit denied");
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_outgoing_control_notifies_when_bugdet_becomes_available() {
-        task::LocalSet::new()
-            .run_until(async move {
-                let (mut out_ctrl, _in_ctrl) = connection_control(1, ());
-                let permit1 =
-                    with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:1111"))).expect("timed out");
-                assert!(permit1.is_some());
+    #[test]
+    fn test_notify_when_incoming_connection_drops() {
+        let (mut out_ctrl, mut in_ctrl) = connection_control(1, ());
+        let permit1 = in_ctrl.issue_permit();
+        assert!(permit1.is_some());
 
-                task::spawn_local(async move {
-                    sleep(sec!(30)).await;
-                    drop(permit1);
-                });
+        let mut fut2 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:1111")));
+        assert_pending!(fut2.poll());
 
-                let permit_fut = out_ctrl.issue_permit(addr!("1.2.3.4:5555"));
-                pin!(permit_fut);
-
-                select! {
-                    biased;
-                    _ = &mut permit_fut => {
-                        panic!("permit issued too early")
-                    }
-                    _ = sleep(sec!(30)) => {
-                    }
-                };
-                task::yield_now().await;
-                let permit2 = permit_fut.now_or_never().expect("permit not issued in time");
-                assert!(permit2.is_some(), "permit denied");
-            })
-            .await;
+        drop(permit1);
+        assert!(fut2.is_woken());
+        let permit2 = assert_ready!(fut2.poll());
+        assert!(permit2.is_some(), "permit denied");
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_outgoing_control_respects_uniqueness() {
+    #[test]
+    fn test_outgoing_control_respects_uniqueness() {
         let (mut out_ctrl, _in_ctrl) = connection_control(2, ());
 
         // when
-        let _permit1 = with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:1111")))
-            .expect("timed out")
-            .expect("permit denied");
+        let permit1 = {
+            let mut fut1 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:1111")));
+            assert_ready!(fut1.poll())
+        };
+        assert!(permit1.is_some());
 
         // then
-        let permit1_dup =
-            with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:1111"))).expect("timed out");
+        let permit1_dup = {
+            let mut fut1 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:1111")));
+            assert_ready!(fut1.poll())
+        };
         assert!(permit1_dup.is_none());
 
         // when
-        let _permit2 = with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:2222")))
-            .expect("timed out")
-            .expect("permit denied");
-        let permit3 = with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:3333")));
-        assert!(permit3.is_err());
+        let permit2 = {
+            let mut fut2 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:2222")));
+            assert_ready!(fut2.poll())
+        };
+        assert!(permit2.is_some());
 
         // then
-        let permit2_dup =
-            with_timeout!(out_ctrl.issue_permit(addr!("1.2.3.4:2222"))).expect("timed out");
+        let permit2_dup = {
+            let mut fut2_dup = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:2222")));
+            assert_ready!(fut2_dup.poll())
+        };
         assert!(permit2_dup.is_none());
     }
 }
