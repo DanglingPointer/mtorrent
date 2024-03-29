@@ -8,7 +8,6 @@ use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
 use std::{fs, iter};
-use tokio::net::TcpStream;
 use tokio::{io, task};
 use tokio::{join, net::TcpListener, runtime, time};
 
@@ -24,9 +23,8 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     let mut local_id = [0u8; 20];
     local_id[..4].copy_from_slice("meta".as_bytes());
 
-    let stream = TcpStream::connect(remote_ip).await.unwrap();
     let (mut download_chans, mut upload_chans, extended_chans, runner) =
-        pwp::channels_from_outgoing(&local_id, metainfo.info_hash(), true, remote_ip, stream, None)
+        pwp::channels_from_outgoing(&local_id, metainfo.info_hash(), true, remote_ip, None)
             .await
             .unwrap();
     let extended_chans = extended_chans.unwrap();
