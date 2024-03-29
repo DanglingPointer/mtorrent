@@ -4,14 +4,15 @@ use super::MAX_BLOCK_SIZE;
 use crate::sec;
 use futures::channel::mpsc;
 use futures::Future;
-use futures::{select_biased, try_join, FutureExt, SinkExt, StreamExt};
+use futures::{select, select_biased, FutureExt, SinkExt, StreamExt};
 use std::future;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 #[derive(Debug)]
 pub enum ChannelError {
@@ -90,20 +91,18 @@ where
 {
     let read_fut = async move {
         loop {
-            if let Err(e) = receiver.read_one_message().await {
-                return io::Result::<()>::Err(e);
-            }
+            receiver.read_one_message().await?;
         }
     };
     let write_fut = async move {
         loop {
-            if let Err(e) = sender.write_one_message().await {
-                return io::Result::<()>::Err(e);
-            }
+            sender.write_one_message().await?;
         }
     };
-    try_join!(read_fut, write_fut)?;
-    Ok(())
+    select! {
+        read_result = read_fut.fuse() => read_result,
+        write_result = write_fut.fuse() => write_result,
+    }
 }
 
 // ------
