@@ -310,8 +310,7 @@ fn update_state_with_msg(inner: &mut Data, msg: &pwp::UploaderMessage) -> bool {
         }
         pwp::UploaderMessage::Bitfield(bitfield) => {
             if log::log_enabled!(log::Level::Trace) {
-                let remote_piece_count =
-                    bitfield.iter().map(|bit| if *bit { 1 } else { 0 }).sum::<usize>();
+                let remote_piece_count = bitfield.count_ones();
                 log::trace!("Received bitfield from {ip}: peer has {remote_piece_count} pieces");
             }
             inner.handle.with_ctx(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
