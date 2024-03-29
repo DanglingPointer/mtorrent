@@ -36,14 +36,7 @@ fn peer_discovered_callback_factory(
             .await
             {
                 Ok(_) => (),
-                Err(e) => {
-                    let lvl = if e.kind() == io::ErrorKind::Other {
-                        log::Level::Error
-                    } else {
-                        log::Level::Debug
-                    };
-                    log::log!(lvl, "Outgoing peer connection to {remote_ip} failed: {e}")
-                }
+                Err(e) => log::error!("Outgoing peer connection to {remote_ip} failed: {e}"),
             }
         });
     }
@@ -248,14 +241,7 @@ async fn main_stage(
             .await
             {
                 Ok(_) => (),
-                Err(e) => {
-                    let lvl = if e.kind() == io::ErrorKind::Other {
-                        log::Level::Error
-                    } else {
-                        log::Level::Debug
-                    };
-                    log::log!(lvl, "Incoming peer connection from {peer_ip} failed: {e}")
-                }
+                Err(e) => log::error!("Incoming peer connection from {peer_ip} failed: {e}"),
             }
         });
     };
