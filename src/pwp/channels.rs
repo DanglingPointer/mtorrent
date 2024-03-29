@@ -6,10 +6,10 @@ use futures::channel::mpsc;
 use futures::Future;
 use futures::{select, select_biased, FutureExt, SinkExt, StreamExt};
 use std::future;
-use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
+use std::{fmt, io};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::time::sleep;
@@ -291,14 +291,16 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
     const RECV_TIMEOUT: Duration = sec!(120);
 
     async fn read_one_message(&mut self) -> io::Result<()> {
-        macro_rules! forward_msg {
-            ($msg:expr, $sink:expr) => {{
-                log::trace!("{} => {}", self.remote_ip, $msg);
-                $sink
-                    .send($msg)
-                    .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))
-            }};
+        async fn forward_msg<M: fmt::Display>(
+            msg: M,
+            sink: &mut mpsc::Sender<M>,
+            source: &SocketAddr,
+        ) -> io::Result<()> {
+            log::trace!("{} => {}", source, msg);
+            sink.send(msg)
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
+            Ok(())
         }
 
         timeout(Self::RECV_TIMEOUT, self.source.fill_buf()).await??;
@@ -306,19 +308,19 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
 
         let received = match UploaderMessage::try_from(received) {
             Ok(msg) => {
-                return forward_msg!(msg, self.ul_msg_sink);
+                return forward_msg(msg, &mut self.ul_msg_sink, &self.remote_ip).await;
             }
             Err(received) => received,
         };
         let received = match DownloaderMessage::try_from(received) {
             Ok(msg) => {
-                return forward_msg!(msg, self.dl_msg_sink);
+                return forward_msg(msg, &mut self.dl_msg_sink, &self.remote_ip).await;
             }
             Err(received) => received,
         };
         let received = if let Some(ext_msg_sink) = &mut self.ext_msg_sink {
             match ExtendedMessage::try_from(received) {
-                Ok(msg) => return forward_msg!(msg, ext_msg_sink),
+                Ok(msg) => return forward_msg(msg, ext_msg_sink, &self.remote_ip).await,
                 Err(received) => received,
             }
         } else {
@@ -349,16 +351,22 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             io::Error::new(io::ErrorKind::Other, "Channel closed")
         }
 
-        macro_rules! process_msg {
-            ($msg:expr, $source:expr $(,$proj:tt)?) => {
-                let first = $msg.expect("First msg must be non-None");
-                let formattable = &first;
-                $(let formattable = &formattable.$proj;)?
-                log::trace!("{} <= {}", self.remote_ip, formattable);
-                PeerMessage::from(first).write_to(&mut self.sink).await?;
-                let second = $source.next().await.ok_or_else(new_channel_closed_error)?;
-                debug_assert!(second.is_none(), "Second msg must be None");
-            };
+        async fn process_msg<M, S>(
+            msg: Option<M>,
+            source: &mut mpsc::Receiver<Option<M>>,
+            sink: &mut BufWriter<S>,
+            dest: &SocketAddr,
+        ) -> io::Result<()>
+        where
+            M: Into<PeerMessage> + fmt::Display,
+            S: AsyncWriteExt + Unpin,
+        {
+            let first = msg.expect("First msg must be non-None");
+            log::trace!("{} <= {}", dest, first);
+            first.into().write_to(sink).await?;
+            let second = source.next().await.ok_or_else(new_channel_closed_error)?;
+            assert!(second.is_none(), "Second msg must be None");
+            Ok(())
         }
 
         let next_ext_msg_fut = async {
@@ -370,17 +378,21 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
         };
 
         select_biased! {
-            dl_msg = self.dl_msg_source.next().fuse() => {
-                let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, &mut self.dl_msg_source);
+            rx_msg = self.dl_msg_source.next().fuse() => {
+                let msg = rx_msg.ok_or_else(new_channel_closed_error)?;
+                process_msg(msg, &mut self.dl_msg_source, &mut self.sink, &self.remote_ip).await?;
             }
-            ul_msg = self.ul_msg_source.next().fuse() => {
-                let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, &mut self.ul_msg_source);
+            tx_msg = self.ul_msg_source.next().fuse() => {
+                let msg = tx_msg.ok_or_else(new_channel_closed_error)?;
+                process_msg(msg, &mut self.ul_msg_source, &mut self.sink, &self.remote_ip).await?;
             }
             ext_msg = next_ext_msg_fut.fuse() => {
                 let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
+                let first = msg.expect("First msg must be non-None");
+                log::trace!("{} <= {}", self.remote_ip, first.0);
+                PeerMessage::from(first).write_to(&mut self.sink).await?;
+                let second = self.ext_msg_source.as_mut().unwrap().next().await.ok_or_else(new_channel_closed_error)?;
+                assert!(second.is_none(), "Second msg must be None");
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {
                 let ping_msg = PeerMessage::KeepAlive;
