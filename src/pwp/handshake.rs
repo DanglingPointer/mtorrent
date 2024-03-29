@@ -116,16 +116,12 @@ where
 
     socket.write_all(&local_handshake.peer_id).await?;
 
-    if remote_handshake.peer_id == local_handshake.peer_id {
-        Err(io::Error::new(io::ErrorKind::Other, "connecting to ourselves"))
-    } else {
-        log::debug!(
-            "Outgoing handshake with {} DONE. Peer id: {}",
-            remote_ip,
-            String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
-        );
-        Ok((socket, remote_handshake))
-    }
+    log::debug!(
+        "Outgoing handshake with {} DONE. Peer id: {}",
+        remote_ip,
+        String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
+    );
+    Ok((socket, remote_handshake))
 }
 
 async fn write_pstr_and_reserved<S: AsyncWriteExt + Unpin>(
@@ -276,29 +272,6 @@ mod tests {
         let server_hs_fut = async {
             let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, true).await;
             assert!(result.is_err());
-        };
-        join!(client_hs_fut, server_hs_fut);
-    }
-
-    #[tokio::test]
-    async fn test_handshake_with_ourselves_returns_io_error_other() {
-        let (server_stream, client_stream) = duplex(1024);
-
-        let hs_data = Handshake {
-            peer_id: [1u8; 20],
-            info_hash: [7u8; 20],
-            reserved: BitArray::ZERO,
-        };
-
-        let client_hs_fut = async {
-            let result = do_handshake_outgoing(&IP, client_stream, &hs_data, None).await;
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
-        };
-        let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &hs_data, false).await;
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         };
         join!(client_hs_fut, server_hs_fut);
     }
