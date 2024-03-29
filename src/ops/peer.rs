@@ -264,27 +264,18 @@ pub async fn outgoing_pwp_connection(
 
     loop {
         with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
 
-        let (info_hash, local_peer_id) = with_ctx!(|ctx| {
-            ctx.connecting_to.insert(remote_ip);
-            (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id())
-        });
-        let connect_result = channels_for_outgoing_connection(
+        let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
             remote_ip,
             pwp_worker_handle.clone(),
         )
-        .await;
-        with_ctx!(|ctx| ctx.connecting_to.remove(&remote_ip));
-        let (download_chans, upload_chans, extended_chans) = connect_result?;
-
-        if let Err(e) = with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip)) {
-            if matches!(e, ctrl::GrantError::DuplicateConnection(_)) {
-                return Err(e.into());
-            }
-        }
+        .await?;
+        with_ctx!(|ctx| ctrl::grant_main_connection_permission(ctx, &remote_ip))?;
 
         let run_result = run_peer_connection(
             download_chans,

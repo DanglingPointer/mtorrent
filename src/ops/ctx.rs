@@ -113,7 +113,6 @@ pub struct MainCtx {
     pub(super) metainfo: meta::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
     pub(super) pending_requests: pwp::PendingRequests,
-    pub(super) connecting_to: HashSet<SocketAddr>,
     pub(super) const_data: ConstData,
 }
 
@@ -143,7 +142,6 @@ impl MainCtx {
             metainfo,
             peer_states: Default::default(),
             pending_requests: Default::default(),
-            connecting_to: Default::default(),
             const_data: ConstData {
                 local_peer_id,
                 pwp_listener_public_addr,
