@@ -1,10 +1,11 @@
 use super::ctx;
 use crate::utils::meta;
 use crate::{pwp, sec};
-use std::cmp;
+use core::fmt;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::{cmp, error, io};
 
 const MAX_SEEDER_COUNT: usize = 50;
 
@@ -40,7 +41,7 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
 }
 
 fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
-    // some clients support max 250 queued requests, hence:
+    // libtorrent supports max 250 queued requests, hence:
     // 250 * 16kB == piece_len * piece_count
     let max_request_count =
         cmp::min(50, cmp::max(1, pwp::MAX_BLOCK_SIZE * 250 / ctx.pieces.piece_len(0)));
@@ -200,4 +201,60 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
 
 pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool {
     true
+}
+
+const MAX_CONNECTED_PEERS_COUNT: usize = 50;
+const MAX_CONNECTIONS_IN_PROGRESS: usize = 100;
+
+#[derive(Debug)]
+pub enum GrantError {
+    ConnectionsLimitReached,
+    DuplicateConnection(SocketAddr),
+}
+
+impl fmt::Display for GrantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GrantError::ConnectionsLimitReached => write!(f, "connections limit reached"),
+            GrantError::DuplicateConnection(addr) => write!(f, "already connected to {addr}"),
+        }
+    }
+}
+
+impl error::Error for GrantError {}
+
+impl From<GrantError> for io::Error {
+    fn from(value: GrantError) -> Self {
+        io::Error::new(io::ErrorKind::PermissionDenied, Box::new(value))
+    }
+}
+
+pub fn grant_preliminary_connection_permission(
+    ctx: &ctx::PreliminaryCtx,
+    candidate: &SocketAddr,
+) -> Result<(), GrantError> {
+    // check duplicate before connections limit
+    if ctx.connected_peers.get(candidate).is_some() {
+        Err(GrantError::DuplicateConnection(*candidate))
+    } else if ctx.connected_peers.len() >= MAX_CONNECTED_PEERS_COUNT {
+        Err(GrantError::ConnectionsLimitReached)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn grant_main_connection_permission(
+    ctx: &ctx::MainCtx,
+    candidate: &SocketAddr,
+) -> Result<(), GrantError> {
+    // check duplicate before connections limit
+    if ctx.peer_states.get(candidate).is_some() || ctx.connecting_to.contains(candidate) {
+        return Err(GrantError::DuplicateConnection(*candidate));
+    }
+    if ctx.peer_states.iter().count() >= MAX_CONNECTED_PEERS_COUNT
+        || ctx.connecting_to.len() >= MAX_CONNECTIONS_IN_PROGRESS
+    {
+        return Err(GrantError::ConnectionsLimitReached);
+    }
+    Ok(())
 }

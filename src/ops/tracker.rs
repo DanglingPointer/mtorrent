@@ -2,7 +2,7 @@ use super::ctx;
 use crate::sec;
 use crate::tracker::{http, udp, utils};
 use crate::utils::peer_id::PeerId;
-use crate::utils::{config, fifo, ip};
+use crate::utils::{config, ip};
 use futures::future;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -126,10 +126,9 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
 
 // ------------------------------------------------------------------------------------------------
 
-#[derive(Debug)]
-struct ResponseData {
+pub struct ResponseData {
     interval: Duration,
-    peers: Vec<SocketAddr>,
+    pub peers: Vec<SocketAddr>,
 }
 
 impl TryFrom<http::AnnounceResponseContent> for ResponseData {
@@ -187,7 +186,7 @@ async fn announce_periodically(
     tracker_type: TrackerType,
     tracker_addr: String,
     mut handle: ctx::Handle<ctx::MainCtx>,
-    cb_channel: fifo::Sender<SocketAddr>,
+    mut callback: impl FnMut(ResponseData),
 ) {
     define_with_ctx!(handle);
     loop {
@@ -204,11 +203,9 @@ async fn announce_periodically(
                 let interval = cmp::min(sec!(300), response.interval);
                 log::info!(
                     "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
-                    response
+                    response.peers
                 );
-                for peer_addr in response.peers {
-                    cb_channel.send(peer_addr);
-                }
+                callback(response);
                 time::sleep(interval).await;
             }
             Err(e) => {
@@ -223,7 +220,7 @@ async fn announce_once(
     tracker_type: TrackerType,
     tracker_addr: String,
     mut handle: ctx::Handle<ctx::PreliminaryCtx>,
-    cb_channel: fifo::Sender<SocketAddr>,
+    mut callback: impl FnMut(ResponseData),
 ) {
     define_with_ctx!(handle);
     let request = with_ctx!(|ctx| AnnounceData::new_preliminary(ctx));
@@ -238,11 +235,9 @@ async fn announce_once(
             });
             log::info!(
                 "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
-                response
+                response.peers
             );
-            for peer_addr in response.peers {
-                cb_channel.send(peer_addr);
-            }
+            callback(response);
         }
         Err(e) => log::error!("Announce to {tracker_type:?} tracker at {tracker_addr} failed: {e}"),
     }
@@ -292,7 +287,7 @@ fn add_http_and_udp_trackers<'a>(
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: fifo::Sender<SocketAddr>,
+    callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -310,20 +305,10 @@ pub async fn make_periodic_announces(
     });
 
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Http,
-            tracker_addr,
-            ctx_handle.clone(),
-            cb_channel.clone(),
-        )
+        announce_periodically(TrackerType::Http, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Udp,
-            tracker_addr,
-            ctx_handle.clone(),
-            cb_channel.clone(),
-        )
+        announce_periodically(TrackerType::Udp, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }
@@ -331,7 +316,7 @@ pub async fn make_periodic_announces(
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: fifo::Sender<SocketAddr>,
+    callback: impl FnMut(ResponseData) + Clone,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -349,10 +334,10 @@ pub async fn make_preliminary_announces(
     });
 
     let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_once(TrackerType::Http, tracker_addr, ctx_handle.clone(), cb_channel.clone())
+        announce_once(TrackerType::Http, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_once(TrackerType::Udp, tracker_addr, ctx_handle.clone(), cb_channel.clone())
+        announce_once(TrackerType::Udp, tracker_addr, ctx_handle.clone(), callback.clone())
     });
     future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }
