@@ -25,4 +25,4 @@ Lightweight command line Bittorrent client in Rust. Based on Tokio (but without 
 
 ## Building
 
-Requires Docker. To build on Linux, run `./builder.sh [args]` where `args` is the arguments to `cargo` (e.g. `build --release`). When using VS Code, open the root folder, then, when prompted, build and open the dev container (requires Dev Containers extension).
+Requires Docker. To build on Linux, run `./builder.sh [args]` where `args` is the arguments to `cargo` (e.g. `./builder.sh build --release`). When using VS Code, open the root folder, then, when prompted, build and open the dev container (requires Dev Containers extension).
