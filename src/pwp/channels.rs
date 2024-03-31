@@ -421,9 +421,9 @@ mod tests {
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio::{io, task, time};
-    use tokio_test::assert_pending;
     use tokio_test::io::Builder as MockBuilder;
     use tokio_test::task::spawn;
+    use tokio_test::{assert_pending, assert_ready};
 
     fn buffer_with(msgs: &[PeerMessage]) -> Vec<u8> {
         let mut socket = BufWriter::new(Cursor::<Vec<u8>>::default());
@@ -824,6 +824,137 @@ mod tests {
             {
                 assert_pending!(runner_fut.poll());
             }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_downloader_channel_send_backpressure() {
+        let socket = MockBuilder::new()
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::Interested])
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::NotInterested])
+            .build();
+
+        let (mut download, _upload, _, runner) = setup_channels(
+            socket,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+            false,
+        );
+
+        let mut runner_fut = spawn(runner);
+        {
+            let mut send_fut = spawn(download.0.send_message(DownloaderMessage::Interested));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
+        }
+        {
+            let mut send_fut = spawn(download.0.send_message(DownloaderMessage::NotInterested));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_uploader_channel_send_backpressure() {
+        let socket = MockBuilder::new()
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::Choke])
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::Unchoke])
+            .build();
+
+        let (_download, mut upload, _, runner) = setup_channels(
+            socket,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+            false,
+        );
+
+        let mut runner_fut = spawn(runner);
+        {
+            let mut send_fut = spawn(upload.0.send_message(UploaderMessage::Choke));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
+        }
+        {
+            let mut send_fut = spawn(upload.0.send_message(UploaderMessage::Unchoke));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_extended_channel_send_backpressure() {
+        let socket = MockBuilder::new()
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::Extended {
+                id: 1,
+                data: Vec::from("d8:msg_typei2e5:piecei3ee"),
+            }])
+            .wait(sec!(1))
+            .write(msgs![PeerMessage::Extended {
+                id: 1,
+                data: Vec::from("d8:msg_typei0e5:piecei3ee"),
+            }])
+            .build();
+        let (_download, _upload, extended, runner) = setup_channels(
+            socket,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            HANDSHAKE_WITH_BEP10_SUPPORT,
+            true,
+        );
+        let mut extended = extended.unwrap();
+
+        let mut runner_fut = spawn(runner);
+        {
+            let mut send_fut =
+                spawn(extended.0.send_message((ExtendedMessage::MetadataReject { piece: 3 }, 1)));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
+        }
+        {
+            let mut send_fut =
+                spawn(extended.0.send_message((ExtendedMessage::MetadataRequest { piece: 3 }, 1)));
+            assert_pending!(send_fut.poll());
+
+            assert_pending!(runner_fut.poll());
+            assert_pending!(send_fut.poll());
+
+            time::sleep(sec!(1)).await;
+            assert_pending!(runner_fut.poll());
+            assert!(assert_ready!(send_fut.poll()).is_ok());
         }
     }
 
