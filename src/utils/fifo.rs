@@ -146,8 +146,11 @@ impl<T> futures::Stream for Receiver<T> {
         } else if self.0.sender_count.get() == 0 {
             Poll::Ready(None)
         } else {
-            let _old_waker = self.0.waker.replace(Some(cx.waker().clone()));
-            debug_assert!(_old_waker.map_or(true, |waker| waker.will_wake(cx.waker())));
+            let new_waker = match self.0.waker.replace(None) {
+                Some(waker) if waker.will_wake(cx.waker()) => waker,
+                _ => cx.waker().clone(),
+            };
+            self.0.waker.set(Some(new_waker));
             Poll::Pending
         }
     }

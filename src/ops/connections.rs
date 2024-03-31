@@ -80,8 +80,11 @@ impl<D> OutgoingConnectionControl<D> {
             if self.state.used_addrs.contains(&addr) {
                 Poll::Ready(None)
             } else if self.state.budget.get() == 0 {
-                let _old_waker = self.state.waker.replace(Some(cx.waker().clone()));
-                debug_assert!(_old_waker.map_or(true, |waker| waker.will_wake(cx.waker())));
+                let new_waker = match self.state.waker.replace(None) {
+                    Some(waker) if waker.will_wake(cx.waker()) => waker,
+                    _ => cx.waker().clone(),
+                };
+                self.state.waker.set(Some(new_waker));
                 Poll::Pending
             } else {
                 self.state.used_addrs.insert(addr);
