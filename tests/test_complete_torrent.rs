@@ -268,6 +268,7 @@ async fn listening_peer<P: Peer>(
     match TcpListener::bind(listening_addr).await {
         Ok(listener) => {
             let (stream, remote_addr) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
             println!(
                 "Peer {} on {} accepted connection from {}",
                 index, listening_addr, remote_addr
@@ -304,6 +305,7 @@ async fn connecting_peer<P: Peer>(
         }
         time::sleep(sec!(1)).await;
     };
+    stream.set_nodelay(true).unwrap();
     let (download_chans, upload_chans, _, runner) = pwp::channels_from_outgoing(
         &[index + b'0'; 20],
         &info_hash,

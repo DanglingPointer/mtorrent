@@ -34,6 +34,7 @@ macro_rules! marshal_stream {
         // note: EnterGuard must NEVER live across a suspension point
         let _g = $rt_handle.enter();
         let std_stream = $stream.into_std()?;
+        std_stream.set_nodelay(true)?;
         TcpStream::from_std(std_stream)?
     }};
 }

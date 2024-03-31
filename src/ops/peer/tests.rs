@@ -25,6 +25,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     local_id[..4].copy_from_slice("meta".as_bytes());
 
     let stream = TcpStream::connect(remote_ip).await.unwrap();
+    stream.set_nodelay(true).unwrap();
     let (mut download_chans, mut upload_chans, extended_chans, runner) =
         pwp::channels_from_outgoing(&local_id, metainfo.info_hash(), true, remote_ip, stream, None)
             .await
