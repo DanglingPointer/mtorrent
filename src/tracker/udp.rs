@@ -182,7 +182,7 @@ impl error::Error for ParseError {}
 
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
-        io::Error::new(io::ErrorKind::Other, Box::new(e))
+        io::Error::new(io::ErrorKind::InvalidData, Box::new(e))
     }
 }
 

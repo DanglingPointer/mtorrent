@@ -206,14 +206,14 @@ async fn announce_periodically(
         };
         match response_result {
             Ok(mut response) => {
-                with_ctx!(|ctx| {
-                    response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
-                });
-                let interval = cmp::min(sec!(300), response.interval);
                 log::info!(
                     "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
                     response
                 );
+                with_ctx!(|ctx| {
+                    response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
+                });
+                let interval = cmp::min(sec!(300), response.interval);
                 for peer_addr in response.peers {
                     cb_channel.send(peer_addr);
                 }
@@ -241,13 +241,13 @@ async fn announce_once(
     };
     match response_result {
         Ok(mut response) => {
-            with_ctx!(|ctx| {
-                response.peers.retain(|peer_ip| ctx.known_peers.get(peer_ip).is_none())
-            });
             log::info!(
                 "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
                 response
             );
+            with_ctx!(|ctx| {
+                response.peers.retain(|peer_ip| ctx.known_peers.get(peer_ip).is_none())
+            });
             for peer_addr in response.peers {
                 cb_channel.send(peer_addr);
             }
