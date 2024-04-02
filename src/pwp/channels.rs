@@ -168,12 +168,8 @@ where
 {
     let (download, upload, extensions, runner) =
         setup_channels(mock_socket, peer_addr, remote_handshake, extension_protocol_enabled);
-    tokio::task::spawn(async {
-        timeout(sec!(30), async move {
-            let _ = runner.await;
-        })
-        .await
-        .unwrap();
+    tokio::task::spawn(async move {
+        let _ = runner.await;
     });
     (download, upload, extensions)
 }

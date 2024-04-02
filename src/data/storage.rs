@@ -39,6 +39,60 @@ fn async_generic_storage<F: RandomAccessReadWrite>(
     )
 }
 
+#[allow(dead_code)]
+#[cfg(test)]
+pub fn new_mock_storage(total_size: usize) -> StorageClient {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
+    tokio::task::spawn(async move {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                Command::WriteBlock {
+                    global_offset,
+                    data,
+                    callback,
+                } => {
+                    if let Some(cb) = callback {
+                        cb.send(if global_offset + data.len() < total_size {
+                            Ok(())
+                        } else {
+                            Err(Error::InvalidLocation)
+                        })
+                        .unwrap();
+                    }
+                }
+                Command::ReadBlock {
+                    global_offset,
+                    length,
+                    callback,
+                } => {
+                    callback
+                        .send(if global_offset + length < total_size {
+                            Ok(vec![0; length])
+                        } else {
+                            Err(Error::InvalidLocation)
+                        })
+                        .unwrap();
+                }
+                Command::VerifyBlock {
+                    global_offset,
+                    length,
+                    expected_sha1: _,
+                    callback,
+                } => {
+                    callback
+                        .send(if global_offset + length < total_size {
+                            Ok(true)
+                        } else {
+                            Err(Error::InvalidLocation)
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    });
+    StorageClient { channel: tx }
+}
+
 impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
     pub async fn run(mut self) {
         while let Some(cmd) = self.channel.recv().await {
