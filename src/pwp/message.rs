@@ -251,6 +251,7 @@ pub struct BlockInfo {
     pub block_length: usize,
 }
 
+#[cfg_attr(test, derive(Debug))]
 #[derive(Eq, PartialEq)]
 pub enum UploaderMessage {
     Choke,

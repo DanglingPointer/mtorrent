@@ -69,7 +69,7 @@ macro_rules! inner {
     };
 }
 
-macro_rules! update_state {
+macro_rules! update_ctx {
     ($inner:expr) => {
         $inner
             .handle
@@ -117,10 +117,10 @@ pub async fn new_peer(
         state: Default::default(),
         local_pieces_snapshot: bitfield.clone(),
     });
-    if bitfield.iter().any(|bit| bit == true) {
+    if bitfield.any() {
         inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
     }
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(IdlePeer(inner))
 }
 
@@ -132,7 +132,7 @@ pub async fn activate(peer: IdlePeer) -> io::Result<LeechingPeer> {
         inner.state.am_choking = false;
     }
     if inner.state.peer_interested {
-        update_state!(inner);
+        update_ctx!(inner);
         Ok(LeechingPeer(inner))
     } else {
         let mut peer = IdlePeer(inner);
@@ -150,7 +150,7 @@ pub async fn deactivate(peer: LeechingPeer) -> io::Result<IdlePeer> {
     debug_assert!(inner.state.peer_interested && !inner.state.am_choking);
     inner.tx.send_message(pwp::UploaderMessage::Choke).await?;
     inner.state.am_choking = true;
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(IdlePeer(inner))
 }
 
@@ -182,7 +182,7 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
             Err(e) => return Err(e.into()),
         }
     }
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(to_enum!(inner))
 }
 
@@ -282,6 +282,6 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         log::warn!("Discarded {} requests from {}", discarded_requests, inner.tx.remote_ip());
     }
     result?;
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(to_enum!(inner))
 }

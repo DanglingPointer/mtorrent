@@ -68,7 +68,7 @@ macro_rules! inner {
     };
 }
 
-macro_rules! update_state {
+macro_rules! update_ctx {
     ($inner:expr) => {
         $inner
             .handle
@@ -97,7 +97,17 @@ pub async fn new_peer(
         Err(pwp::ChannelError::Timeout) => (),
         Err(e) => return Err(e.into()),
     }
-    update_state!(inner);
+    // process queued msgs (e.g. Have's) if any
+    loop {
+        match inner.rx.receive_message_timed(sec!(0)).await {
+            Ok(msg) => {
+                update_state_with_msg(&mut inner, &msg);
+            }
+            Err(pwp::ChannelError::Timeout) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    update_ctx!(inner);
     Ok(IdlePeer(inner))
 }
 
@@ -109,7 +119,7 @@ pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
         inner.state.am_interested = true;
     }
     if !inner.state.peer_choking {
-        update_state!(inner);
+        update_ctx!(inner);
         Ok(SeedingPeer(inner))
     } else {
         let mut peer = to_enum!(inner);
@@ -127,7 +137,7 @@ pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
     inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
     inner.state.am_interested = false;
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(IdlePeer(inner))
 }
 
@@ -152,7 +162,7 @@ pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
             Err(e) => return Err(e.into()),
         }
     }
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(to_enum!(inner))
 }
 
@@ -264,7 +274,7 @@ pub async fn get_pieces(
                             panic!("Failed to start write ({info}) to storage: {e}")
                         });
                         requests.remove(&info);
-                        update_state!(inner);
+                        update_ctx!(inner);
                     } else {
                         log::error!(
                             "Received invalid block ({info}) from {}",
@@ -286,7 +296,7 @@ pub async fn get_pieces(
     };
 
     try_join!(verify_pieces, download_pieces)?;
-    update_state!(inner);
+    update_ctx!(inner);
     Ok(to_enum!(inner))
 }
 

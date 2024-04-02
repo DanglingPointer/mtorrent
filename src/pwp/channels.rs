@@ -1097,4 +1097,40 @@ mod tests {
             })
             .await;
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_channel_receive_zero_timeout() {
+        let socket = MockBuilder::new()
+            .read(msgs![
+                PeerMessage::Have { piece_index: 42 },
+                PeerMessage::Have { piece_index: 43 },
+            ])
+            .wait(sec!(0))
+            .build();
+
+        let (mut download, _upload, _, runner) = setup_channels(
+            socket,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+            false,
+        );
+
+        task::spawn(async move {
+            let _ = runner.await;
+        });
+
+        task::yield_now().await;
+
+        let res = download.1.receive_message_timed(sec!(0)).await;
+        let msg = res.unwrap();
+        assert!(matches!(msg, UploaderMessage::Have { piece_index: 42 }));
+
+        let res = download.1.receive_message_timed(sec!(0)).await;
+        let msg = res.unwrap();
+        assert!(matches!(msg, UploaderMessage::Have { piece_index: 43 }));
+
+        let res = download.1.receive_message_timed(sec!(0)).await;
+        let err = res.unwrap_err();
+        assert!(matches!(err, ChannelError::Timeout));
+    }
 }
