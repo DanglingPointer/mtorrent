@@ -375,13 +375,13 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
                 let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg!(msg, &mut self.dl_msg_source);
             }
-            ul_msg = self.ul_msg_source.next().fuse() => {
-                let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, &mut self.ul_msg_source);
-            }
             ext_msg = next_ext_msg_fut.fuse() => {
                 let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
+            }
+            ul_msg = self.ul_msg_source.next().fuse() => {
+                let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
+                process_msg!(msg, &mut self.ul_msg_source);
             }
             _ = sleep(Self::PING_INTERVAL).fuse() => {
                 let ping_msg = PeerMessage::KeepAlive;
@@ -786,7 +786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_writing_downloader_messages_takes_priority_over_uploader_messages() {
+    async fn test_writing_downloader_message_takes_priority_over_uploader_message() {
         for _ in 0..50 {
             let socket = MockBuilder::new()
                 .write(msgs![PeerMessage::Interested])
@@ -821,6 +821,56 @@ mod tests {
 
             while matches!(send_uploader_msg_fut.poll(), Poll::Pending)
                 && matches!(send_downloader_msg_fut.poll(), Poll::Pending)
+            {
+                assert_pending!(runner_fut.poll());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_writing_extended_message_takes_priority_over_uploader_message() {
+        for _ in 0..50 {
+            let socket = MockBuilder::new()
+                .write(msgs![PeerMessage::Extended {
+                    id: 0,
+                    data: Vec::from(
+                        b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e"
+                    ),
+                }])
+                .write(msgs![PeerMessage::Bitfield {
+                    bitfield: Bitfield::repeat(true, 42),
+                }])
+                .wait(sec!(0))
+                .build();
+            let (_download, mut upload, extended, runner) = setup_channels(
+                socket,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+                HANDSHAKE_WITH_BEP10_SUPPORT,
+                true,
+            );
+            let mut extended = extended.unwrap();
+
+            let mut send_uploader_msg_fut =
+                spawn(upload.0.send_message(UploaderMessage::Bitfield(Bitfield::repeat(true, 42))));
+            let mut send_extended_msg_fut = spawn(extended.0.send_message((
+                ExtendedMessage::Handshake(Box::new(HandshakeData {
+                    extensions: HashMap::from([
+                        (Extension::Metadata, 1),
+                        (Extension::PeerExchange, 2),
+                    ]),
+                    listen_port: Some(6881),
+                    client_type: Some("µTorrent 1.2".to_owned()),
+                    ..Default::default()
+                })),
+                42,
+            )));
+            let mut runner_fut = spawn(runner);
+
+            assert_pending!(send_uploader_msg_fut.poll());
+            assert_pending!(send_extended_msg_fut.poll());
+
+            while matches!(send_uploader_msg_fut.poll(), Poll::Pending)
+                && matches!(send_extended_msg_fut.poll(), Poll::Pending)
             {
                 assert_pending!(runner_fut.poll());
             }

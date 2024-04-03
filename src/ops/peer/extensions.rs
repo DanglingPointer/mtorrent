@@ -26,9 +26,10 @@ pub async fn new_peer(
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
+    initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with_ctx(|ctx| ctx.metainfo.size());
-    let mut inner = Box::new(Data {
+    let inner = Box::new(Data {
         handle,
         rx,
         tx,
@@ -37,6 +38,8 @@ pub async fn new_peer(
         sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
         last_shared_peers: Default::default(),
     });
+    // send local handshake
+    let Peer(mut inner) = send_handshake(Peer(inner), initial_extensions).await?;
     // try wait for remote handshake
     match inner.rx.receive_message_timed(sec!(1)).await {
         Ok(pwp::ExtendedMessage::Handshake(hs)) => {

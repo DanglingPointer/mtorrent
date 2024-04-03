@@ -193,7 +193,6 @@ async fn run_extensions(
     peer_discovered_channel: fifo::Sender<SocketAddr>,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    peer = extensions::send_handshake(peer, ALL_SUPPORTED_EXTENSIONS).await?;
 
     const PEX_INTERVAL: Duration = sec!(60);
     let mut next_pex_time = Instant::now();
@@ -247,13 +246,23 @@ async fn run_peer_connection(
     let handle_copy = ctx_handle.clone();
     let extensions_fut = async move {
         if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
-            Ok(Some(extensions::new_peer(handle_copy, rx, tx, metainfo_storage).await?))
+            Ok(Some(
+                extensions::new_peer(
+                    handle_copy,
+                    rx,
+                    tx,
+                    metainfo_storage,
+                    ALL_SUPPORTED_EXTENSIONS,
+                )
+                .await?,
+            ))
         } else {
             Ok(None)
         }
     };
 
-    let (download, upload, extensions) = try_join!(download_fut, upload_fut, extensions_fut)?;
+    // create extensions before upload so that we send extended handshake before bitfield
+    let (extensions, download, upload) = try_join!(extensions_fut, download_fut, upload_fut)?;
     try_join!(
         run_download(download.into(), remote_ip, ctx_handle.clone()),
         run_upload(upload.into(), remote_ip, ctx_handle.clone()),
