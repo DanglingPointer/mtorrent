@@ -4,7 +4,7 @@ pub mod fifo;
 pub mod ip;
 pub mod magnet;
 // pub mod matcher;
-pub mod meta;
+pub mod metainfo;
 pub mod peer_id;
 pub mod set;
 pub mod startup;

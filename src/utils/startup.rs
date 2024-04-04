@@ -1,18 +1,18 @@
-use super::meta;
+use super::metainfo;
 use crate::data;
 use std::path::{Path, PathBuf};
 use std::{fs, io, iter};
 
-pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<meta::Metainfo> {
+pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<metainfo::Metainfo> {
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let file_content = fs::read(metainfo_filepath)?;
-    let metainfo = meta::Metainfo::new(&file_content)
+    let metainfo = metainfo::Metainfo::new(&file_content)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid metainfo file"))?;
     Ok(metainfo)
 }
 
 pub fn create_content_storage(
-    metainfo: &meta::Metainfo,
+    metainfo: &metainfo::Metainfo,
     filedir: impl AsRef<Path>,
 ) -> io::Result<(data::StorageClient, data::StorageServer)> {
     let total_size = metainfo

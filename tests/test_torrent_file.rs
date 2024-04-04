@@ -1,5 +1,5 @@
 use mtorrent::tracker::utils;
-use mtorrent::utils::meta;
+use mtorrent::utils::metainfo;
 use mtorrent::utils::startup;
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,7 +22,7 @@ fn get_http_trackers<T: AsRef<str>>(trackers: impl IntoIterator<Item = T>) -> Ha
 #[test]
 fn test_read_example_torrent_file() {
     let data = fs::read("tests/assets/example.torrent").unwrap();
-    let info = meta::Metainfo::new(&data).unwrap();
+    let info = metainfo::Metainfo::new(&data).unwrap();
 
     let announce = info.announce().unwrap();
     assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {}", announce);
@@ -234,7 +234,7 @@ fn test_read_example_torrent_file() {
 #[test]
 fn test_read_torrent_file_without_announce_list() {
     let data = fs::read("tests/assets/pcap.torrent").unwrap();
-    let info = meta::Metainfo::new(&data).unwrap();
+    let info = metainfo::Metainfo::new(&data).unwrap();
 
     let announce = info.announce().unwrap();
     assert_eq!("http://localhost:8000/announce", announce, "announce: {}", announce);
@@ -265,7 +265,7 @@ fn count_files(dir: impl AsRef<Path>) -> io::Result<usize> {
 #[test]
 fn test_read_metainfo_and_spawn_files() {
     let data = fs::read("tests/assets/example.torrent").unwrap();
-    let info = meta::Metainfo::new(&data).unwrap();
+    let info = metainfo::Metainfo::new(&data).unwrap();
 
     let parent_dir = "test_read_metainfo_and_spawn_files_output";
     let filedir = Path::new(parent_dir).join("files");
@@ -291,7 +291,7 @@ fn test_read_metainfo_and_spawn_files() {
 #[test]
 fn test_read_metainfo_and_spawn_single_file() {
     let data = fs::read("tests/assets/pcap.torrent").unwrap();
-    let info = meta::Metainfo::new(&data).unwrap();
+    let info = metainfo::Metainfo::new(&data).unwrap();
 
     let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
     let filedir = Path::new(parent_dir).join("files");
@@ -315,12 +315,12 @@ fn test_read_metainfo_and_spawn_single_file() {
 #[test]
 fn test_read_incomplete_metainfo_file() {
     let data = fs::read("tests/assets/incomplete.torrent").unwrap();
-    let info = meta::Metainfo::new(&data).unwrap();
+    let info = metainfo::Metainfo::new(&data).unwrap();
 
-    let expected_metainfo: &[u8; 20] = &[
+    let expected_info_hash: &[u8; 20] = &[
         209, 68, 239, 216, 66, 44, 231, 247, 155, 34, 252, 154, 11, 67, 23, 64, 149, 2, 72, 89,
     ];
-    assert_eq!(expected_metainfo, info.info_hash());
+    assert_eq!(expected_info_hash, info.info_hash());
     assert_eq!(1470069860, info.length().unwrap());
     assert_eq!(
         "[ Torrent911.com ] Spider-Man.No.Way.Home.2021.FRENCH.BDRip.XviD-EXTREME.avi",

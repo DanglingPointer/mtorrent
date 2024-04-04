@@ -1,4 +1,4 @@
-use mtorrent::utils::{benc, meta};
+use mtorrent::utils::{benc, metainfo};
 use sha1_smol::Sha1;
 use std::{env, fs};
 
@@ -19,7 +19,7 @@ fn main() {
     };
 
     let source_content = fs::read(source).unwrap();
-    let metainfo = meta::Metainfo::new(&source_content).unwrap();
+    let metainfo = metainfo::Metainfo::new(&source_content).unwrap();
 
     let piece_count = metainfo.pieces().unwrap().count();
     let piece_length = metainfo.piece_length().unwrap();

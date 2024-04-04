@@ -1,4 +1,4 @@
-use crate::utils::meta::Metainfo;
+use crate::utils::metainfo::Metainfo;
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 

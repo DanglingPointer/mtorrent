@@ -2,7 +2,7 @@ use super::ctrl;
 use crate::pwp::Bitfield;
 use crate::sec;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{config, magnet, meta};
+use crate::utils::{config, magnet, metainfo};
 use crate::{data, pwp};
 use core::fmt;
 use std::collections::HashSet;
@@ -110,7 +110,7 @@ pub struct MainCtx {
     pub(super) pieces: Rc<data::PieceInfo>,
     pub(super) accountant: data::BlockAccountant,
     pub(super) piece_tracker: data::PieceTracker,
-    pub(super) metainfo: meta::Metainfo,
+    pub(super) metainfo: metainfo::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
     pub(super) pending_requests: pwp::PendingRequests,
     pub(super) const_data: ConstData,
@@ -118,7 +118,7 @@ pub struct MainCtx {
 
 impl MainCtx {
     pub fn new(
-        metainfo: meta::Metainfo,
+        metainfo: metainfo::Metainfo,
         local_peer_id: PeerId,
         pwp_listener_public_addr: SocketAddr,
     ) -> io::Result<Handle<Self>> {

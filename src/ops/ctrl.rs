@@ -1,5 +1,5 @@
 use super::ctx;
-use crate::utils::meta;
+use crate::utils::metainfo;
 use crate::{pwp, sec};
 use std::cmp;
 use std::collections::HashSet;
@@ -187,7 +187,7 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
     if ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
         false
     } else {
-        match meta::Metainfo::new(&ctx.metainfo) {
+        match metainfo::Metainfo::new(&ctx.metainfo) {
             Some(metainfo) if metainfo.info_hash() == ctx.magnet.info_hash() => true,
             _ => {
                 log::error!("Discarding corrupt metainfo");
