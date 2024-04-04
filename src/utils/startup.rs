@@ -1,5 +1,5 @@
+use super::meta;
 use crate::data;
-use crate::utils::{meta, worker};
 use std::path::{Path, PathBuf};
 use std::{fs, io, iter};
 
@@ -42,13 +42,4 @@ pub fn create_metainfo_storage(
         io::Error::new(io::ErrorKind::InvalidInput, "metainfo file has no filename")
     })?;
     Ok(data::new_async_storage(parent, iter::once((metainfo_filelen, PathBuf::from(filename))))?)
-}
-
-pub fn start_pwp() -> worker::rt::Handle {
-    worker::with_runtime(worker::rt::Config {
-        io_enabled: true,
-        time_enabled: true,
-        name: "pwp".to_string(),
-        ..Default::default()
-    })
 }

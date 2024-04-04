@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
 
-    let _sw = info_stopwatch!("mtorrentv2");
+    let _sw = info_stopwatch!("mtorrent");
 
     let mut args = std::env::args();
 
