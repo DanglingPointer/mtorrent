@@ -1,9 +1,9 @@
 use crate::data::Error;
-use crate::warn_stopwatch;
+use crate::{pwp, warn_stopwatch};
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::{error, fs, io};
+use std::{cmp, error, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
 pub type StorageServer = GenericStorageServer<fs::File>;
@@ -132,10 +132,20 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                 expected_sha1,
                 callback,
             } => {
-                let result = self.storage.read_block(global_offset, length).map(|data| {
-                    let computed_sha1: [u8; 20] = Sha1::from(data).digest().bytes();
-                    computed_sha1 == expected_sha1
-                });
+                let end = global_offset + length;
+                let mut buffer = [0u8; pwp::MAX_BLOCK_SIZE];
+                let mut sha1 = Sha1::new();
+                let result = (global_offset..end)
+                    .step_by(buffer.len())
+                    .try_for_each(|offset| {
+                        let bytes_to_read = cmp::min(buffer.len(), end - offset);
+                        let dest = &mut buffer[..bytes_to_read];
+                        self.storage.read_block_at(offset, dest).map(|_| sha1.update(dest))
+                    })
+                    .map(|_| {
+                        let computed_sha1: [u8; 20] = sha1.digest().bytes();
+                        computed_sha1 == expected_sha1
+                    });
                 let _ = callback.send(result);
             }
         }

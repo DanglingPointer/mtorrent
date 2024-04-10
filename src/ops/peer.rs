@@ -31,10 +31,10 @@ const MAX_PENDING_REQUESTS: usize = 1024 * 3;
 
 macro_rules! marshal_stream {
     ($stream:expr, $rt_handle:expr) => {{
-        // note: EnterGuard must NEVER live across a suspension point
-        let _g = $rt_handle.enter();
         let std_stream = $stream.into_std()?;
         std_stream.set_nodelay(true)?;
+        // note: EnterGuard must NEVER live across a suspension point
+        let _g = $rt_handle.enter();
         TcpStream::from_std(std_stream)?
     }};
 }
