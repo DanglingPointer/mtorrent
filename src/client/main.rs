@@ -78,7 +78,7 @@ pub async fn single_torrent(
     Ok(())
 }
 
-const MAX_PRELIMINARY_CONNECTIONS: usize = 10;
+const MAX_PRELIMINARY_CONNECTIONS: usize = 30;
 const MAX_PEER_CONNECTIONS: usize = 50;
 
 macro_rules! log {
@@ -127,6 +127,7 @@ async fn preliminary_stage(
         while let Some(peer_addr) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
+                    log::debug!("Connecting to {peer_addr}...");
                     ops::outgoing_preliminary_connection(peer_addr, permit).await.unwrap_or_else(
                         |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
                     );
