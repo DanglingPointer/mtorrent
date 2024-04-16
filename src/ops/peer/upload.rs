@@ -170,10 +170,10 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
                 }
                 match msg {
                     pwp::DownloaderMessage::Request(_) => {
-                        log::warn!("Received request from {} while idle", inner.rx.remote_ip())
+                        log::debug!("Ignoring request from {} while idle", inner.rx.remote_ip())
                     }
                     pwp::DownloaderMessage::Cancel(_) => {
-                        log::warn!("Received cancel from {} while idle", inner.rx.remote_ip())
+                        log::debug!("Ignoring cancel from {} while idle", inner.rx.remote_ip())
                     }
                     _ => (),
                 }
