@@ -291,15 +291,15 @@ pub async fn outgoing_pwp_connection(
     loop {
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
-        let connect_result = channels_for_outgoing_connection(
+        let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
             remote_ip,
             permit.0.pwp_worker_handle.clone(),
         )
-        .await;
-        let (download_chans, upload_chans, extended_chans) = connect_result?;
+        .await?;
+        let connected_time = Instant::now();
 
         let run_result = run_peer_connection(
             download_chans,
@@ -313,8 +313,9 @@ pub async fn outgoing_pwp_connection(
         .await;
 
         match run_result {
-            Err(e) if e.kind() != io::ErrorKind::Other => {
-                // ErrorKind::Other means we disconnected the peer intentionally
+            Err(e) if e.kind() != io::ErrorKind::Other && connected_time.elapsed() > sec!(5) => {
+                // ErrorKind::Other means we disconnected the peer intentionally, and
+                // <5s since connect means peer probably didn't like our handshake
                 log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting in 1s...");
                 time::sleep(sec!(1)).await;
             }
@@ -360,8 +361,7 @@ pub async fn incoming_pwp_connection(
     match run_result {
         Err(e) if e.kind() != io::ErrorKind::Other => {
             // ErrorKind::Other means we disconnected the peer intentionally
-            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting in 1s...");
-            time::sleep(sec!(1)).await;
+            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
             outgoing_pwp_connection(remote_ip, OutgoingConnectionPermit(permit.0)).await
         }
         Err(e) => Err(e),
