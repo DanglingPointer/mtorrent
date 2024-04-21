@@ -106,6 +106,7 @@ async fn preliminary_stage(
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
+    let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
 
     let metainfo_filepath = metainfo_dir
         .as_ref()
@@ -157,6 +158,10 @@ async fn preliminary_stage(
             Err(e) => log::error!("TCP listener exited: {e}"),
         }
     });
+
+    for peer_ip in extra_peers {
+        peer_discovered_sink.send(peer_ip);
+    }
 
     let tracker_ctx = ctx.clone();
     let tracker_config_dir = PathBuf::from(config_dir.as_ref());
