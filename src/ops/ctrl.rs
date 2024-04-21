@@ -114,7 +114,7 @@ pub fn active_download_next_action(
     }
 }
 
-const MAX_LEECH_COUNT: usize = 20;
+const MAX_LEECH_COUNT: usize = 5;
 
 fn should_seed_to_peer(state: &pwp::PeerState, leech_count: usize) -> bool {
     let is_active_seeder = || {
@@ -125,8 +125,8 @@ fn should_seed_to_peer(state: &pwp::PeerState, leech_count: usize) -> bool {
     };
     if !state.upload.peer_interested {
         false
-    } else if state.download.am_interested && state.download.peer_choking {
-        true
+    // } else if state.download.am_interested && state.download.peer_choking {
+    //     true
     } else {
         leech_count < MAX_LEECH_COUNT
             && (is_active_seeder()
