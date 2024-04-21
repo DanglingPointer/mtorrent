@@ -648,6 +648,7 @@ impl PeerExchangeData {
     const KEY_ADDED_V6: &'static str = "added6";
     const KEY_DROPPED_V4: &'static str = "dropped";
     const KEY_DROPPED_V6: &'static str = "dropped6";
+    const MAX_PEERS: usize = 50;
 
     fn decode(payload: &[u8]) -> Option<Self> {
         use benc::Element;
@@ -701,7 +702,7 @@ impl PeerExchangeData {
 
         let mut added_ipv4 = Vec::new();
         let mut added_ipv6 = Vec::new();
-        for addr in &self.added {
+        for addr in self.added.iter().take(Self::MAX_PEERS) {
             match addr {
                 SocketAddr::V4(addr) => {
                     added_ipv4.extend_from_slice(&addr.ip().octets());
@@ -718,7 +719,7 @@ impl PeerExchangeData {
 
         let mut dropped_ipv4 = Vec::new();
         let mut dropped_ipv6 = Vec::new();
-        for addr in &self.dropped {
+        for addr in self.dropped.iter().take(Self::MAX_PEERS) {
             match addr {
                 SocketAddr::V4(addr) => {
                     dropped_ipv4.extend_from_slice(&addr.ip().octets());
