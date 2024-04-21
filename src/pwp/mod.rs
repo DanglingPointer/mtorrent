@@ -7,7 +7,7 @@ mod requests;
 pub use channels::*;
 pub use handshake::{reserved_bits, Handshake};
 pub use message::{
-    Bitfield, BlockInfo, DownloaderMessage, ExtendedMessage, Extension, HandshakeData,
+    Bitfield, BlockInfo, DownloaderMessage, ExtendedHandshake, ExtendedMessage, Extension,
     PeerExchangeData, UploaderMessage,
 };
 pub(crate) use peer_states::*;

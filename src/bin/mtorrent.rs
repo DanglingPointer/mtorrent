@@ -35,14 +35,14 @@ fn main() -> io::Result<()> {
         std::env::current_dir()?
     };
 
-    let storage_runtime = worker::with_runtime(worker::rt::Config {
+    let storage_worker = worker::with_runtime(worker::rt::Config {
         name: "storage".to_owned(),
         io_enabled: false,
         time_enabled: false,
         ..Default::default()
     });
 
-    let pwp_runtime = worker::with_runtime(worker::rt::Config {
+    let pwp_worker = worker::with_runtime(worker::rt::Config {
         name: "pwp".to_owned(),
         io_enabled: true,
         time_enabled: true,
@@ -56,8 +56,8 @@ fn main() -> io::Result<()> {
             peer_id,
             &metainfo_uri,
             output_dir,
-            pwp_runtime.runtime_handle(),
-            storage_runtime.runtime_handle(),
+            pwp_worker.runtime_handle(),
+            storage_worker.runtime_handle(),
         ),
     )?;
 

@@ -278,7 +278,7 @@ pub enum Extension {
 }
 
 #[derive(Default, PartialEq, Eq)]
-pub struct HandshakeData {
+pub struct ExtendedHandshake {
     pub extensions: HashMap<Extension, u8>,
     pub listen_port: Option<u16>,
     pub client_type: Option<String>,
@@ -297,7 +297,7 @@ pub struct PeerExchangeData {
 
 #[derive(Eq, PartialEq)]
 pub enum ExtendedMessage {
-    Handshake(Box<HandshakeData>),
+    Handshake(Box<ExtendedHandshake>),
     MetadataRequest {
         piece: usize,
     },
@@ -318,7 +318,7 @@ impl fmt::Display for BlockInfo {
     }
 }
 
-impl fmt::Display for HandshakeData {
+impl fmt::Display for ExtendedHandshake {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ext=[{:?}]", self.extensions)?;
         if let Some(port) = self.listen_port {
@@ -523,7 +523,7 @@ impl Extension {
     }
 }
 
-impl HandshakeData {
+impl ExtendedHandshake {
     const KEY_M: &'static str = "m";
     const KEY_P: &'static str = "p";
     const KEY_V: &'static str = "v";
@@ -895,7 +895,7 @@ impl TryFrom<PeerMessage> for ExtendedMessage {
                 id: Extension::ID_HANDSHAKE,
                 ref data,
             } => {
-                let handshake = HandshakeData::decode(data).ok_or(msg)?;
+                let handshake = ExtendedHandshake::decode(data).ok_or(msg)?;
                 Ok(ExtendedMessage::Handshake(Box::new(handshake)))
             }
             PeerMessage::Extended {
@@ -985,7 +985,7 @@ mod tests {
         let payload =
             Vec::from(b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881e1:v13:\xc2\xb5Torrent 1.2e");
 
-        let parsed = HandshakeData::decode(&payload).unwrap();
+        let parsed = ExtendedHandshake::decode(&payload).unwrap();
         assert_eq!(
             HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
             parsed.extensions
@@ -1004,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_handshake_payload_is_serialized_correctly() {
-        let hs = HandshakeData {
+        let hs = ExtendedHandshake {
             extensions: HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
             listen_port: Some(6881),
             client_type: Some("µTorrent 1.2".to_owned()),

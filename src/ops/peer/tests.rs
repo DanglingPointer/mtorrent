@@ -48,7 +48,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     };
     let meta_fut = async move {
         let pwp::ExtendedChannels(mut tx, mut rx) = extended_chans;
-        let local_handshake = Box::new(pwp::HandshakeData {
+        let local_handshake = Box::new(pwp::ExtendedHandshake {
             extensions: super::ALL_SUPPORTED_EXTENSIONS
                 .iter()
                 .map(|e| (*e, e.local_id()))

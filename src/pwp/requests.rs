@@ -4,34 +4,34 @@ use std::net::SocketAddr;
 
 #[derive(Default)]
 pub struct PendingRequests {
-    piece_to_seeders: HashMap<usize, HashSet<SocketAddr>>,
+    piece_requested_from: HashMap<usize, HashSet<SocketAddr>>,
 }
 
 impl PendingRequests {
     pub fn add(&mut self, piece: usize, peer: &SocketAddr) {
-        self.piece_to_seeders.entry(piece).or_default().insert(*peer);
+        self.piece_requested_from.entry(piece).or_default().insert(*peer);
     }
 
     pub fn clear_requests_of(&mut self, piece: usize) {
-        self.piece_to_seeders.remove(&piece);
+        self.piece_requested_from.remove(&piece);
     }
 
     pub fn clear_requests_to(&mut self, peer: &SocketAddr) {
-        for peers in self.piece_to_seeders.values_mut() {
+        for peers in self.piece_requested_from.values_mut() {
             peers.remove(peer);
         }
     }
 
     pub fn is_piece_requested(&self, piece: usize) -> bool {
-        self.piece_to_seeders.get(&piece).is_some_and(|peers| !peers.is_empty())
+        self.piece_requested_from.get(&piece).is_some_and(|peers| !peers.is_empty())
     }
 }
 
 impl fmt::Display for PendingRequests {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let requested_pieces =
-            self.piece_to_seeders.iter().filter(|(_, peers)| !peers.is_empty()).count();
-        let request_count = self.piece_to_seeders.values().flatten().count();
+            self.piece_requested_from.iter().filter(|(_, peers)| !peers.is_empty()).count();
+        let request_count = self.piece_requested_from.values().flatten().count();
         write!(f, "pieces/requests={requested_pieces}/{request_count}")
     }
 }

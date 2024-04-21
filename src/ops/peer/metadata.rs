@@ -59,7 +59,7 @@ macro_rules! to_enum {
     };
 }
 
-fn get_metadata_ext_id(hs: &pwp::HandshakeData) -> io::Result<u8> {
+fn get_metadata_ext_id(hs: &pwp::ExtendedHandshake) -> io::Result<u8> {
     hs.extensions.get(&pwp::Extension::Metadata).cloned().ok_or_else(|| {
         io::Error::new(io::ErrorKind::Other, "peer does not support metadata extension")
     })
@@ -88,7 +88,7 @@ pub async fn new_peer(
     let pwp::ExtendedChannels(mut tx, mut rx) = extended_chans;
 
     // send local handshake
-    let local_handshake = Box::new(pwp::HandshakeData {
+    let local_handshake = Box::new(pwp::ExtendedHandshake {
         extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())]
             .into_iter()
             .collect(),

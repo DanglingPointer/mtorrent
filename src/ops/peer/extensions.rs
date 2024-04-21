@@ -72,7 +72,7 @@ pub async fn send_handshake(
         ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
     extensions.extend(enabled_extensions.into_iter().map(|e| (*e, e.local_id())));
 
-    let local_handshake = Box::new(pwp::HandshakeData {
+    let local_handshake = Box::new(pwp::ExtendedHandshake {
         extensions,
         listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
         client_type: Some(CLIENT_NAME.to_string()),

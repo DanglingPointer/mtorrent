@@ -564,7 +564,7 @@ mod tests {
             let ExtendedChannels(_tx, mut rx) = extended.unwrap();
             let result = rx.receive_message().await;
             let received = result.unwrap();
-            let expected_data = HandshakeData {
+            let expected_data = ExtendedHandshake {
                 extensions: HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
                 listen_port: Some(6881),
                 client_type: Some("µTorrent 1.2".to_owned()),
@@ -628,7 +628,7 @@ mod tests {
         let extended_fut = async move {
             let result = extended.unwrap().1.receive_message().await;
             let received = result.unwrap();
-            let expected_data = HandshakeData {
+            let expected_data = ExtendedHandshake {
                 extensions: HashMap::from([(Extension::Metadata, 1)]),
                 ..Default::default()
             };
@@ -744,7 +744,7 @@ mod tests {
         let result = tx.send_message((ExtendedMessage::MetadataReject { piece: 3 }, 1)).await;
         assert!(result.is_ok());
 
-        let hs_data = HandshakeData {
+        let hs_data = ExtendedHandshake {
             extensions: HashMap::from([(Extension::Metadata, 1), (Extension::PeerExchange, 2)]),
             listen_port: Some(6881),
             client_type: Some("µTorrent 1.2".to_owned()),
@@ -849,7 +849,7 @@ mod tests {
             let mut send_uploader_msg_fut =
                 spawn(upload.0.send_message(UploaderMessage::Bitfield(Bitfield::repeat(true, 42))));
             let mut send_extended_msg_fut = spawn(extended.0.send_message((
-                ExtendedMessage::Handshake(Box::new(HandshakeData {
+                ExtendedMessage::Handshake(Box::new(ExtendedHandshake {
                     extensions: HashMap::from([
                         (Extension::Metadata, 1),
                         (Extension::PeerExchange, 2),
