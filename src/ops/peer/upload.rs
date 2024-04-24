@@ -1,6 +1,6 @@
 use super::super::ctx;
 use super::MAX_PENDING_REQUESTS;
-use crate::utils::fifo;
+use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
 use std::io;
@@ -206,7 +206,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     debug_assert!(!inner.state.am_choking && inner.state.peer_interested);
 
     let (request_sink, request_src) = fifo::channel::<pwp::BlockInfo>();
-    let mut initial_state = inner.state.clone();
+    let mut state_copy = inner.state.clone();
     define_with_ctx!(inner.handle);
 
     let mut discarded_requests = 0u64;
@@ -242,6 +242,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
 
     let process_requests = async {
         let mut request_src = request_src;
+        let mut speed_measurer = bandwidth::BitrateGauge::new();
         let remote_ip = *inner.tx.remote_ip();
         while let Some(request) = request_src.next().await {
             let _sw = debug_stopwatch!("Serving request {} to {}", request, remote_ip);
@@ -270,14 +271,16 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
             let data = inner.storage.read_block(global_offset, request.block_length).await?;
             let length = data.len();
             inner.tx.send_message(pwp::UploaderMessage::Block(request, data)).await?;
-            inner.state.bytes_sent += length;
-            initial_state.bytes_sent += length;
-            with_ctx!(|ctx| ctx.peer_states.update_upload(&remote_ip, &initial_state));
+            state_copy.bytes_sent += length;
+            state_copy.last_bitrate_bps = speed_measurer.update(length).get_bps();
+            with_ctx!(|ctx| ctx.peer_states.update_upload(&remote_ip, &state_copy));
         }
         Ok(())
     };
 
     let result = try_join!(collect_requests, process_requests);
+    inner.state.bytes_sent = state_copy.bytes_sent;
+    inner.state.last_bitrate_bps = state_copy.last_bitrate_bps;
     if discarded_requests > 0 {
         log::warn!("Discarded {} requests from {}", discarded_requests, inner.tx.remote_ip());
     }

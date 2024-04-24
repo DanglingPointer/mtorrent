@@ -1,5 +1,5 @@
 use crate::ops::ctx;
-use crate::utils::fifo;
+use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
@@ -232,6 +232,7 @@ pub async fn get_pieces(
 
     let download_pieces = async {
         let verification_channel = piece_sink; // move so that it's dropped at the end
+        let mut speed_measurer = bandwidth::BitrateGauge::new();
         for piece_index in pieces {
             let received_and_verified =
                 with_ctx!(|ctx| ctx.piece_tracker.get_piece_owners(piece_index).is_none());
@@ -270,6 +271,7 @@ pub async fn get_pieces(
                 if let pwp::UploaderMessage::Block(info, data) = msg {
                     if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
                         inner.state.bytes_received += data.len();
+                        inner.state.last_bitrate_bps = speed_measurer.update(data.len()).get_bps();
                         inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
                             panic!("Failed to start write ({info}) to storage: {e}")
                         });

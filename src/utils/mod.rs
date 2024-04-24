@@ -1,3 +1,4 @@
+pub(crate) mod bandwidth;
 pub mod benc;
 pub mod config;
 pub mod fifo;

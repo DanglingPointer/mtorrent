@@ -9,6 +9,7 @@ pub struct DownloadState {
     pub am_interested: bool,
     pub peer_choking: bool,
     pub bytes_received: usize,
+    pub last_bitrate_bps: usize,
 }
 
 impl Default for DownloadState {
@@ -17,6 +18,7 @@ impl Default for DownloadState {
             am_interested: false,
             peer_choking: true,
             bytes_received: 0,
+            last_bitrate_bps: 0,
         }
     }
 }
@@ -25,8 +27,8 @@ impl fmt::Display for DownloadState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "am_interested={:<5} peer_choking={:<5} bytes_recv={:<12}",
-            self.am_interested, self.peer_choking, self.bytes_received
+            "am_interested={:<5} peer_choking={:<5} rx_bps={:<8} bytes_recv={:<12}",
+            self.am_interested, self.peer_choking, self.last_bitrate_bps, self.bytes_received
         )?;
         Ok(())
     }
@@ -38,6 +40,7 @@ pub struct UploadState {
     pub am_choking: bool,
     pub peer_interested: bool,
     pub bytes_sent: usize,
+    pub last_bitrate_bps: usize,
 }
 
 impl Default for UploadState {
@@ -46,6 +49,7 @@ impl Default for UploadState {
             am_choking: true,
             peer_interested: false,
             bytes_sent: 0,
+            last_bitrate_bps: 0,
         }
     }
 }
@@ -54,8 +58,8 @@ impl fmt::Display for UploadState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "peer_interested={:<5} am_choking={:<5} bytes_sent={:<12}",
-            self.peer_interested, self.am_choking, self.bytes_sent
+            "peer_interested={:<5} am_choking={:<5} tx_bps={:<8} bytes_sent={:<12}",
+            self.peer_interested, self.am_choking, self.last_bitrate_bps, self.bytes_sent
         )?;
         Ok(())
     }
