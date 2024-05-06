@@ -4,6 +4,9 @@ mod message;
 mod peer_states;
 mod requests;
 
+#[cfg(test)]
+pub(crate) mod testutils;
+
 pub use channels::*;
 pub use handshake::{reserved_bits, Handshake};
 pub use message::{

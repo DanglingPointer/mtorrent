@@ -10,6 +10,9 @@ pub use piece_info::PieceInfo;
 pub(crate) use piece_tracker::PieceTracker;
 pub use storage::{new_async_storage, Storage, StorageClient, StorageServer};
 
+#[cfg(test)]
+pub(crate) use storage::new_mock_storage;
+
 #[derive(Debug)]
 pub enum Error {
     IOError(io::Error),

@@ -1,16 +1,19 @@
 use crate::pwp::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, magnet, startup};
+use crate::{data, msgs};
 use crate::{ops::ctx, pwp, sec};
+use futures::future::LocalBoxFuture;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::Path;
-use std::{fs, iter};
-use tokio::net::TcpStream;
-use tokio::{io, task};
-use tokio::{join, net::TcpListener, runtime, time};
+use std::path::{Path, PathBuf};
+use std::{fs, iter, panic};
+use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::{join, runtime, task, time};
+use tokio_test::io::Builder as MockBuilder;
 
 async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_path: &'static str) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
@@ -230,104 +233,216 @@ fn compare_input_and_output(
     }
 }
 
-async fn pass_torrent_from_peer_to_peer(
-    metainfo_filepath: &'static str,
-    output_dir: &'static str,
-    input_dir: &'static str,
-) {
-    let downloader_peer_id = [b'd'; 20];
-    let downloader_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
-    let uploader_peer_id = [b'u'; 20];
-    let uploader_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+// ------------------------------------------------------------------------------------------------
 
-    let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
+trait PeerSocket: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 
-    let downloader_task = async move {
-        let metainfo = startup::read_metainfo(metainfo_filepath).unwrap();
-        let (content_storage, content_storage_server) =
-            startup::create_content_storage(&metainfo, output_dir).unwrap();
-        task::spawn(async move {
-            content_storage_server.run().await;
-        });
+impl<T> PeerSocket for T where T: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 
-        let remote_hs = pwp::Handshake {
-            peer_id: uploader_peer_id,
-            info_hash: *metainfo.info_hash(),
-            ..Default::default()
+#[derive(Default)]
+struct PeerBuilder {
+    socket: Option<Box<dyn PeerSocket>>,
+    metainfo_uri: Option<String>,
+    remote_ip: Option<SocketAddr>,
+    local_ip: Option<SocketAddr>,
+    remote_peer_id: Option<PeerId>,
+    local_peer_id: Option<PeerId>,
+    content_path: Option<PathBuf>,
+    extensions_enabled: bool,
+    has_all_pieces: bool,
+}
+
+#[allow(dead_code)]
+impl PeerBuilder {
+    fn new() -> Self {
+        let orig_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            orig_hook(panic_info);
+            std::process::exit(1);
+        }));
+        Self::default()
+    }
+    fn with_socket(mut self, socket: impl PeerSocket) -> Self {
+        self.socket = Some(Box::new(socket));
+        self
+    }
+    fn with_metainfo_file(mut self, metainfo_path: &str) -> Self {
+        self.metainfo_uri = Some(metainfo_path.to_owned());
+        self
+    }
+    fn with_magnet_link(mut self, magnet_link: &str) -> Self {
+        self.metainfo_uri = Some(magnet_link.to_owned());
+        self
+    }
+    fn with_remote_ip(mut self, ip: SocketAddr) -> Self {
+        self.remote_ip = Some(ip);
+        self
+    }
+    fn with_local_ip(mut self, ip: SocketAddr) -> Self {
+        self.local_ip = Some(ip);
+        self
+    }
+    fn with_remote_peer_id(mut self, id: impl Into<PeerId>) -> Self {
+        self.remote_peer_id = Some(id.into());
+        self
+    }
+    fn with_local_peer_id(mut self, id: impl Into<PeerId>) -> Self {
+        self.local_peer_id = Some(id.into());
+        self
+    }
+    fn with_content_storage(mut self, data_path: impl AsRef<Path>) -> Self {
+        self.content_path = Some(data_path.as_ref().into());
+        self
+    }
+    fn with_extensions(mut self) -> Self {
+        self.extensions_enabled = true;
+        self
+    }
+    fn with_all_pieces(mut self) -> Self {
+        self.has_all_pieces = true;
+        self
+    }
+    #[must_use]
+    fn build_main(self) -> (ctx::Handle<ctx::MainCtx>, LocalBoxFuture<'static, io::Result<()>>) {
+        let metainfo = startup::read_metainfo(
+            self.metainfo_uri.as_deref().unwrap_or("tests/assets/zeroed_example.torrent"),
+        )
+        .unwrap();
+        let content_storage = if let Some(content_path) = self.content_path {
+            let (client, content_storage_server) =
+                startup::create_content_storage(&metainfo, content_path).unwrap();
+            task::spawn(async move {
+                content_storage_server.run().await;
+            });
+            client
+        } else {
+            data::new_mock_storage(usize::MAX)
         };
-        let (dlchans, ulchans, extchans) =
-            pwp::channels_from_mock(uploader_ip, remote_hs, false, downloader_sock);
-        let mut ctx_handle =
-            ctx::MainCtx::new(metainfo, PeerId::from(&downloader_peer_id), downloader_ip).unwrap();
+        let metainfo_storage = match (self.extensions_enabled, self.metainfo_uri) {
+            (true, Some(metainfo_path)) => {
+                let (client, metainfo_storage_server) =
+                    startup::create_metainfo_storage(metainfo_path).unwrap();
+                task::spawn(async move {
+                    metainfo_storage_server.run().await;
+                });
+                client
+            }
+            _ => data::new_mock_storage(usize::MAX),
+        };
+        let (dlchans, ulchans, extchans) = pwp::channels_from_mock(
+            self.remote_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 6666)),
+            pwp::Handshake {
+                peer_id: *self.remote_peer_id.unwrap_or(PeerId::from(&[b'r'; 20])),
+                info_hash: *metainfo.info_hash(),
+                reserved: pwp::reserved_bits(self.extensions_enabled),
+            },
+            self.extensions_enabled,
+            self.socket.unwrap_or_else(|| Box::new(io::empty())),
+        );
+        let mut ctx_handle = ctx::MainCtx::new(
+            metainfo,
+            self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
+            self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777)),
+        )
+        .unwrap();
+        if self.has_all_pieces {
+            ctx_handle.with_ctx(|ctx| {
+                let piece_count = ctx.pieces.piece_count();
+                for piece_index in 0..piece_count {
+                    assert!(ctx.accountant.submit_piece(piece_index));
+                    ctx.piece_tracker.forget_piece(piece_index);
+                }
+            });
+        }
         let (sink, _src) = fifo::channel();
         let run_future = super::run_peer_connection(
             dlchans,
             ulchans,
             extchans,
-            content_storage.clone(),
-            content_storage, // metainfo storage (hack)
+            content_storage,
+            metainfo_storage,
             ctx_handle.clone(),
             sink,
         );
-        task::spawn_local(async move {
-            let _ = run_future.await;
-        });
 
-        loop {
-            let finished = ctx_handle.with_ctx(|ctx| {
-                ctx.accountant.missing_bytes() == 0
-                    && ctx.piece_tracker.get_rarest_pieces().count() == 0
-            });
-            if finished {
-                break;
-            } else {
-                time::sleep(sec!(1)).await;
-            }
-        }
-    };
+        (ctx_handle, Box::pin(run_future))
+    }
+    #[must_use]
+    fn build_preliminary(
+        self,
+    ) -> (ctx::Handle<ctx::PreliminaryCtx>, LocalBoxFuture<'static, io::Result<()>>) {
+        let magnet_link = self.metainfo_uri.unwrap_or(
+            "magnet:?xt=urn:btih:77c09d63baf907ceeed366e2bdd687ca37cc4098&dn=Star.Trek.Voyager.S05.DVDRip.x264-MARS%5brartv%5d&tr=http%3a%2f%2ftracker.trackerfix.com%3a80%2fannounce&tr=udp%3a%2f%2f9.rarbg.me%3a2750%2fannounce&tr=udp%3a%2f%2f9.rarbg.to%3a2930%2fannounce"
+                .to_owned());
 
-    let uploader_task = async move {
-        let metainfo = startup::read_metainfo(metainfo_filepath).unwrap();
-        let (content_storage, content_storage_server) =
-            startup::create_content_storage(&metainfo, input_dir).unwrap();
-        task::spawn(async move {
-            content_storage_server.run().await;
-        });
+        let magnet_link: magnet::MagnetLink = magnet_link.parse().unwrap();
 
-        let remote_hs = pwp::Handshake {
-            peer_id: downloader_peer_id,
-            info_hash: *metainfo.info_hash(),
-            ..Default::default()
-        };
-        let (dlchans, ulchans, extchans) =
-            pwp::channels_from_mock(downloader_ip, remote_hs, false, uploader_sock);
+        let (dlchans, ulchans, extchans) = pwp::channels_from_mock(
+            self.remote_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 6666)),
+            pwp::Handshake {
+                peer_id: *self.remote_peer_id.unwrap_or(PeerId::from(&[b'r'; 20])),
+                info_hash: *magnet_link.info_hash(),
+                reserved: pwp::reserved_bits(true),
+            },
+            true,
+            self.socket.unwrap_or_else(|| Box::new(io::empty())),
+        );
 
-        let mut ctx_handle =
-            ctx::MainCtx::new(metainfo, PeerId::from(&downloader_peer_id), downloader_ip).unwrap();
-        ctx_handle.with_ctx(|ctx| {
-            let piece_count = ctx.metainfo.pieces().unwrap().count();
-            for piece_index in 0..piece_count {
-                assert!(ctx.accountant.submit_piece(piece_index));
-                ctx.piece_tracker.forget_piece(piece_index);
-            }
-        });
+        let ctx_handle = ctx::PreliminaryCtx::new(
+            magnet_link,
+            self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
+            self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777)),
+        );
+        let run_future =
+            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone());
 
-        let (sink, _src) = fifo::channel();
-        let _ = super::run_peer_connection(
-            dlchans,
-            ulchans,
-            extchans,
-            content_storage.clone(),
-            content_storage, // metainfo storage (hack)
-            ctx_handle,
-            sink,
-        )
-        .await;
-    };
+        (ctx_handle, Box::pin(run_future))
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+async fn pass_torrent_from_peer_to_peer(
+    metainfo_filepath: &'static str,
+    output_dir: &'static str,
+    input_dir: &'static str,
+) {
+    let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
 
     let tasks = task::LocalSet::new();
-    tasks.spawn_local(uploader_task);
-    tasks.run_until(time::timeout(sec!(30), downloader_task)).await.unwrap();
+
+    let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
+        .with_socket(downloader_sock)
+        .with_metainfo_file(metainfo_filepath)
+        .with_content_storage(output_dir)
+        .build_main();
+
+    let (_, uploader_fut) = PeerBuilder::new()
+        .with_socket(uploader_sock)
+        .with_all_pieces()
+        .with_metainfo_file(metainfo_filepath)
+        .with_content_storage(input_dir)
+        .build_main();
+
+    tasks.spawn_local(async move {
+        let _ = join!(downloader_fut, uploader_fut);
+    });
+    tasks
+        .run_until(time::timeout(sec!(30), async move {
+            loop {
+                let finished = downloader_ctx_handle.with_ctx(|ctx| {
+                    ctx.accountant.missing_bytes() == 0
+                        && ctx.piece_tracker.get_rarest_pieces().count() == 0
+                });
+                if finished {
+                    break;
+                } else {
+                    time::sleep(sec!(1)).await;
+                }
+            }
+        }))
+        .await
+        .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -374,66 +489,73 @@ async fn test_pass_metadata_from_peer_to_peer() {
 
     let metainfo_content = fs::read(metainfo_filepath).unwrap();
 
-    let downloader_peer_id = [b'd'; 20];
-    let downloader_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
-    let uploader_peer_id = [b'u'; 20];
-    let uploader_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
-
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
 
-    let downloader_task = async move {
-        let magnet_link: magnet::MagnetLink = magnet.parse().unwrap();
-
-        let remote_hs = pwp::Handshake {
-            peer_id: uploader_peer_id,
-            info_hash: *magnet_link.info_hash(),
-            reserved: pwp::reserved_bits(true),
-        };
-        let (dlchans, ulchans, extchans) =
-            pwp::channels_from_mock(uploader_ip, remote_hs, true, downloader_sock);
-        let mut ctx_handle =
-            ctx::PreliminaryCtx::new(magnet_link, PeerId::from(&downloader_peer_id), downloader_ip);
-        let _ = super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone()).await;
-
-        ctx_handle.with_ctx(|ctx| {
-            assert!(!ctx.metainfo_pieces.is_empty());
-            assert!(ctx.metainfo_pieces.all());
-            assert_eq!(metainfo_content, ctx.metainfo);
-        });
-    };
-
-    let uploader_task = async move {
-        let metainfo = startup::read_metainfo(metainfo_filepath).unwrap();
-
-        let (metainfo_storage, metainfo_storage_server) =
-            startup::create_metainfo_storage(metainfo_filepath).unwrap();
-        task::spawn(async move {
-            metainfo_storage_server.run().await;
-        });
-
-        let remote_hs = pwp::Handshake {
-            peer_id: downloader_peer_id,
-            info_hash: *metainfo.info_hash(),
-            reserved: pwp::reserved_bits(true),
-        };
-        let (dlchans, ulchans, extchans) =
-            pwp::channels_from_mock(downloader_ip, remote_hs, true, uploader_sock);
-        let ctx_handle =
-            ctx::MainCtx::new(metainfo, PeerId::from(&uploader_peer_id), uploader_ip).unwrap();
-        let (sink, _src) = fifo::channel();
-        let _ = super::run_peer_connection(
-            dlchans,
-            ulchans,
-            extchans,
-            metainfo_storage.clone(), // content storage (hack)
-            metainfo_storage,
-            ctx_handle,
-            sink,
-        )
-        .await;
-    };
-
     let tasks = task::LocalSet::new();
-    tasks.spawn_local(uploader_task);
-    tasks.run_until(time::timeout(sec!(30), downloader_task)).await.unwrap();
+
+    let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
+        .with_socket(downloader_sock)
+        .with_magnet_link(magnet)
+        .build_preliminary();
+
+    let (_, uploader_fut) = PeerBuilder::new()
+        .with_socket(uploader_sock)
+        .with_metainfo_file(metainfo_filepath)
+        .with_extensions()
+        .build_main();
+
+    tasks.spawn_local(uploader_fut);
+    tasks
+        .run_until(time::timeout(sec!(30), async move {
+            let _ = downloader_fut.await;
+            downloader_ctx_handle.with_ctx(|ctx| {
+                assert!(!ctx.metainfo_pieces.is_empty());
+                assert!(ctx.metainfo_pieces.all());
+                assert_eq!(metainfo_content, ctx.metainfo);
+            });
+        }))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_send_extended_handshake_before_bitfield() {
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
+        .init();
+
+    let metainfo_filepath = "tests/assets/screenshots.torrent";
+    let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
+    let socket = MockBuilder::new()
+        .write(&msgs![pwp::ExtendedMessage::Handshake(Box::new(
+            pwp::ExtendedHandshake {
+                extensions: super::ALL_SUPPORTED_EXTENSIONS
+                    .iter()
+                    .map(|e| (*e, e.local_id()))
+                    .collect(),
+                listen_port: Some(local_ip.port()),
+                client_type: Some(super::CLIENT_NAME.to_string()),
+                yourip: Some(remote_ip.ip()),
+                metadata_size: Some(1724),
+                request_limit: Some(super::MAX_PENDING_REQUESTS),
+                ..Default::default()
+            }
+        ))])
+        .write(b"\x00\x00\x00\x0A\x05\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x80") // bitfield
+        .build();
+
+    let (_, future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_local_ip(local_ip)
+        .with_remote_ip(remote_ip)
+        .with_metainfo_file(metainfo_filepath)
+        .with_extensions()
+        .with_all_pieces()
+        .build_main();
+
+    let _ = time::timeout(sec!(30), future).await.unwrap();
 }

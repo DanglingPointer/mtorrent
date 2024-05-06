@@ -39,9 +39,8 @@ fn async_generic_storage<F: RandomAccessReadWrite>(
     )
 }
 
-#[allow(dead_code)]
 #[cfg(test)]
-pub fn new_mock_storage(total_size: usize) -> StorageClient {
+pub(crate) fn new_mock_storage(total_size: usize) -> StorageClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     tokio::task::spawn(async move {
         while let Some(cmd) = rx.recv().await {
