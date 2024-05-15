@@ -139,6 +139,10 @@ impl PeerStates {
         self.leeches.len()
     }
 
+    pub fn leeches(&self) -> &HashSet<SocketAddr> {
+        &self.leeches
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
         self.peers.iter()
     }

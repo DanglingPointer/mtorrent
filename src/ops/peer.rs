@@ -11,7 +11,7 @@ use super::{ctrl, ctx};
 use crate::utils::fifo;
 use crate::utils::peer_id::PeerId;
 use crate::{data, pwp, sec};
-use std::io;
+use std::{cmp, io};
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
 use tokio::time::{self, Instant};
@@ -159,26 +159,35 @@ async fn run_upload(
     mut ctx_handle: MainHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
+    macro_rules! limited {
+        // because we need to update the peer (send Have's) periodically
+        ($timeout:expr) => {
+            cmp::min(sec!(60), $timeout)
+        };
+    }
     loop {
         peer = upload::update_peer(peer).await?;
         match peer {
             upload::Peer::Idle(idling_peer) => {
-                match with_ctx!(|ctx| ctrl::idle_upload_next_action(&remote_ip, ctx)) {
-                    ctrl::IdleUploadAction::ActivateUpload => {
-                        peer = upload::activate(idling_peer).await?.into();
+                match with_ctx!(|ctx| ctrl::idle_upload_next_action(&remote_ip, &ctx.peer_states)) {
+                    ctrl::IdleUploadAction::ActivateUploadAndServe(duration) => {
+                        let leeching_peer = upload::activate(idling_peer).await?;
+                        peer = upload::serve_pieces(leeching_peer, limited!(duration)).await?;
                     }
                     ctrl::IdleUploadAction::Linger(timeout) => {
-                        peer = upload::linger(idling_peer, timeout).await?;
+                        peer = upload::linger(idling_peer, limited!(timeout)).await?;
                     }
                 }
             }
             upload::Peer::Leech(leeching_peer) => {
-                match with_ctx!(|ctx| ctrl::active_upload_next_action(&remote_ip, ctx)) {
-                    ctrl::LeechUploadAction::DeactivateUpload => {
-                        peer = upload::deactivate(leeching_peer).await?.into();
+                match with_ctx!(|ctx| ctrl::active_upload_next_action(&remote_ip, &ctx.peer_states))
+                {
+                    ctrl::LeechUploadAction::DeactivateUploadAndLinger(timeout) => {
+                        let idling_peer = upload::deactivate(leeching_peer).await?;
+                        peer = upload::linger(idling_peer, limited!(timeout)).await?;
                     }
                     ctrl::LeechUploadAction::Serve(duration) => {
-                        peer = upload::serve_pieces(leeching_peer, duration).await?;
+                        peer = upload::serve_pieces(leeching_peer, limited!(duration)).await?;
                     }
                 }
             }
