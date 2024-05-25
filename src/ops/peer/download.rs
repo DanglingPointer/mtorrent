@@ -1,6 +1,6 @@
 use crate::ops::ctx;
 use crate::utils::{bandwidth, fifo};
-use crate::{data, debug_stopwatch, pwp, sec};
+use crate::{data, debug_stopwatch, min, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -122,13 +122,32 @@ pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
         update_ctx!(inner);
         Ok(SeedingPeer(inner))
     } else {
+        const RETRY_INTERVAL: Duration = min!(1);
+        let max_retry_count = if inner.state.bytes_received == 0 {
+            5
+        } else {
+            u32::MAX
+        };
+
+        let ip = *inner.tx.remote_ip();
         let mut peer = to_enum!(inner);
-        loop {
-            peer = linger(peer, Duration::MAX).await?;
-            if let Peer::Seeder(seeder) = peer {
-                break Ok(seeder);
+
+        for retry in 0..max_retry_count {
+            let next_retry_at = Instant::now() + RETRY_INTERVAL;
+
+            while Instant::now() < next_retry_at {
+                peer = linger(peer, next_retry_at).await?;
+                if let Peer::Seeder(seeder) = peer {
+                    log::debug!("Activated download from {} after {} retries", ip, retry);
+                    return Ok(seeder);
+                }
             }
+            log::debug!("Retrying to activate download from {}, attempt {}", ip, retry + 1);
+            let inner = inner!(&mut peer);
+            inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
+            inner.tx.send_message(pwp::DownloaderMessage::Interested).await?;
         }
+        Err(io::Error::new(io::ErrorKind::Other, "peer is parasite"))
     }
 }
 
@@ -141,15 +160,10 @@ pub async fn deactivate(peer: SeedingPeer) -> io::Result<IdlePeer> {
     Ok(IdlePeer(inner))
 }
 
-pub async fn linger(peer: Peer, timeout: Duration) -> io::Result<Peer> {
+pub async fn linger(peer: Peer, deadline: Instant) -> io::Result<Peer> {
     let mut inner = inner!(peer);
-    let start_time = Instant::now();
     loop {
-        match inner
-            .rx
-            .receive_message_timed(timeout.saturating_sub(start_time.elapsed()))
-            .await
-        {
+        match inner.rx.receive_message_timed(deadline - Instant::now()).await {
             Ok(msg) => {
                 if update_state_with_msg(&mut inner, &msg) {
                     break;

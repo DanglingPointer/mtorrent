@@ -1,10 +1,10 @@
 use super::ctx;
 use crate::utils::metainfo;
-use crate::{pwp, sec};
-use std::cmp;
+use crate::{min, pwp, sec};
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::{cmp, io};
 
 const MAX_SEEDER_COUNT: usize = 50;
 
@@ -273,6 +273,29 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
 
 pub fn can_serve_metadata(_peer_addr: &SocketAddr, _ctx: &ctx::MainCtx) -> bool {
     true
+}
+
+pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::Result<()> {
+    let state = ctx
+        .peer_states
+        .get(peer_addr)
+        .unwrap_or_else(|| panic!("Unknown peer: {}", peer_addr));
+
+    const TIMEOUT: Duration = min!(5);
+
+    let owns_missing_piece = || {
+        ctx.piece_tracker
+            .get_peer_pieces(peer_addr)
+            .is_some_and(|mut it| it.next().is_some())
+    };
+    if state.last_upload_time.elapsed() >= TIMEOUT
+        && state.last_download_time.elapsed() >= TIMEOUT
+        && !owns_missing_piece()
+    {
+        Err(io::Error::new(io::ErrorKind::Other, "peer is useless"))
+    } else {
+        Ok(())
+    }
 }
 
 // ------------------------------------------------------------------------------------------------

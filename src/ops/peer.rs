@@ -125,6 +125,7 @@ async fn run_download(
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
+        with_ctx!(|ctx| ctrl::validate_peer_utility(&remote_ip, ctx))?;
         match peer {
             download::Peer::Idle(idling_peer) => {
                 match with_ctx!(|ctx| ctrl::idle_download_next_action(&remote_ip, ctx)) {
@@ -132,7 +133,8 @@ async fn run_download(
                         peer = download::activate(idling_peer).await?.into();
                     }
                     ctrl::IdleDownloadAction::WaitForUpdates(timeout) => {
-                        peer = download::linger(idling_peer.into(), timeout).await?;
+                        peer =
+                            download::linger(idling_peer.into(), Instant::now() + timeout).await?;
                     }
                 }
             }
@@ -142,7 +144,8 @@ async fn run_download(
                         peer = download::get_pieces(seeding_peer, requests.into_iter()).await?;
                     }
                     ctrl::SeederDownloadAction::WaitForUpdates(timeout) => {
-                        peer = download::linger(seeding_peer.into(), timeout).await?;
+                        peer =
+                            download::linger(seeding_peer.into(), Instant::now() + timeout).await?;
                     }
                     ctrl::SeederDownloadAction::DeactivateDownload => {
                         peer = download::deactivate(seeding_peer).await?.into();
@@ -166,6 +169,7 @@ async fn run_upload(
         };
     }
     loop {
+        with_ctx!(|ctx| ctrl::validate_peer_utility(&remote_ip, ctx))?;
         peer = upload::update_peer(peer).await?;
         match peer {
             upload::Peer::Idle(idling_peer) => {

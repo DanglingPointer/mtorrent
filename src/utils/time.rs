@@ -11,3 +11,10 @@ macro_rules! millisec {
         std::time::Duration::from_micros($arg * 1000)
     }};
 }
+
+#[macro_export]
+macro_rules! min {
+    ($arg:expr) => {{
+        std::time::Duration::from_secs($arg * 60)
+    }};
+}

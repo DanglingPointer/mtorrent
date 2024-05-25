@@ -1,7 +1,7 @@
 use crate::pwp::MAX_BLOCK_SIZE;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, magnet, startup};
-use crate::{data, msgs};
+use crate::{data, millisec, min, msgs};
 use crate::{ops::ctx, pwp, sec};
 use futures::future::LocalBoxFuture;
 use std::collections::HashMap;
@@ -558,4 +558,61 @@ async fn test_send_extended_handshake_before_bitfield() {
         .build_main();
 
     let _ = time::timeout(sec!(30), future).await.unwrap();
+}
+
+const KEEPALIVE: &[u8] = &[0u8; 4];
+
+#[tokio::test(start_paused = true)]
+async fn test_disconnect_useless_peer_after_5_min() {
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
+        .init();
+
+    let mut socket_builder = MockBuilder::new();
+    for _min in 0..10 {
+        socket_builder.wait(sec!(30)).write(KEEPALIVE).read(KEEPALIVE);
+    }
+    let socket = socket_builder.wait(sec!(30)).build();
+
+    let (_, future) = PeerBuilder::new().with_socket(socket).build_main();
+    let result = time::timeout(min!(5) + sec!(1), future).await.unwrap();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert_eq!(err.to_string(), "peer is useless");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_disconnect_parasite_after_5_min() {
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
+        .init();
+
+    let mut socket_builder = MockBuilder::new();
+    socket_builder
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested]);
+    for _retry in 0..5 {
+        socket_builder
+            .wait(sec!(30))
+            .write(KEEPALIVE)
+            .wait(sec!(30))
+            .write(&msgs![
+                pwp::DownloaderMessage::NotInterested,
+                pwp::DownloaderMessage::Interested,
+            ])
+            .read(KEEPALIVE);
+    }
+    let socket = socket_builder.wait(sec!(30)).build();
+
+    let (_, future) = PeerBuilder::new().with_socket(socket).build_main();
+    let result = time::timeout(min!(5) + millisec!(1), future).await.unwrap();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert_eq!(err.to_string(), "peer is parasite");
 }
