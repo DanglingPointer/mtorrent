@@ -125,6 +125,13 @@ fn is_active_seeder(state: &pwp::PeerState) -> bool {
         && state.last_download_time.elapsed() < sec!(11)
 }
 
+fn is_active_leech(state: &pwp::PeerState) -> bool {
+    state.upload.peer_interested
+        && !state.upload.am_choking
+        && state.upload.bytes_sent > 0
+        && state.last_upload_time.elapsed() < sec!(11)
+}
+
 /// MAX_LEEDH_COUNT - 1 seeders with highest download rates, that are also interested
 fn get_interested_top_seeders(peer_states: &pwp::PeerStates) -> Vec<&SocketAddr> {
     let interested_seeders: BTreeMap<usize, &SocketAddr> = peer_states
@@ -253,7 +260,11 @@ pub fn active_upload_next_action(
 // ------------------------------------------------------------------------------------------------
 
 pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
-    ctx.accountant.missing_bytes() == 0 && ctx.peer_states.leeches_count() == 0
+    // finish if we have downloaded everything, and all active leeches (if any) have received at least 50 blocks
+    ctx.accountant.missing_bytes() == 0
+        && !ctx.peer_states.iter().any(|(_, state)| {
+            is_active_leech(state) && state.upload.bytes_sent < pwp::MAX_BLOCK_SIZE * 50
+        })
 }
 
 pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
