@@ -405,6 +405,7 @@ pub struct ScrapeResponseEntry {
     pub leechers: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponse(Vec<ScrapeResponseEntry>);
 

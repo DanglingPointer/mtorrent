@@ -11,10 +11,10 @@ impl<T: Eq + Hash> Set<T> {
         Self::default()
     }
 
-    pub fn contains<Q: ?Sized>(&self, value: &Q) -> bool
+    pub fn contains<Q>(&self, value: &Q) -> bool
     where
         T: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: ?Sized + Hash + Eq,
     {
         let inner = unsafe { &*self.0.get() };
         inner.contains(value)
@@ -25,10 +25,10 @@ impl<T: Eq + Hash> Set<T> {
         inner.insert(value)
     }
 
-    pub fn remove<Q: ?Sized>(&self, value: &Q) -> bool
+    pub fn remove<Q>(&self, value: &Q) -> bool
     where
         T: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: ?Sized + Hash + Eq,
     {
         let inner = unsafe { &mut *self.0.get() };
         inner.remove(value)

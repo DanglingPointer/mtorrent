@@ -254,7 +254,12 @@ impl Storage {
             if let Some(prefix) = path.parent() {
                 fs::create_dir_all(prefix)?;
             }
-            let file = fs::OpenOptions::new().write(true).read(true).create(true).open(path)?;
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create(true)
+                .truncate(false)
+                .open(path)?;
             file.set_len(length as u64)?;
             Ok((length, file))
         };

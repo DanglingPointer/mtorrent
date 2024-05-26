@@ -246,7 +246,7 @@ async fn announce_once(
                 response
             );
             with_ctx!(|ctx| {
-                response.peers.retain(|peer_ip| ctx.known_peers.get(peer_ip).is_none())
+                response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip))
             });
             for peer_addr in response.peers {
                 cb_channel.send(peer_addr);
