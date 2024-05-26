@@ -240,9 +240,9 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         Ok(())
     };
 
+    let mut speed_measurer = bandwidth::BitrateGauge::new();
     let process_requests = async {
         let mut request_src = request_src;
-        let mut speed_measurer = bandwidth::BitrateGauge::new();
         let remote_ip = *inner.tx.remote_ip();
         while let Some(request) = request_src.next().await {
             let _sw = debug_stopwatch!("Serving request {} to {}", request, remote_ip);
@@ -280,7 +280,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
 
     let result = try_join!(collect_requests, process_requests);
     inner.state.bytes_sent = state_copy.bytes_sent;
-    inner.state.last_bitrate_bps = state_copy.last_bitrate_bps;
+    inner.state.last_bitrate_bps = speed_measurer.get_bps();
     if discarded_requests > 0 {
         log::warn!("Discarded {} requests from {}", discarded_requests, inner.tx.remote_ip());
     }
