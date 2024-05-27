@@ -20,6 +20,9 @@
     "rust-analyzer.lens.implementations.enable": false,
     "rust-analyzer.checkOnSave": true,
     "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.runnables.extraTestBinaryArgs": [
+        "--nocapture"
+    ],
     "gitlens.codeLens.enabled": false,
     "editor.semanticTokenColorCustomizations": {
         "rules": {
