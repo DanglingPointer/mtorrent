@@ -1,4 +1,4 @@
-use crate::ops::ctx;
+use crate::ops::{ctrl, ctx};
 use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, min, pwp, sec};
 use futures::prelude::*;
@@ -190,28 +190,37 @@ pub async fn get_pieces(
     let _sw =
         debug_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
 
-    fn divide_piece_into_blocks(
+    fn divide_piece_into_request_batches(
         piece_index: usize,
         piece_len: usize,
-    ) -> impl Iterator<Item = pwp::BlockInfo> {
-        (0..piece_len)
-            .step_by(pwp::MAX_BLOCK_SIZE)
-            .map(move |in_piece_offset| pwp::BlockInfo {
-                piece_index,
-                in_piece_offset,
-                block_length: cmp::min(pwp::MAX_BLOCK_SIZE, piece_len - in_piece_offset),
-            })
+        reqq: usize,
+    ) -> impl Iterator<Item = impl Iterator<Item = pwp::BlockInfo>> {
+        let max_bytes_in_flight = reqq * pwp::MAX_BLOCK_SIZE;
+        (0..piece_len).step_by(max_bytes_in_flight).map(move |batch_start| {
+            let batch_end = cmp::min(batch_start + max_bytes_in_flight, piece_len);
+            (batch_start..batch_end)
+                .step_by(pwp::MAX_BLOCK_SIZE)
+                .map(move |in_piece_offset| pwp::BlockInfo {
+                    piece_index,
+                    in_piece_offset,
+                    block_length: cmp::min(pwp::MAX_BLOCK_SIZE, piece_len - in_piece_offset),
+                })
+        })
     }
 
     macro_rules! wait_for_block {
-        ($timeout:expr) => {{
-            let deadline = Instant::now() + $timeout;
+        () => {{
+            let timeout = match inner.state.bytes_received {
+                0 => sec!(11),
+                _ => sec!(31),
+            };
+            let deadline = Instant::now() + timeout;
             loop {
                 let msg = inner.rx.receive_message_timed(deadline - Instant::now()).await.map_err(
                     |e| match e {
                         pwp::ChannelError::Timeout => io::Error::new(
                             io::ErrorKind::Other,
-                            format!("peer failed to respond to requests within {:?}", $timeout),
+                            format!("peer failed to respond to requests within {:?}", timeout),
                         ),
                         pwp::ChannelError::ConnectionClosed => io::Error::from(e),
                     },
@@ -281,43 +290,46 @@ pub async fn get_pieces(
                 // piece already downloaded from another peer
                 continue;
             }
-            let piece_len = with_ctx!(|ctx| ctx.pieces.piece_len(piece_index));
-            let mut requests: HashSet<pwp::BlockInfo> =
-                divide_piece_into_blocks(piece_index, piece_len)
+            let (piece_len, peer_reqq) = with_ctx!(|ctx| (
+                ctx.pieces.piece_len(piece_index),
+                ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx)
+            ));
+            for batch in divide_piece_into_request_batches(piece_index, piece_len, peer_reqq) {
+                // send requests in bulks, up to `peer_reqq` blocks at a time
+                let mut requests: HashSet<pwp::BlockInfo> = batch
                     .filter(|block| with_ctx!(|ctx| !ctx.accountant.has_exact_block(block)))
                     .collect();
-            if requests.len() > 1024 {
-                log::warn!("About to send {} requests to {}", requests.len(), inner.tx.remote_ip());
-            }
-            for block in &requests {
-                inner.tx.send_message(pwp::DownloaderMessage::Request(block.clone())).await?;
-            }
-            while !with_ctx!(|ctx| ctx.accountant.has_piece(piece_index)) {
-                let timeout = match inner.state.bytes_received {
-                    0 => sec!(11),
-                    _ => sec!(31),
-                };
-                let (info, data) = wait_for_block!(timeout);
-                if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
-                    inner.state.bytes_received += data.len();
-                    inner.state.last_bitrate_bps = speed_measurer.update(data.len()).get_bps();
-                    inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
-                        panic!("Failed to start write ({info}) to storage: {e}")
-                    });
-                    requests.remove(&info);
-                    update_ctx!(inner);
-                } else {
-                    log::error!("Received invalid block ({info}) from {}", inner.rx.remote_ip());
-                    // TODO: disconnect peer?
+                for block in &requests {
+                    inner.tx.send_message(pwp::DownloaderMessage::Request(block.clone())).await?;
                 }
-            }
-            verification_channel.send(piece_index);
-            if !requests.is_empty() {
+                while !requests.is_empty()
+                    && with_ctx!(|ctx| !ctx.accountant.has_piece(piece_index))
+                {
+                    let (info, data) = wait_for_block!();
+                    let bytes_received = data.len();
+                    if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
+                        storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
+                            panic!("Failed to start write ({info}) to storage: {e}")
+                        });
+                        requests.remove(&info);
+                        inner.state.bytes_received += bytes_received;
+                        inner.state.last_bitrate_bps =
+                            speed_measurer.update(bytes_received).get_bps();
+                        update_ctx!(inner);
+                    } else {
+                        log::error!(
+                            "Received invalid block ({info}) from {}",
+                            inner.rx.remote_ip()
+                        );
+                    }
+                }
                 // piece (or parts of it) received from another peer
                 for pending_request in requests {
                     inner.tx.send_message(pwp::DownloaderMessage::Cancel(pending_request)).await?;
                 }
             }
+            debug_assert!(with_ctx!(|ctx| ctx.accountant.has_piece(piece_index)));
+            verification_channel.send(piece_index);
         }
         io::Result::Ok(())
     };

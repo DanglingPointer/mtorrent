@@ -38,14 +38,18 @@ pub async fn new_peer(
         sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
         last_shared_peers: Default::default(),
     });
+
     // send local handshake
     let Peer(mut inner) = send_handshake(Peer(inner), initial_extensions).await?;
+    define_with_ctx!(inner.handle);
+
     // try wait for remote handshake
     match inner.rx.receive_message_timed(sec!(1)).await {
-        Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+        Ok(pwp::ExtendedMessage::Handshake(mut hs)) => {
             log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), hs);
-            inner.remote_extensions = hs.extensions;
-            inner.remote_extensions.retain(|_ext, id| *id != 0); // id 0 means extension is disabled
+            hs.extensions.retain(|_ext, id| *id != 0); // id 0 means extension is disabled
+            inner.remote_extensions.clone_from(&hs.extensions);
+            with_ctx!(|ctx| ctx.peer_states.set_extended_handshake(inner.rx.remote_ip(), hs));
         }
         Ok(msg) => {
             return Err(io::Error::new(
@@ -124,16 +128,18 @@ pub async fn handle_incoming(
         match inner.rx.receive_message_timed(until - Instant::now()).await {
             Err(pwp::ChannelError::Timeout) => break,
             Err(e) => return Err(e.into()),
-            Ok(pwp::ExtendedMessage::Handshake(hs)) => {
+            Ok(pwp::ExtendedMessage::Handshake(mut hs)) => {
                 log::debug!("Received extended handshake from {remote_ip}: {hs}");
                 // every subsequent handshake contains diff from the previous one
-                for (ext, id) in hs.extensions {
-                    if id == 0 {
-                        inner.remote_extensions.remove(&ext);
+                for (ext, id) in &hs.extensions {
+                    if id == &0 {
+                        inner.remote_extensions.remove(ext);
                     } else {
-                        inner.remote_extensions.insert(ext, id);
+                        inner.remote_extensions.insert(*ext, *id);
                     }
                 }
+                hs.extensions.clone_from(&inner.remote_extensions);
+                with_ctx!(|ctx| ctx.peer_states.set_extended_handshake(&remote_ip, hs));
             }
             Ok(pwp::ExtendedMessage::PeerExchange(pex)) => {
                 log::debug!("Received PEX message from {remote_ip}: {pex}");

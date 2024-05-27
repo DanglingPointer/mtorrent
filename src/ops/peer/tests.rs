@@ -10,7 +10,7 @@ use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::{fs, iter, panic};
-use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::{join, runtime, task, time};
 use tokio_test::io::Builder as MockBuilder;
@@ -633,4 +633,77 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
     assert_eq!(err.to_string(), "peer failed to respond to requests within 11s");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_respect_peer_reqq() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/pcap.torrent"; // piece size > 16K
+    let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
+    for peer_reqq in [0, 1] {
+        let (mut sock, farend_sock) = io::duplex(17 * 1024);
+        let (_, peer_future) = PeerBuilder::new()
+            .with_socket(farend_sock)
+            .with_local_ip(local_ip)
+            .with_remote_ip(remote_ip)
+            .with_metainfo_file(metainfo_filepath)
+            .with_extensions()
+            .build_main();
+
+        let test_future = async move {
+            let mut buf = vec![0u8; 17 * 1024];
+
+            sock.write_all(&msgs![
+                pwp::ExtendedMessage::Handshake(Box::new(pwp::ExtendedHandshake {
+                    extensions: super::ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect(),
+                    request_limit: Some(peer_reqq),
+                    ..Default::default()
+                })),
+                pwp::UploaderMessage::Have { piece_index: 3 }
+            ])
+            .await
+            .unwrap();
+
+            let bytes_read = sock.read(&mut buf).await.unwrap();
+            assert_eq!(
+                &buf[..bytes_read],
+                &msgs![pwp::ExtendedMessage::Handshake(Box::new(
+                    pwp::ExtendedHandshake {
+                        extensions: super::ALL_SUPPORTED_EXTENSIONS
+                            .iter()
+                            .map(|e| (*e, e.local_id()))
+                            .collect(),
+                        listen_port: Some(local_ip.port()),
+                        client_type: Some(super::CLIENT_NAME.to_string()),
+                        yourip: Some(remote_ip.ip()),
+                        metadata_size: Some(7947),
+                        request_limit: Some(super::MAX_PENDING_REQUESTS),
+                        ..Default::default()
+                    }
+                ))]
+            );
+
+            let bytes_read = sock.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Interested]);
+
+            sock.write_all(&msgs![pwp::UploaderMessage::Unchoke]).await.unwrap();
+
+            let bytes_read = sock.read(&mut buf).await.unwrap();
+            assert_eq!(
+                &buf[..bytes_read],
+                &msgs![pwp::DownloaderMessage::Request(BlockInfo {
+                    piece_index: 3,
+                    in_piece_offset: 0,
+                    block_length: pwp::MAX_BLOCK_SIZE
+                })]
+            );
+
+            let result = time::timeout(sec!(1), sock.read(&mut buf)).await;
+            assert!(matches!(result, Err(_timeout)));
+        };
+
+        let _ = join!(peer_future, test_future);
+    }
 }

@@ -68,6 +68,7 @@ impl fmt::Display for UploadState {
 pub struct PeerState {
     pub download: DownloadState,
     pub upload: UploadState,
+    pub extensions: Option<Box<super::ExtendedHandshake>>,
     pub last_download_time: Instant,
     pub last_upload_time: Instant,
 }
@@ -77,6 +78,7 @@ impl Default for PeerState {
         Self {
             download: Default::default(),
             upload: Default::default(),
+            extensions: None,
             last_download_time: Instant::now(),
             last_upload_time: Instant::now(),
         }
@@ -115,6 +117,17 @@ impl PeerStates {
             self.leeches.insert(*remote_ip);
         } else {
             self.leeches.remove(remote_ip);
+        }
+    }
+
+    pub fn set_extended_handshake(
+        &mut self,
+        remote_ip: &SocketAddr,
+        extended_handshake: Box<super::ExtendedHandshake>,
+    ) {
+        let state = self.peers.entry(*remote_ip).or_default();
+        if state.extensions.is_none() {
+            state.extensions = Some(extended_handshake);
         }
     }
 
@@ -157,7 +170,16 @@ impl fmt::Display for PeerStates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Connected peers ({}):", self.peers.len())?;
         for (ip, state) in &self.peers {
-            write!(f, "\n[{}]:\n{} {}", ip, state.download, state.upload)?;
+            write!(f, "\n[ {:^21} ]", ip)?;
+            if let Some(hs) = &state.extensions {
+                write!(
+                    f,
+                    "     client: {:<20} reqq: {}",
+                    hs.client_type.as_deref().unwrap_or("n/a"),
+                    hs.request_limit.unwrap_or_default()
+                )?;
+            }
+            write!(f, "\n{} {}", state.download, state.upload)?;
         }
         Ok(())
     }

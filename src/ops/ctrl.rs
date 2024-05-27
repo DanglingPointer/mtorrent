@@ -6,6 +6,18 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use std::{cmp, io};
 
+pub fn get_peer_reqq(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> usize {
+    const MIN_PENDING_REQUESTS: usize = 250;
+    cmp::max(
+        1,
+        ctx.peer_states
+            .get(peer_ip)
+            .and_then(|state| state.extensions.as_deref())
+            .and_then(|hs| hs.request_limit)
+            .unwrap_or(MIN_PENDING_REQUESTS),
+    )
+}
+
 const MAX_SEEDER_COUNT: usize = 50;
 
 fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
@@ -40,10 +52,13 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
 }
 
 fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
-    // some clients support max 250 queued requests, hence:
-    // 250 * 16kB == piece_len * piece_count
-    let max_request_count =
-        cmp::min(50, cmp::max(1, pwp::MAX_BLOCK_SIZE * 250 / ctx.pieces.piece_len(0)));
+    // Calculate the number of pieces to request based on the following:
+    // peer_reqq * 16kB == piece_len * piece_count
+    // Note that piece_len/MAX_BLOCK_SIZE might still exceed reqq. This is being dealt with in download::get_pieces()
+    let max_request_count = cmp::min(
+        50,
+        cmp::max(1, pwp::MAX_BLOCK_SIZE * get_peer_reqq(peer_ip, ctx) / ctx.pieces.piece_len(0)),
+    );
     let available_pieces: HashSet<usize> =
         if let Some(it) = ctx.piece_tracker.get_peer_pieces(peer_ip) {
             it.collect()
