@@ -8,6 +8,7 @@
 		"tamasfe.even-better-toml",
 		"eamodio.gitlens",
 		"ms-vscode-remote.remote-containers",
+		"github.copilot",
 	],
 	// List of extensions recommended by VS Code that should not be recommended for users of this workspace.
 	"unwantedRecommendations": [
