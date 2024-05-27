@@ -115,6 +115,8 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                 let result = self.storage.write_block(global_offset, data);
                 if let Some(callback) = callback {
                     let _ = callback.send(result);
+                } else if let Err(e) = result {
+                    log::error!("Failed to write block: {e}");
                 }
             }
             Command::ReadBlock {
