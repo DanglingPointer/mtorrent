@@ -186,6 +186,7 @@ pub async fn get_pieces(
 ) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
+    define_with_ctx!(inner.handle);
     let _sw =
         debug_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
 
@@ -202,7 +203,33 @@ pub async fn get_pieces(
             })
     }
 
-    define_with_ctx!(inner.handle);
+    macro_rules! wait_for_block {
+        ($timeout:expr) => {{
+            let deadline = Instant::now() + $timeout;
+            loop {
+                let msg = inner.rx.receive_message_timed(deadline - Instant::now()).await.map_err(
+                    |e| match e {
+                        pwp::ChannelError::Timeout => io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("peer failed to respond to requests within {:?}", $timeout),
+                        ),
+                        pwp::ChannelError::ConnectionClosed => io::Error::from(e),
+                    },
+                )?;
+                match msg {
+                    pwp::UploaderMessage::Block(info, data) => break (info, data),
+                    _ => {
+                        if update_state_with_msg(&mut inner, &msg) && inner.state.peer_choking {
+                            with_ctx!(|ctx| ctx
+                                .pending_requests
+                                .clear_requests_to(inner.rx.remote_ip()));
+                            return io::Result::Ok(());
+                        }
+                    }
+                }
+            }
+        }};
+    }
 
     for piece in pieces.clone() {
         with_ctx!(|ctx| ctx.pending_requests.add(piece, inner.rx.remote_ip()));
@@ -270,34 +297,18 @@ pub async fn get_pieces(
                     0 => sec!(11),
                     _ => sec!(31),
                 };
-                let msg = inner.rx.receive_message_timed(timeout).await.map_err(|e| match e {
-                    pwp::ChannelError::Timeout => io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("peer failed to respond to requests within {timeout:?}"),
-                    ),
-                    pwp::ChannelError::ConnectionClosed => io::Error::from(e),
-                })?;
-                update_state_with_msg(&mut inner, &msg);
-                if inner.state.peer_choking {
-                    with_ctx!(|ctx| ctx.pending_requests.clear_requests_to(inner.rx.remote_ip()));
-                    return io::Result::Ok(());
-                }
-                if let pwp::UploaderMessage::Block(info, data) = msg {
-                    if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
-                        inner.state.bytes_received += data.len();
-                        inner.state.last_bitrate_bps = speed_measurer.update(data.len()).get_bps();
-                        inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
-                            panic!("Failed to start write ({info}) to storage: {e}")
-                        });
-                        requests.remove(&info);
-                        update_ctx!(inner);
-                    } else {
-                        log::error!(
-                            "Received invalid block ({info}) from {}",
-                            inner.rx.remote_ip()
-                        );
-                        // TODO: disconnect peer?
-                    }
+                let (info, data) = wait_for_block!(timeout);
+                if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
+                    inner.state.bytes_received += data.len();
+                    inner.state.last_bitrate_bps = speed_measurer.update(data.len()).get_bps();
+                    inner.storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
+                        panic!("Failed to start write ({info}) to storage: {e}")
+                    });
+                    requests.remove(&info);
+                    update_ctx!(inner);
+                } else {
+                    log::error!("Received invalid block ({info}) from {}", inner.rx.remote_ip());
+                    // TODO: disconnect peer?
                 }
             }
             verification_channel.send(piece_index);

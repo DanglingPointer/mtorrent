@@ -1,4 +1,4 @@
-use crate::pwp::MAX_BLOCK_SIZE;
+use crate::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, magnet, startup};
 use crate::{data, millisec, min, msgs};
@@ -255,11 +255,6 @@ struct PeerBuilder {
 #[allow(dead_code)]
 impl PeerBuilder {
     fn new() -> Self {
-        let orig_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |panic_info| {
-            orig_hook(panic_info);
-            std::process::exit(1);
-        }));
         Self::default()
     }
     fn with_socket(mut self, socket: impl PeerSocket) -> Self {
@@ -402,6 +397,23 @@ impl PeerBuilder {
 
 // ------------------------------------------------------------------------------------------------
 
+fn setup(log_all_msgs: bool) {
+    // make sure test fails on panic inside tokio runtime
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
+
+    let mut logger = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
+        .with_module_level("mtorrent::ops", log::LevelFilter::Debug);
+    if log_all_msgs {
+        logger = logger.with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace);
+    }
+    let _ = logger.init();
+}
+
 async fn pass_torrent_from_peer_to_peer(
     metainfo_filepath: &'static str,
     output_dir: &'static str,
@@ -447,11 +459,7 @@ async fn pass_torrent_from_peer_to_peer(
 
 #[tokio::test(start_paused = true)]
 async fn test_pass_multifile_torrent_from_peer_to_peer() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .init();
-
+    setup(false);
     let output_dir = "test_pass_multifile_torrent_from_peer_to_peer";
     let metainfo_filepath = "tests/assets/screenshots.torrent";
     let input_dir = "tests/assets/screenshots";
@@ -463,11 +471,7 @@ async fn test_pass_multifile_torrent_from_peer_to_peer() {
 
 #[tokio::test(start_paused = true)]
 async fn test_pass_monofile_torrent_from_peer_to_peer() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .init();
-
+    setup(false);
     let output_dir = "test_pass_monofile_torrent_from_peer_to_peer";
     let metainfo_filepath = "tests/assets/pcap.torrent";
     let input_dir = "tests/assets/pcap";
@@ -479,11 +483,7 @@ async fn test_pass_monofile_torrent_from_peer_to_peer() {
 
 #[tokio::test(start_paused = true)]
 async fn test_pass_metadata_from_peer_to_peer() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .init();
-
+    setup(false);
     let metainfo_filepath = "tests/assets/big_metainfo_file.torrent";
     let magnet = "magnet:?xt=urn:btih:77c09d63baf907ceeed366e2bdd687ca37cc4098&dn=Star.Trek.Voyager.S05.DVDRip.x264-MARS%5brartv%5d&tr=http%3a%2f%2ftracker.trackerfix.com%3a80%2fannounce&tr=udp%3a%2f%2f9.rarbg.me%3a2750%2fannounce&tr=udp%3a%2f%2f9.rarbg.to%3a2930%2fannounce";
 
@@ -520,12 +520,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
 
 #[tokio::test(start_paused = true)]
 async fn test_send_extended_handshake_before_bitfield() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
-        .init();
-
+    setup(true);
     let metainfo_filepath = "tests/assets/screenshots.torrent";
     let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
     let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
@@ -564,11 +559,7 @@ const KEEPALIVE: &[u8] = &[0u8; 4];
 
 #[tokio::test(start_paused = true)]
 async fn test_disconnect_useless_peer_after_5_min() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
-        .init();
+    setup(true);
 
     let mut socket_builder = MockBuilder::new();
     for _min in 0..10 {
@@ -586,11 +577,7 @@ async fn test_disconnect_useless_peer_after_5_min() {
 
 #[tokio::test(start_paused = true)]
 async fn test_disconnect_parasite_after_5_min() {
-    let _ = simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
-        .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
-        .init();
+    setup(true);
 
     let mut socket_builder = MockBuilder::new();
     socket_builder
@@ -615,4 +602,35 @@ async fn test_disconnect_parasite_after_5_min() {
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
     assert_eq!(err.to_string(), "peer is parasite");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_block_request_timeout_not_affected_by_other_messages() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/screenshots.torrent"; // piece length 16K
+
+    let socket = MockBuilder::new()
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested])
+        .read(&msgs![pwp::UploaderMessage::Unchoke])
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 0,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(5))
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 1 }])
+        .wait(sec!(30))
+        .build();
+
+    let (_, future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    let result = time::timeout(sec!(12), future).await.unwrap();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert_eq!(err.to_string(), "peer failed to respond to requests within 11s");
 }

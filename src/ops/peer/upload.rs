@@ -202,12 +202,12 @@ pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
 
 pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Result<Peer> {
     let mut inner = peer.0;
-    let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
     debug_assert!(!inner.state.am_choking && inner.state.peer_interested);
+    define_with_ctx!(inner.handle);
+    let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
 
     let (request_sink, request_src) = fifo::channel::<pwp::BlockInfo>();
     let mut state_copy = inner.state.clone();
-    define_with_ctx!(inner.handle);
 
     let mut discarded_requests = 0u64;
     let collect_requests = async {
