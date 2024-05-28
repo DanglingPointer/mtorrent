@@ -306,22 +306,23 @@ pub async fn get_pieces(
                     && with_ctx!(|ctx| !ctx.accountant.has_piece(piece_index))
                 {
                     let (info, data) = wait_for_block!();
-                    let bytes_received = data.len();
-                    if let Ok(global_offset) = with_ctx!(|ctx| ctx.accountant.submit_block(&info)) {
-                        storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
-                            panic!("Failed to start write ({info}) to storage: {e}")
-                        });
-                        requests.remove(&info);
-                        inner.state.bytes_received += bytes_received;
-                        inner.state.last_bitrate_bps =
-                            speed_measurer.update(bytes_received).get_bps();
-                        update_ctx!(inner);
-                    } else {
-                        log::error!(
-                            "Received invalid block ({info}) from {}",
+                    if !requests.remove(&info) {
+                        log::warn!(
+                            "Received unexpected block ({info}) from {}",
                             inner.rx.remote_ip()
                         );
+                        // This can be a canceled block, so don't disconnect peer
+                        continue;
                     }
+                    let global_offset = with_ctx!(|ctx| ctx.accountant.submit_block(&info))
+                        .unwrap_or_else(|e| panic!("Requested invalid block {info} ({e})"));
+                    let bytes_received = data.len();
+                    storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
+                        panic!("Failed to start write ({info}) to storage: {e}")
+                    });
+                    inner.state.bytes_received += bytes_received;
+                    inner.state.last_bitrate_bps = speed_measurer.update(bytes_received).get_bps();
+                    update_ctx!(inner);
                 }
                 // piece (or parts of it) received from another peer
                 for pending_request in requests {
