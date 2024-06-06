@@ -314,9 +314,16 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
             .get_peer_pieces(peer_addr)
             .is_some_and(|mut it| it.next().is_some())
     };
+    let supports_pex = || {
+        state
+            .extensions
+            .as_ref()
+            .is_some_and(|hs| hs.extensions.contains_key(&pwp::Extension::PeerExchange))
+    };
     if state.last_upload_time.elapsed() >= TIMEOUT
         && state.last_download_time.elapsed() >= TIMEOUT
         && !owns_missing_piece()
+        && (!supports_pex() || ctx.peer_states.seeders_count() > 2)
     {
         Err(io::Error::new(io::ErrorKind::Other, "peer is useless"))
     } else {
