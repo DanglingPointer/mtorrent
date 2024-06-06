@@ -193,11 +193,12 @@ async fn main_stage(
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
 
-    let content_dir = Path::new(output_dir.as_ref())
+    let content_dir = output_dir
+        .as_ref()
         .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());
 
     let (content_storage, content_storage_server) =
-        startup::create_content_storage(&metainfo, content_dir)?;
+        startup::create_content_storage(&metainfo, &content_dir)?;
     storage_runtime.spawn(async move {
         content_storage_server.run().await;
     });
@@ -259,14 +260,14 @@ async fn main_stage(
     }
 
     let tracker_ctx = ctx.clone();
-    let config_dir = PathBuf::from(output_dir.as_ref());
+    let config_dir = output_dir.as_ref().to_owned();
     local_task.spawn_local(async move {
         ops::make_periodic_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
     });
 
     local_task
         .run_until(async move {
-            ops::periodic_state_dump(ctx, output_dir).await;
+            ops::periodic_state_dump(ctx, content_dir).await;
         })
         .await;
     Ok(())

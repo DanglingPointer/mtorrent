@@ -217,9 +217,12 @@ fn compare_input_and_output(
             }
         }
     }
-    for (input, output) in
-        iter::zip(fs::read_dir(input_dir).unwrap(), fs::read_dir(output_dir).unwrap())
-    {
+    for (input, output) in iter::zip(
+        fs::read_dir(input_dir).unwrap().filter(|item| {
+            item.as_ref().is_ok_and(|dir_entry| dir_entry.file_name() != ".mtorrent")
+        }),
+        fs::read_dir(output_dir).unwrap(),
+    ) {
         let input_path = input.unwrap().path();
         let output_path = output.unwrap().path();
 
