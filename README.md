@@ -18,8 +18,9 @@ Lightweight command line Bittorrent client in Rust. Based on Tokio (but without 
 - [x] [Extension Protocol](https://www.bittorrent.org/beps/bep_0010.html)
 - [x] [PEX](https://www.bittorrent.org/beps/bep_0011.html)
 - [x] [Magnet URIs](http://www.bittorrent.org/beps/bep_0009.html)
-- [ ] [Magnet URI select files](http://bittorrent.org/beps/bep_0053.html)
 - [ ] [DHT](https://www.bittorrent.org/beps/bep_0005.html)
+- [ ] [IPv6 DHT](https://www.bittorrent.org/beps/bep_0032.html)
+- [ ] [STUN (for DHT)?](https://datatracker.ietf.org/doc/html/rfc8489)
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
 - [ ] [BitTorrent v2](http://bittorrent.org/beps/bep_0052.html)
 
