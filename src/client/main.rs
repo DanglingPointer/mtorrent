@@ -15,8 +15,8 @@ pub async fn single_torrent(
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
 ) -> io::Result<()> {
-    let listener_addr = ip::any_socketaddr_from_hash(&metainfo_uri);
-    // get public ip to send correct listening port to trackers later
+    let listener_addr = ip::any_ipv4_socketaddr_from_hash(&metainfo_uri);
+    // get public ip to send correct listening port to trackers and peers later
     let public_pwp_ip = match upnp::PortOpener::new(
         SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
         igd::PortMappingProtocol::TCP,
@@ -114,7 +114,8 @@ async fn preliminary_stage(
 
     let local_task = task::LocalSet::new();
 
-    let ctx = ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip);
+    let ctx =
+        ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
     let (peer_discovered_sink, mut peer_discovered_src) = fifo::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
@@ -210,7 +211,8 @@ async fn main_stage(
 
     let local_task = task::LocalSet::new();
 
-    let ctx: ops::Handle<_> = ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip)?;
+    let ctx: ops::Handle<_> =
+        ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
     let (peer_discovered_sink, mut peer_discovered_src) = fifo::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(

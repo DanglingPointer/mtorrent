@@ -262,6 +262,7 @@ impl Peer for Seeder {
 async fn listening_peer<P: Peer>(
     index: u8,
     listening_addr: SocketAddr,
+    expected_remote_addr: SocketAddr,
     storage: data::StorageClient,
     info: Rc<data::PieceInfo>,
 ) {
@@ -273,6 +274,7 @@ async fn listening_peer<P: Peer>(
                 "Peer {} on {} accepted connection from {}",
                 index, listening_addr, remote_addr
             );
+            assert_eq!(remote_addr, expected_remote_addr);
             let (download_chans, upload_chans, _, runner) =
                 pwp::channels_from_incoming(&[index + b'0'; 20], None, false, remote_addr, stream)
                     .await
@@ -358,7 +360,7 @@ async fn launch_peers<P: Peer>(
 
     let info_hash = *metainfo.info_hash();
     let remote_ip = {
-        let any = utils::ip::any_socketaddr_from_hash(&metainfo_file);
+        let any = utils::ip::any_ipv4_socketaddr_from_hash(&metainfo_file);
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, any.port()))
     };
     match mode {
@@ -382,6 +384,7 @@ async fn launch_peers<P: Peer>(
                         listening_peer::<P>(
                             index as u8,
                             listen_addr,
+                            remote_ip,
                             storage.clone(),
                             pieces.clone(),
                         )

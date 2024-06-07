@@ -177,7 +177,7 @@ async fn http_announce(tracker_url: &str, request: &AnnounceData) -> io::Result<
 
 async fn udp_announce(tracker_addr: &str, request: &AnnounceData) -> io::Result<ResponseData> {
     // we need a unique udp port for each tracker
-    let bind_addr = ip::any_socketaddr_from_hash(&tracker_addr);
+    let bind_addr = ip::any_ipv4_socketaddr_from_hash(&tracker_addr);
     let socket = UdpSocket::bind(bind_addr).await?;
     socket.connect(&tracker_addr).await?;
     let client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;

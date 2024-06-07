@@ -52,6 +52,7 @@ macro_rules! define_with_ctx {
 pub(super) struct ConstData {
     local_peer_id: PeerId,
     pwp_listener_public_addr: SocketAddr,
+    pwp_local_tcp_port: u16,
 }
 
 impl ConstData {
@@ -60,6 +61,9 @@ impl ConstData {
     }
     pub(super) fn pwp_listener_public_addr(&self) -> &SocketAddr {
         &self.pwp_listener_public_addr
+    }
+    pub(super) fn pwp_local_tcp_port(&self) -> u16 {
+        self.pwp_local_tcp_port
     }
 }
 
@@ -77,6 +81,7 @@ impl PreliminaryCtx {
         magnet: magnet::MagnetLink,
         local_peer_id: PeerId,
         pwp_listener_public_addr: SocketAddr,
+        pwp_local_tcp_port: u16,
     ) -> Handle<Self> {
         Handle {
             ctx: Rc::new(RefCell::new(Self {
@@ -88,6 +93,7 @@ impl PreliminaryCtx {
                 const_data: ConstData {
                     local_peer_id,
                     pwp_listener_public_addr,
+                    pwp_local_tcp_port,
                 },
             })),
         }
@@ -121,6 +127,7 @@ impl MainCtx {
         metainfo: metainfo::Metainfo,
         local_peer_id: PeerId,
         pwp_listener_public_addr: SocketAddr,
+        pwp_local_tcp_port: u16,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
@@ -145,6 +152,7 @@ impl MainCtx {
             const_data: ConstData {
                 local_peer_id,
                 pwp_listener_public_addr,
+                pwp_local_tcp_port,
             },
         }));
         Ok(Handle { ctx })

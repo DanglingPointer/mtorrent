@@ -131,7 +131,9 @@ async fn run_listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle = ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip).unwrap();
+    let mut handle =
+        ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip, listener_ip.port())
+            .unwrap();
     handle.with_ctx(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
@@ -337,10 +339,12 @@ impl PeerBuilder {
             self.extensions_enabled,
             self.socket.unwrap_or_else(|| Box::new(io::empty())),
         );
+        let local_addr = self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777));
         let mut ctx_handle = ctx::MainCtx::new(
             metainfo,
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
-            self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777)),
+            local_addr,
+            local_addr.port(),
         )
         .unwrap();
         if self.has_all_pieces {
@@ -386,10 +390,12 @@ impl PeerBuilder {
             self.socket.unwrap_or_else(|| Box::new(io::empty())),
         );
 
+        let local_addr = self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777));
         let ctx_handle = ctx::PreliminaryCtx::new(
             magnet_link,
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
-            self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777)),
+            local_addr,
+            local_addr.port(),
         );
         let run_future =
             super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone());
