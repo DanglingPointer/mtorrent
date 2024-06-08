@@ -37,7 +37,7 @@ pub(super) struct ConnectionPermit<D> {
 }
 
 #[cfg(test)]
-impl<D: std::fmt::Debug> std::fmt::Debug for ConnectionPermit<D> {
+impl<D> std::fmt::Debug for ConnectionPermit<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectionPermit").field("addr", &self.addr).finish()
     }

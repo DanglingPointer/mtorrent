@@ -307,7 +307,7 @@ pub async fn get_pieces(
                 {
                     let (info, data) = wait_for_block!();
                     if !requests.remove(&info) {
-                        log::warn!(
+                        log::debug!(
                             "Received unexpected block ({info}) from {}",
                             inner.rx.remote_ip()
                         );
