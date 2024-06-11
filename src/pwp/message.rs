@@ -129,7 +129,10 @@ impl PeerMessage {
                 src.read_exact(&mut data).await?;
                 Ok(Extended { id, data })
             }
-            _ => Err(io::Error::new(io::ErrorKind::Other, format!("Unknown message type: {}", id))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Unknown message type: {}", id),
+            )),
         }
     }
 
