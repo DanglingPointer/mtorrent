@@ -180,7 +180,7 @@ async fn udp_announce(tracker_addr: &str, request: &AnnounceData) -> io::Result<
     let bind_addr = ip::any_ipv4_socketaddr_from_hash(&tracker_addr);
     let socket = UdpSocket::bind(bind_addr).await?;
     socket.connect(&tracker_addr).await?;
-    let client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
+    let mut client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
     let response = client.do_announce_request(request.into()).await?;
     Ok(response.into())
 }

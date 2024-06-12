@@ -32,7 +32,8 @@ async fn test_udp_announce() {
             .await
             .unwrap_or_else(|e| panic!("Failed to connect to {}: {}", &tracker_addr, e));
 
-        let client = udp::UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
+        let mut client =
+            udp::UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
 
         let response = client
             .do_announce_request(announce_request.clone())
@@ -79,7 +80,7 @@ async fn test_udp_scrape() {
                 println!("Failed to connect to {tracker_addr}");
                 return;
             }
-            let client =
+            let mut client =
                 udp::UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
             let response = client
                 .do_scrape_request(udp::ScrapeRequest {

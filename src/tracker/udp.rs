@@ -43,7 +43,7 @@ impl UdpTrackerConnection {
     }
 
     pub async fn from_expired_connection(old: UdpTrackerConnection) -> io::Result<Self> {
-        assert!(old.expired());
+        debug_assert!(old.expired());
         Self::from_connected_socket(old.socket).await
     }
 
@@ -52,10 +52,12 @@ impl UdpTrackerConnection {
     }
 
     pub async fn do_announce_request(
-        &self,
+        &mut self,
         request_data: AnnounceRequest,
     ) -> io::Result<AnnounceResponse> {
-        assert!(!self.expired());
+        if self.expired() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "connection expired"));
+        }
 
         let transaction_id = rand::random::<u32>();
         let request = {
@@ -70,10 +72,6 @@ impl UdpTrackerConnection {
             &self.socket,
             request,
             |data: &[u8]| -> Option<io::Result<AnnounceResponse>> {
-                if self.expired() {
-                    return Some(Err(io::Error::from(io::ErrorKind::TimedOut)));
-                }
-
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Announce(announce)) => {
                         log::debug!("Received announce response: {:?}", announce);
@@ -90,10 +88,12 @@ impl UdpTrackerConnection {
     }
 
     pub async fn do_scrape_request(
-        &self,
+        &mut self,
         request_data: ScrapeRequest,
     ) -> io::Result<ScrapeResponse> {
-        assert!(!self.expired());
+        if self.expired() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "connection expired"));
+        }
 
         let transaction_id = rand::random::<u32>();
         let request = {
@@ -105,10 +105,6 @@ impl UdpTrackerConnection {
             &self.socket,
             request,
             |data: &[u8]| -> Option<io::Result<ScrapeResponse>> {
-                if self.expired() {
-                    return Some(Err(io::Error::from(io::ErrorKind::TimedOut)));
-                }
-
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Scrape(scrape)) => {
                         log::debug!("Received scrape response: {:?}", scrape);
@@ -137,17 +133,17 @@ impl UdpTrackerConnection {
         loop {
             let mut bytes_written: usize = 0;
             while bytes_written < request.len() {
-                bytes_written = socket.send(&request[bytes_written..]).await?;
+                bytes_written += socket.send(&request[bytes_written..]).await?;
             }
 
             let timeout_sec = 15 * (1 << retransmit_n);
-
-            let mut recv_buf = [0u8; 1024];
-            let receive_fut = async { socket.recv(&mut recv_buf).await };
-
-            match timeout(sec!(timeout_sec), receive_fut).await {
+            let mut recv_buf = [0u8; 2048];
+            match timeout(sec!(timeout_sec), socket.recv(&mut recv_buf)).await {
                 Ok(read_res) => {
                     let bytes_read = read_res?;
+                    if bytes_read == recv_buf.len() {
+                        log::warn!("UDP tracker response buffer overflow");
+                    }
                     if let Some(result) = process_response(&recv_buf[..bytes_read]) {
                         return Ok(result);
                     }
