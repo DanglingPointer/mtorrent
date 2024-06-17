@@ -3,7 +3,7 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, ip, magnet, startup, upnp};
 use futures::StreamExt;
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use tokio::net::TcpStream;
 use tokio::{runtime, task};
@@ -15,7 +15,8 @@ pub async fn single_torrent(
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
 ) -> io::Result<()> {
-    let listener_addr = ip::any_ipv4_socketaddr_from_hash(&metainfo_uri);
+    let listener_addr =
+        SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), ip::port_from_hash(&metainfo_uri));
     // get public ip to send correct listening port to trackers and peers later
     let public_pwp_ip = match upnp::PortOpener::new(
         SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),

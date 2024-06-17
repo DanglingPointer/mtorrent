@@ -359,10 +359,8 @@ async fn launch_peers<P: Peer>(
     });
 
     let info_hash = *metainfo.info_hash();
-    let remote_ip = {
-        let any = utils::ip::any_ipv4_socketaddr_from_hash(&metainfo_file);
-        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, any.port()))
-    };
+    let remote_ip =
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), utils::ip::port_from_hash(&metainfo_file));
     match mode {
         ConnectionMode::Outgoing { num_peers } => {
             task_set

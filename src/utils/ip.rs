@@ -1,5 +1,5 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::{io, ops};
 use tokio::net::TcpSocket;
 
@@ -35,12 +35,12 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
 
 const DYNAMIC_PORT_RANGE: ops::Range<u32> = 49152..65536;
 
-pub fn any_ipv4_socketaddr_from_hash(h: &impl Hash) -> SocketAddr {
+pub fn port_from_hash(h: &impl Hash) -> u16 {
     let mut hasher = DefaultHasher::default();
     h.hash(&mut hasher);
     let hashed = hasher.finish();
     let port = hashed % DYNAMIC_PORT_RANGE.len() as u64 + DYNAMIC_PORT_RANGE.start as u64;
-    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port as u16))
+    port as u16
 }
 
 pub fn bound_tcp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {

@@ -5,11 +5,11 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{config, fifo, ip};
 use futures::future;
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 use std::{cmp, fmt, io};
-use tokio::net::UdpSocket;
+use tokio::net::{self, UdpSocket};
 use tokio::time;
 
 const NUM_WANT: usize = 100;
@@ -175,14 +175,32 @@ async fn http_announce(tracker_url: &str, request: &AnnounceData) -> io::Result<
     response.try_into()
 }
 
-async fn udp_announce(tracker_addr: &str, request: &AnnounceData) -> io::Result<ResponseData> {
+async fn udp_announce(tracker_addr_str: &str, request: &AnnounceData) -> io::Result<ResponseData> {
+    async fn bind_and_connect_socket(
+        bind_addr: &SocketAddr,
+        remote_addr: &SocketAddr,
+    ) -> io::Result<UdpSocket> {
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.connect(&remote_addr).await?;
+        Ok(socket)
+    }
+
     // we need a unique udp port for each tracker
-    let bind_addr = ip::any_ipv4_socketaddr_from_hash(&tracker_addr);
-    let socket = UdpSocket::bind(bind_addr).await?;
-    socket.connect(&tracker_addr).await?;
-    let mut client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
-    let response = client.do_announce_request(request.into()).await?;
-    Ok(response.into())
+    let local_port = ip::port_from_hash(&tracker_addr_str);
+
+    for tracker_addr in net::lookup_host(tracker_addr_str).await? {
+        let local_ip = match &tracker_addr {
+            SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
+            SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+        };
+        let local_addr = SocketAddr::new(local_ip, local_port);
+        if let Ok(socket) = bind_and_connect_socket(&local_addr, &tracker_addr).await {
+            let mut client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
+            let response = client.do_announce_request(request.into()).await?;
+            return Ok(response.into());
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::ConnectionRefused, "failed to connect to tracker"))
 }
 
 #[derive(Debug)]
