@@ -170,7 +170,7 @@ async fn run_upload(
     mut ctx_handle: MainHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    macro_rules! limited {
+    macro_rules! cap {
         // because we need to update the peer (send Have's) periodically
         ($timeout:expr) => {
             cmp::min(sec!(60), $timeout)
@@ -184,10 +184,10 @@ async fn run_upload(
                 match with_ctx!(|ctx| ctrl::idle_upload_next_action(&remote_ip, &ctx.peer_states)) {
                     ctrl::IdleUploadAction::ActivateUploadAndServe(duration) => {
                         let leeching_peer = upload::activate(idling_peer).await?;
-                        peer = upload::serve_pieces(leeching_peer, limited!(duration)).await?;
+                        peer = upload::serve_pieces(leeching_peer, cap!(duration)).await?;
                     }
                     ctrl::IdleUploadAction::Linger(timeout) => {
-                        peer = upload::linger(idling_peer, limited!(timeout)).await?;
+                        peer = upload::linger(idling_peer, cap!(timeout)).await?;
                     }
                 }
             }
@@ -196,10 +196,10 @@ async fn run_upload(
                 {
                     ctrl::LeechUploadAction::DeactivateUploadAndLinger(timeout) => {
                         let idling_peer = upload::deactivate(leeching_peer).await?;
-                        peer = upload::linger(idling_peer, limited!(timeout)).await?;
+                        peer = upload::linger(idling_peer, cap!(timeout)).await?;
                     }
                     ctrl::LeechUploadAction::Serve(duration) => {
-                        peer = upload::serve_pieces(leeching_peer, limited!(duration)).await?;
+                        peer = upload::serve_pieces(leeching_peer, cap!(duration)).await?;
                     }
                 }
             }

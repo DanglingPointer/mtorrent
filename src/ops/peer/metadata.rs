@@ -65,18 +65,29 @@ fn get_metadata_ext_id(hs: &pwp::ExtendedHandshake) -> io::Result<u8> {
     })
 }
 
-fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) {
-    if ctx.metainfo_pieces.is_empty() {
-        ctx.metainfo.resize(metadata_size, 0);
-        let piece_count = (metadata_size + pwp::MAX_BLOCK_SIZE - 1) / pwp::MAX_BLOCK_SIZE;
-        ctx.metainfo_pieces = pwp::Bitfield::repeat(false, piece_count);
-    } else if ctx.metainfo.len() != metadata_size {
-        log::error!(
-            "metadata size mismatch: expected {}, got {}",
-            ctx.metainfo.len(),
-            metadata_size
-        );
-        // TODO: what to do?
+fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) -> io::Result<()> {
+    const MIN_METADATA_SIZE: usize = 50; // apprx
+    const MAX_METADATA_SIZE: usize = 100 * 1024 * 1024; // 100MB
+    match metadata_size {
+        MIN_METADATA_SIZE..=MAX_METADATA_SIZE => {
+            if ctx.metainfo_pieces.is_empty() {
+                ctx.metainfo.resize(metadata_size, 0);
+                let piece_count = (metadata_size + pwp::MAX_BLOCK_SIZE - 1) / pwp::MAX_BLOCK_SIZE;
+                ctx.metainfo_pieces = pwp::Bitfield::repeat(false, piece_count);
+            } else if ctx.metainfo.len() != metadata_size {
+                log::error!(
+                    "metadata size mismatch: expected {}, got {}",
+                    ctx.metainfo.len(),
+                    metadata_size
+                );
+                // TODO: what to do?
+            }
+            Ok(())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("invalid metainfo file size ({})", metadata_size),
+        )),
     }
 }
 
@@ -104,7 +115,7 @@ pub async fn new_peer(
         Ok(pwp::ExtendedMessage::Handshake(hs)) => {
             log::debug!("Received initial extended handshake from {}: {}", rx.remote_ip(), hs);
             if let Some(metadata_size) = hs.metadata_size {
-                with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                with_ctx!(|ctx| init_metadata(ctx, metadata_size))?;
             }
             get_metadata_ext_id(&hs)?
         }
@@ -136,7 +147,7 @@ pub async fn wait_until_enabled(peer: DisabledPeer) -> io::Result<UploadingPeer>
             pwp::ExtendedMessage::Handshake(hs) => {
                 log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), hs);
                 if let Some(metadata_size) = hs.metadata_size {
-                    with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                    with_ctx!(|ctx| init_metadata(ctx, metadata_size))?;
                 }
                 if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
                     inner.remote_metadata_ext_id = *id;
@@ -164,7 +175,7 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
                     hs
                 );
                 if let Some(metadata_size) = hs.metadata_size {
-                    with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                    with_ctx!(|ctx| init_metadata(ctx, metadata_size))?;
                 }
                 if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
                     inner.remote_metadata_ext_id = *id;
@@ -234,7 +245,7 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                         hs
                     );
                     if let Some(metadata_size) = hs.metadata_size {
-                        with_ctx!(|ctx| init_metadata(ctx, metadata_size));
+                        with_ctx!(|ctx| init_metadata(ctx, metadata_size))?;
                     }
                     if let Some(id) = hs.extensions.get(&pwp::Extension::Metadata) {
                         inner.remote_metadata_ext_id = *id;
@@ -258,26 +269,24 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                         .await?;
                 }
                 pwp::ExtendedMessage::MetadataBlock {
-                    piece: received_piece,
+                    piece: piece_index,
                     total_size,
                     data,
                 } => {
                     log::debug!("Received metadata piece {} from {}", piece, inner.tx.remote_ip());
-                    with_ctx!(|ctx| {
-                        init_metadata(ctx, total_size);
-                        if let Some(mut has_piece) = ctx.metainfo_pieces.get_mut(received_piece) {
-                            if has_piece == false {
-                                let offset = received_piece * pwp::MAX_BLOCK_SIZE;
-                                if let Some(chunk) =
-                                    ctx.metainfo.get_mut(offset..offset + data.len())
-                                {
-                                    chunk.copy_from_slice(&data);
-                                    has_piece.set(true);
-                                }
+                    with_ctx!(|ctx| init_metadata(ctx, total_size))?;
+                    with_ctx!(|ctx| if let Some(mut has_piece) =
+                        ctx.metainfo_pieces.get_mut(piece_index)
+                    {
+                        if has_piece == false {
+                            let offset = piece_index * pwp::MAX_BLOCK_SIZE;
+                            if let Some(chunk) = ctx.metainfo.get_mut(offset..offset + data.len()) {
+                                chunk.copy_from_slice(&data);
+                                has_piece.set(true);
                             }
                         }
                     });
-                    if received_piece == piece {
+                    if piece_index == piece {
                         break;
                     }
                 }
