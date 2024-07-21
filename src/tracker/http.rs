@@ -56,48 +56,54 @@ impl From<Error> for io::Error {
 
 const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
-pub async fn do_announce_request(
-    request_builder: TrackerRequestBuilder,
-) -> Result<AnnounceResponseContent, Error> {
-    let client = reqwest::Client::builder()
-        .gzip(true)
-        .user_agent(APP_USER_AGENT)
-        .timeout(sec!(30))
-        .build()?;
-    let announce_url = request_builder.build_announce();
-    log::debug!("Sending announce request to {}", announce_url);
+#[derive(Clone)]
+pub struct Client(reqwest::Client);
 
-    let response_data = client.get(announce_url).send().await?.bytes().await?;
-    let entity = benc::Element::from_bytes(&response_data)
-        .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
-    log::debug!("Received announce response: {entity}");
-
-    let content = AnnounceResponseContent::from_benc(entity)
-        .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))?;
-
-    match content.failure_reason() {
-        Some(reason) => Err(Error::Response(reason.to_string())),
-        None => Ok(content),
+impl Client {
+    pub fn new() -> Result<Self, Error> {
+        let inner = reqwest::Client::builder()
+            .gzip(true)
+            .user_agent(APP_USER_AGENT)
+            .timeout(sec!(30))
+            .build()?;
+        Ok(Client(inner))
     }
-}
 
-pub async fn do_scrape_request(
-    request_builder: TrackerRequestBuilder,
-) -> Result<benc::Element, Error> {
-    let client = reqwest::Client::builder()
-        .gzip(true)
-        .user_agent(APP_USER_AGENT)
-        .timeout(sec!(30))
-        .build()?;
-    let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
-    log::debug!("Sending scrape request to {}", scrape_url);
+    pub async fn announce(
+        &self,
+        request_builder: TrackerRequestBuilder,
+    ) -> Result<AnnounceResponseContent, Error> {
+        let announce_url = request_builder.build_announce();
+        log::debug!("Sending announce request to {}", announce_url);
 
-    let response_data = client.get(scrape_url).send().await?.bytes().await?;
-    let bencoded = benc::Element::from_bytes(&response_data)?;
-    log::debug!("Scrape response: {}", bencoded);
+        let response_data = self.0.get(announce_url).send().await?.bytes().await?;
+        let entity = benc::Element::from_bytes(&response_data)
+            .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
+        log::debug!("Received announce response: {entity}");
 
-    // TODO: parse response
-    Ok(bencoded)
+        let content = AnnounceResponseContent::from_benc(entity)
+            .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))?;
+
+        match content.failure_reason() {
+            Some(reason) => Err(Error::Response(reason.to_string())),
+            None => Ok(content),
+        }
+    }
+
+    pub async fn scrape(
+        &self,
+        request_builder: TrackerRequestBuilder,
+    ) -> Result<benc::Element, Error> {
+        let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
+        log::debug!("Sending scrape request to {}", scrape_url);
+
+        let response_data = self.0.get(scrape_url).send().await?.bytes().await?;
+        let bencoded = benc::Element::from_bytes(&response_data)?;
+        log::debug!("Scrape response: {}", bencoded);
+
+        // TODO: parse response
+        Ok(bencoded)
+    }
 }
 
 pub struct TrackerRequestBuilder {

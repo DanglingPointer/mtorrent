@@ -104,6 +104,8 @@ async fn test_https_announce() {
     let http_tracker_addrs = utils::trackers_from_metainfo(&metainfo)
         .filter_map(|addr| utils::get_http_tracker_addr(&addr).map(ToString::to_string));
 
+    let client = http::Client::new().unwrap();
+
     for tracker_url in http_tracker_addrs {
         let mut request = http::TrackerRequestBuilder::try_from(tracker_url.as_ref()).unwrap();
         request
@@ -114,9 +116,8 @@ async fn test_https_announce() {
             .bytes_downloaded(0)
             .port(6666);
 
-        let response = http::do_announce_request(request)
-            .await
-            .unwrap_or_else(|e| panic!("Announce error: {e}"));
+        let response =
+            client.announce(request).await.unwrap_or_else(|e| panic!("Announce error: {e}"));
 
         println!("Announce response: {}", response);
         let peer_count = response.peers().unwrap().len();
@@ -129,11 +130,10 @@ async fn test_https_announce() {
 #[ignore]
 #[tokio::test]
 async fn test_https_scrape() {
+    let client = http::Client::new().unwrap();
     let request =
         http::TrackerRequestBuilder::try_from("https://torrent.ubuntu.com/announce").unwrap();
-    let response = http::do_scrape_request(request)
-        .await
-        .unwrap_or_else(|e| panic!("Scrape error: {e}"));
+    let response = client.scrape(request).await.unwrap_or_else(|e| panic!("Scrape error: {e}"));
     println!("{response}");
     assert!(matches!(response, benc::Element::Dictionary(_)));
 }

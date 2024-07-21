@@ -171,7 +171,8 @@ impl From<udp::AnnounceResponse> for ResponseData {
 // ------------------------------------------------------------------------------------------------
 
 async fn http_announce(tracker_url: &str, request: &AnnounceData) -> io::Result<ResponseData> {
-    let response = http::do_announce_request((tracker_url, request).try_into()?).await?;
+    let client = http::Client::new()?;
+    let response = client.announce((tracker_url, request).try_into()?).await?;
     response.try_into()
 }
 
