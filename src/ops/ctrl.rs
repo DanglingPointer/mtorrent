@@ -55,10 +55,8 @@ fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
     // Calculate the number of pieces to request based on the following:
     // peer_reqq * 16kB == piece_len * piece_count
     // Note that piece_len/MAX_BLOCK_SIZE might still exceed reqq. This is being dealt with in download::get_pieces()
-    let max_request_count = cmp::min(
-        50,
-        cmp::max(1, pwp::MAX_BLOCK_SIZE * get_peer_reqq(peer_ip, ctx) / ctx.pieces.piece_len(0)),
-    );
+    let max_request_count =
+        (pwp::MAX_BLOCK_SIZE * get_peer_reqq(peer_ip, ctx) / ctx.pieces.piece_len(0)).clamp(1, 50);
     let available_pieces: HashSet<usize> =
         if let Some(it) = ctx.piece_tracker.get_peer_pieces(peer_ip) {
             it.collect()

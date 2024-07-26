@@ -179,7 +179,7 @@ impl TrackerClient for (http::Client, String) {
         response.try_into()
     }
 
-    fn name(&self) -> String {
+    fn name(&self) -> impl fmt::Display {
         format!("HTTP tracker at {}", self.1)
     }
 }
@@ -189,7 +189,7 @@ impl TrackerClient for udp::UdpTrackerConnection {
         self.do_announce_request(request.into()).await.map(Into::into)
     }
 
-    fn name(&self) -> String {
+    fn name(&self) -> impl fmt::Display {
         format!("UDP tracker at {}", self.remote_addr())
     }
 }
