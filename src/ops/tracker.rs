@@ -3,7 +3,7 @@ use crate::sec;
 use crate::tracker::{http, udp, utils};
 use crate::utils::peer_id::PeerId;
 use crate::utils::{config, fifo, ip};
-use futures::future;
+use futures::{future, Future, FutureExt, TryFutureExt};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
@@ -12,49 +12,227 @@ use std::{cmp, fmt, io};
 use tokio::net::{self, UdpSocket};
 use tokio::time;
 
-const NUM_WANT: usize = 100;
+pub async fn make_periodic_announces(
+    mut ctx_handle: ctx::Handle<ctx::MainCtx>,
+    config_dir: impl AsRef<Path>,
+    cb_channel: fifo::Sender<SocketAddr>,
+) {
+    define_with_ctx!(ctx_handle);
 
-#[derive(Clone, Copy)]
-enum AnnounceEvent {
-    Started,
-    #[allow(dead_code)]
-    Stopped,
-    Completed,
+    let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
+        let mut http_trackers = HashSet::new();
+        let mut udp_trackers = HashSet::new();
+
+        add_http_and_udp_trackers(
+            utils::trackers_from_metainfo(&ctx.metainfo),
+            config_dir,
+            &mut http_trackers,
+            &mut udp_trackers,
+        );
+        (http_trackers, udp_trackers)
+    });
+
+    launch_announces(udp_trackers, http_trackers, ctx_handle, cb_channel).await;
 }
 
-impl From<AnnounceEvent> for http::AnnounceEvent {
-    fn from(event: AnnounceEvent) -> Self {
-        match event {
-            AnnounceEvent::Started => http::AnnounceEvent::Started,
-            AnnounceEvent::Stopped => http::AnnounceEvent::Stopped,
-            AnnounceEvent::Completed => http::AnnounceEvent::Completed,
+pub async fn make_preliminary_announces(
+    mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
+    config_dir: impl AsRef<Path>,
+    cb_channel: fifo::Sender<SocketAddr>,
+) {
+    define_with_ctx!(ctx_handle);
+
+    let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
+        let mut http_trackers = HashSet::new();
+        let mut udp_trackers = HashSet::new();
+
+        add_http_and_udp_trackers(
+            ctx.magnet.trackers(),
+            config_dir,
+            &mut http_trackers,
+            &mut udp_trackers,
+        );
+        (http_trackers, udp_trackers)
+    });
+
+    launch_announces(udp_trackers, http_trackers, ctx_handle, cb_channel).await;
+}
+
+// ------------------------------------------------------------------------------------------------
+
+fn add_http_and_udp_trackers<'a>(
+    supplied_trackers: impl IntoIterator<Item = &'a str>,
+    config_dir: impl AsRef<Path>,
+    http_trackers: &mut HashSet<String>,
+    udp_trackers: &mut HashSet<String>,
+) {
+    macro_rules! add_trackers {
+        ($trackers:expr) => {
+            for tracker_addr in $trackers {
+                if let Some(http) = utils::get_http_tracker_addr(&tracker_addr) {
+                    http_trackers.insert(http.into());
+                }
+                if let Some(udp) = utils::get_udp_tracker_addr(&tracker_addr) {
+                    udp_trackers.insert(udp.into());
+                }
+            }
+        };
+    }
+
+    let supplied_trackers = supplied_trackers.into_iter().collect::<Vec<_>>();
+    add_trackers!(&supplied_trackers);
+
+    if http_trackers.is_empty() && udp_trackers.is_empty() {
+        log::warn!("No trackers found - trying to load from config");
+        if let Ok(loaded_trackers) = config::load_trackers(config_dir) {
+            add_trackers!(loaded_trackers);
+        }
+    } else {
+        match config::save_trackers(config_dir, supplied_trackers) {
+            Ok(()) => (),
+            Err(e) => log::warn!("Failed to save trackers: {e}"),
+        }
+    }
+
+    if http_trackers.is_empty() && udp_trackers.is_empty() {
+        log::error!("No trackers found - download will fail");
+    }
+}
+
+async fn launch_announces(
+    udp_trackers: impl IntoIterator<Item = String>,
+    http_trackers: impl IntoIterator<Item = String>,
+    handler: impl AnnounceHandler + Clone,
+    cb_channel: fifo::Sender<SocketAddr>,
+) {
+    let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| async {
+        let tracker_addr_copy = tracker_addr.clone();
+        match new_udp_client(tracker_addr).await {
+            Ok(udp_client) => {
+                announce_periodically(udp_client, handler.clone(), cb_channel.clone()).await;
+            }
+            Err(e) => {
+                log::error!("Failed to create UDP tracker client for {tracker_addr_copy}: {e}");
+            }
+        }
+    });
+
+    match http::Client::new() {
+        Ok(http_client) => {
+            let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
+                announce_periodically(
+                    (http_client.clone(), tracker_addr),
+                    handler.clone(),
+                    cb_channel.clone(),
+                )
+                .boxed_local()
+            });
+            future::join_all(http_futures_it.chain(udp_futures_it.map(FutureExt::boxed_local)))
+                .await;
+        }
+        Err(e) => {
+            log::error!("Failed to create HTTP tracker client: {e}");
+            future::join_all(udp_futures_it).await;
         }
     }
 }
 
-impl From<AnnounceEvent> for udp::AnnounceEvent {
-    fn from(event: AnnounceEvent) -> Self {
-        match event {
-            AnnounceEvent::Started => udp::AnnounceEvent::Started,
-            AnnounceEvent::Stopped => udp::AnnounceEvent::Stopped,
-            AnnounceEvent::Completed => udp::AnnounceEvent::Completed,
+async fn announce_periodically(
+    mut client: impl TrackerClient,
+    mut handler: impl AnnounceHandler,
+    cb_channel: fifo::Sender<SocketAddr>,
+) {
+    loop {
+        let request = handler.generate_request();
+        match client.announce(&request).await {
+            Ok(mut response) => {
+                log::info!("Received response from {}: {:?}", client.name(), response);
+                handler.process_response(&mut response);
+                let interval = cmp::min(sec!(300), response.interval);
+                for peer_addr in response.peers {
+                    cb_channel.send(peer_addr);
+                }
+                time::sleep(interval).await;
+            }
+            Err(e) => {
+                log::error!("Announce to {} failed: {}", client.name(), e);
+                return;
+            }
         }
     }
 }
 
-struct AnnounceData {
-    info_hash: [u8; 20],
-    downloaded: usize,
-    left: usize,
-    uploaded: usize,
-    local_peer_id: PeerId,
-    listener_port: u16,
-    event: Option<AnnounceEvent>,
+// ------------------------------------------------------------------------------------------------
+
+trait TrackerClient {
+    fn announce(
+        &mut self,
+        request: &AnnounceData,
+    ) -> impl Future<Output = io::Result<ResponseData>>;
+
+    fn name(&self) -> impl fmt::Display;
 }
 
-impl AnnounceData {
-    fn new_main(ctx: &ctx::MainCtx) -> Self {
-        Self {
+impl TrackerClient for (http::Client, String) {
+    async fn announce(&mut self, request: &AnnounceData) -> io::Result<ResponseData> {
+        let response = self.0.announce((self.1.as_ref(), request).try_into()?).await?;
+        response.try_into()
+    }
+
+    fn name(&self) -> String {
+        format!("HTTP tracker at {}", self.1)
+    }
+}
+
+impl TrackerClient for udp::UdpTrackerConnection {
+    async fn announce(&mut self, request: &AnnounceData) -> io::Result<ResponseData> {
+        self.do_announce_request(request.into()).await.map(Into::into)
+    }
+
+    fn name(&self) -> String {
+        format!("UDP tracker at {}", self.remote_addr())
+    }
+}
+
+async fn new_udp_client(tracker_addr_str: String) -> io::Result<udp::UdpTrackerConnection> {
+    async fn bind_and_connect_socket(
+        bind_addr: &SocketAddr,
+        remote_addr: &SocketAddr,
+    ) -> io::Result<UdpSocket> {
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.connect(&remote_addr).await?;
+        Ok(socket)
+    }
+
+    // we need a unique udp port for each tracker
+    let local_port = ip::port_from_hash(&tracker_addr_str);
+
+    for tracker_addr in net::lookup_host(tracker_addr_str).await? {
+        let local_ip = match &tracker_addr {
+            SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
+            SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+        };
+        let local_addr = SocketAddr::new(local_ip, local_port);
+        if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr)
+            .and_then(udp::UdpTrackerConnection::from_connected_socket)
+            .await
+        {
+            return Ok(client);
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::ConnectionRefused, "failed to connect to tracker"))
+}
+
+// ------------------------------------------------------------------------------------------------
+
+trait AnnounceHandler {
+    fn generate_request(&mut self) -> AnnounceData;
+    fn process_response(&mut self, response: &mut ResponseData);
+}
+
+impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
+    fn generate_request(&mut self) -> AnnounceData {
+        self.with_ctx(|ctx| AnnounceData {
             info_hash: *ctx.metainfo.info_hash(),
             downloaded: ctx.accountant.accounted_bytes(),
             left: ctx.accountant.missing_bytes(),
@@ -68,11 +246,19 @@ impl AnnounceData {
             } else {
                 None
             },
-        }
+        })
     }
 
-    fn new_preliminary(ctx: &ctx::PreliminaryCtx) -> Self {
-        Self {
+    fn process_response(&mut self, response: &mut ResponseData) {
+        self.with_ctx(|ctx| {
+            response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none())
+        });
+    }
+}
+
+impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
+    fn generate_request(&mut self) -> AnnounceData {
+        self.with_ctx(|ctx| AnnounceData {
             info_hash: *ctx.magnet.info_hash(),
             downloaded: 0,
             left: 0,
@@ -80,8 +266,34 @@ impl AnnounceData {
             local_peer_id: *ctx.const_data.local_peer_id(),
             listener_port: ctx.const_data.pwp_listener_public_addr().port(),
             event: Some(AnnounceEvent::Started),
-        }
+        })
     }
+
+    fn process_response(&mut self, response: &mut ResponseData) {
+        self.with_ctx(|ctx| response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip)));
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+const NUM_WANT: usize = 100;
+
+#[derive(Clone, Copy)]
+enum AnnounceEvent {
+    Started,
+    #[allow(dead_code)]
+    Stopped,
+    Completed,
+}
+
+struct AnnounceData {
+    info_hash: [u8; 20],
+    downloaded: usize,
+    left: usize,
+    uploaded: usize,
+    local_peer_id: PeerId,
+    listener_port: u16,
+    event: Option<AnnounceEvent>,
 }
 
 impl From<&AnnounceData> for udp::AnnounceRequest {
@@ -121,6 +333,26 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
             request.event(event.into());
         }
         Ok(request)
+    }
+}
+
+impl From<AnnounceEvent> for http::AnnounceEvent {
+    fn from(event: AnnounceEvent) -> Self {
+        match event {
+            AnnounceEvent::Started => http::AnnounceEvent::Started,
+            AnnounceEvent::Stopped => http::AnnounceEvent::Stopped,
+            AnnounceEvent::Completed => http::AnnounceEvent::Completed,
+        }
+    }
+}
+
+impl From<AnnounceEvent> for udp::AnnounceEvent {
+    fn from(event: AnnounceEvent) -> Self {
+        match event {
+            AnnounceEvent::Started => udp::AnnounceEvent::Started,
+            AnnounceEvent::Stopped => udp::AnnounceEvent::Stopped,
+            AnnounceEvent::Completed => udp::AnnounceEvent::Completed,
+        }
     }
 }
 
@@ -166,220 +398,4 @@ impl From<udp::AnnounceResponse> for ResponseData {
             peers,
         }
     }
-}
-
-// ------------------------------------------------------------------------------------------------
-
-async fn http_announce(tracker_url: &str, request: &AnnounceData) -> io::Result<ResponseData> {
-    let client = http::Client::new()?;
-    let response = client.announce((tracker_url, request).try_into()?).await?;
-    response.try_into()
-}
-
-async fn udp_announce(tracker_addr_str: &str, request: &AnnounceData) -> io::Result<ResponseData> {
-    async fn bind_and_connect_socket(
-        bind_addr: &SocketAddr,
-        remote_addr: &SocketAddr,
-    ) -> io::Result<UdpSocket> {
-        let socket = UdpSocket::bind(bind_addr).await?;
-        socket.connect(&remote_addr).await?;
-        Ok(socket)
-    }
-
-    // we need a unique udp port for each tracker
-    let local_port = ip::port_from_hash(&tracker_addr_str);
-
-    for tracker_addr in net::lookup_host(tracker_addr_str).await? {
-        let local_ip = match &tracker_addr {
-            SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-            SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
-        };
-        let local_addr = SocketAddr::new(local_ip, local_port);
-        if let Ok(socket) = bind_and_connect_socket(&local_addr, &tracker_addr).await {
-            let mut client = udp::UdpTrackerConnection::from_connected_socket(socket).await?;
-            let response = client.do_announce_request(request.into()).await?;
-            return Ok(response.into());
-        }
-    }
-    Err(io::Error::new(io::ErrorKind::ConnectionRefused, "failed to connect to tracker"))
-}
-
-#[derive(Debug)]
-enum TrackerType {
-    Http,
-    Udp,
-}
-
-async fn announce_periodically(
-    tracker_type: TrackerType,
-    tracker_addr: String,
-    mut handle: ctx::Handle<ctx::MainCtx>,
-    cb_channel: fifo::Sender<SocketAddr>,
-) {
-    define_with_ctx!(handle);
-    loop {
-        let request = with_ctx!(|ctx| AnnounceData::new_main(ctx));
-        let response_result = match tracker_type {
-            TrackerType::Http => http_announce(&tracker_addr, &request).await,
-            TrackerType::Udp => udp_announce(&tracker_addr, &request).await,
-        };
-        match response_result {
-            Ok(mut response) => {
-                log::info!(
-                    "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
-                    response
-                );
-                with_ctx!(|ctx| {
-                    response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none());
-                });
-                let interval = cmp::min(sec!(300), response.interval);
-                for peer_addr in response.peers {
-                    cb_channel.send(peer_addr);
-                }
-                time::sleep(interval).await;
-            }
-            Err(e) => {
-                log::error!("Announce to {tracker_type:?} tracker at {tracker_addr} failed: {e}");
-                return;
-            }
-        }
-    }
-}
-
-async fn announce_once(
-    tracker_type: TrackerType,
-    tracker_addr: String,
-    mut handle: ctx::Handle<ctx::PreliminaryCtx>,
-    cb_channel: fifo::Sender<SocketAddr>,
-) {
-    define_with_ctx!(handle);
-    let request = with_ctx!(|ctx| AnnounceData::new_preliminary(ctx));
-    let response_result = match tracker_type {
-        TrackerType::Http => http_announce(&tracker_addr, &request).await,
-        TrackerType::Udp => udp_announce(&tracker_addr, &request).await,
-    };
-    match response_result {
-        Ok(mut response) => {
-            log::info!(
-                "Received response from {tracker_type:?} tracker at {tracker_addr}: {:?}",
-                response
-            );
-            with_ctx!(|ctx| {
-                response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip))
-            });
-            for peer_addr in response.peers {
-                cb_channel.send(peer_addr);
-            }
-        }
-        Err(e) => log::error!("Announce to {tracker_type:?} tracker at {tracker_addr} failed: {e}"),
-    }
-}
-
-// ------------------------------------------------------------------------------------------------
-
-fn add_http_and_udp_trackers<'a>(
-    supplied_trackers: impl IntoIterator<Item = &'a str>,
-    config_dir: impl AsRef<Path>,
-    http_trackers: &mut HashSet<String>,
-    udp_trackers: &mut HashSet<String>,
-) {
-    macro_rules! add_trackers {
-        ($trackers:expr) => {
-            for tracker_addr in $trackers {
-                if let Some(http) = utils::get_http_tracker_addr(&tracker_addr) {
-                    http_trackers.insert(http.into());
-                }
-                if let Some(udp) = utils::get_udp_tracker_addr(&tracker_addr) {
-                    udp_trackers.insert(udp.into());
-                }
-            }
-        };
-    }
-
-    let supplied_trackers = supplied_trackers.into_iter().collect::<Vec<_>>();
-    add_trackers!(&supplied_trackers);
-
-    if http_trackers.is_empty() && udp_trackers.is_empty() {
-        log::warn!("No trackers found - trying to load from config");
-        if let Ok(loaded_trackers) = config::load_trackers(&config_dir) {
-            add_trackers!(loaded_trackers);
-        }
-    } else {
-        match config::save_trackers(config_dir, supplied_trackers) {
-            Ok(()) => (),
-            Err(e) => log::warn!("Failed to save trackers: {e}"),
-        }
-    }
-
-    if http_trackers.is_empty() && udp_trackers.is_empty() {
-        log::error!("No trackers found - download will fail");
-    }
-}
-
-pub async fn make_periodic_announces(
-    mut ctx_handle: ctx::Handle<ctx::MainCtx>,
-    config_dir: impl AsRef<Path>,
-    cb_channel: fifo::Sender<SocketAddr>,
-) {
-    define_with_ctx!(ctx_handle);
-
-    let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
-        let mut http_trackers = HashSet::new();
-        let mut udp_trackers = HashSet::new();
-
-        add_http_and_udp_trackers(
-            utils::trackers_from_metainfo(&ctx.metainfo),
-            config_dir,
-            &mut http_trackers,
-            &mut udp_trackers,
-        );
-        (http_trackers, udp_trackers)
-    });
-
-    let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Http,
-            tracker_addr,
-            ctx_handle.clone(),
-            cb_channel.clone(),
-        )
-    });
-    let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_periodically(
-            TrackerType::Udp,
-            tracker_addr,
-            ctx_handle.clone(),
-            cb_channel.clone(),
-        )
-    });
-    future::join_all(http_futures_it.chain(udp_futures_it)).await;
-}
-
-pub async fn make_preliminary_announces(
-    mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
-    config_dir: impl AsRef<Path>,
-    cb_channel: fifo::Sender<SocketAddr>,
-) {
-    define_with_ctx!(ctx_handle);
-
-    let (http_trackers, udp_trackers) = with_ctx!(|ctx| {
-        let mut http_trackers = HashSet::new();
-        let mut udp_trackers = HashSet::new();
-
-        add_http_and_udp_trackers(
-            ctx.magnet.trackers(),
-            config_dir,
-            &mut http_trackers,
-            &mut udp_trackers,
-        );
-        (http_trackers, udp_trackers)
-    });
-
-    let http_futures_it = http_trackers.into_iter().map(|tracker_addr| {
-        announce_once(TrackerType::Http, tracker_addr, ctx_handle.clone(), cb_channel.clone())
-    });
-    let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| {
-        announce_once(TrackerType::Udp, tracker_addr, ctx_handle.clone(), cb_channel.clone())
-    });
-    future::join_all(http_futures_it.chain(udp_futures_it)).await;
 }

@@ -9,54 +9,34 @@ use tokio::time::{timeout, Instant};
 
 pub struct UdpTrackerConnection {
     socket: UdpSocket,
+    remote_addr: SocketAddr,
     connection_id: u64,
     connection_eof: Instant,
 }
 
 impl UdpTrackerConnection {
     pub async fn from_connected_socket(socket: UdpSocket) -> io::Result<Self> {
-        let transaction_id = rand::random::<u32>();
-        let request = {
-            let mut buffer = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
-            ConnectRequest.encode(0, transaction_id, &mut buffer).unwrap();
-            buffer
-        };
-
-        log::trace!("Sending connect request");
-
-        let connect_response =
-            Self::do_request(&socket, request, |data: &[u8]| -> Option<ConnectResponse> {
-                match parse_response(data, transaction_id) {
-                    Ok(AnyResponse::Connect(connect)) => Some(connect),
-                    _ => None,
-                }
-            })
-            .await?;
-
-        log::trace!("Received connect response, connection_id={}", connect_response.connection_id);
-
-        Ok(UdpTrackerConnection {
+        let remote_addr = socket.peer_addr()?;
+        let mut conn = Self {
             socket,
-            connection_id: connect_response.connection_id,
-            connection_eof: Instant::now() + sec!(60),
-        })
+            remote_addr,
+            connection_id: 0,
+            connection_eof: Instant::now(),
+        };
+        conn.renew().await?;
+        Ok(conn)
     }
 
-    pub async fn from_expired_connection(old: UdpTrackerConnection) -> io::Result<Self> {
-        debug_assert!(old.expired());
-        Self::from_connected_socket(old.socket).await
-    }
-
-    pub fn expired(&self) -> bool {
-        self.connection_eof <= Instant::now()
+    pub fn remote_addr(&self) -> &SocketAddr {
+        &self.remote_addr
     }
 
     pub async fn do_announce_request(
         &mut self,
         request_data: AnnounceRequest,
     ) -> io::Result<AnnounceResponse> {
-        if self.expired() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "connection expired"));
+        if self.connection_eof <= Instant::now() {
+            self.renew().await?;
         }
 
         let transaction_id = rand::random::<u32>();
@@ -91,8 +71,8 @@ impl UdpTrackerConnection {
         &mut self,
         request_data: ScrapeRequest,
     ) -> io::Result<ScrapeResponse> {
-        if self.expired() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "connection expired"));
+        if self.connection_eof <= Instant::now() {
+            self.renew().await?;
         }
 
         let transaction_id = rand::random::<u32>();
@@ -118,6 +98,31 @@ impl UdpTrackerConnection {
             },
         )
         .await?
+    }
+
+    async fn renew(&mut self) -> io::Result<()> {
+        let transaction_id = rand::random::<u32>();
+        let request = {
+            let mut buffer = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
+            ConnectRequest.encode(0, transaction_id, &mut buffer).unwrap();
+            buffer
+        };
+
+        log::trace!("Sending connect request");
+
+        let connect_response =
+            Self::do_request(&self.socket, request, |data: &[u8]| -> Option<ConnectResponse> {
+                match parse_response(data, transaction_id) {
+                    Ok(AnyResponse::Connect(connect)) => Some(connect),
+                    _ => None,
+                }
+            })
+            .await?;
+
+        log::trace!("Received connect response, connection_id={}", connect_response.connection_id);
+        self.connection_id = connect_response.connection_id;
+        self.connection_eof = Instant::now() + sec!(60);
+        Ok(())
     }
 
     async fn do_request<R, F>(
