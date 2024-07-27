@@ -3,6 +3,9 @@ name = "mtorrent"
 version = "0.2.4"
 edition = "2021"
 authors = ["Mikhail Vasilyev"]
+description = "A fast and robust Bittorrent client"
+repository = "https://github.com/DanglingPointer/mtorrent"
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
