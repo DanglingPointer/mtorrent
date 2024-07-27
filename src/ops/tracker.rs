@@ -2,7 +2,7 @@ use super::ctx;
 use crate::sec;
 use crate::tracker::{http, udp, utils};
 use crate::utils::peer_id::PeerId;
-use crate::utils::{config, fifo, ip};
+use crate::utils::{config, fifo};
 use futures::{future, Future, FutureExt, TryFutureExt};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -208,15 +208,12 @@ async fn new_udp_client(tracker_addr_str: String) -> io::Result<udp::UdpTrackerC
         Ok(socket)
     }
 
-    // we need a unique udp port for each tracker
-    let local_port = ip::port_from_hash(&tracker_addr_str);
-
     for tracker_addr in net::lookup_host(tracker_addr_str).await? {
         let local_ip = match &tracker_addr {
             SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
             SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
         };
-        let local_addr = SocketAddr::new(local_ip, local_port);
+        let local_addr = SocketAddr::new(local_ip, 0);
         if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr)
             .and_then(udp::UdpTrackerConnection::from_connected_socket)
             .await
