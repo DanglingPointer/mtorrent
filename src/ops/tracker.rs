@@ -66,9 +66,25 @@ fn add_http_and_udp_trackers<'a>(
     http_trackers: &mut HashSet<String>,
     udp_trackers: &mut HashSet<String>,
 ) {
-    macro_rules! add_trackers {
-        ($trackers:expr) => {
-            for tracker_addr in $trackers {
+    let supplied_trackers: HashSet<_> = supplied_trackers
+        .into_iter()
+        .filter(|addr| {
+            utils::get_http_tracker_addr(addr).is_some()
+                || utils::get_udp_tracker_addr(addr).is_some()
+        })
+        .map(|addr| addr.to_string())
+        .collect();
+
+    if !supplied_trackers.is_empty() {
+        match config::save_trackers(&config_dir, supplied_trackers) {
+            Ok(()) => (),
+            Err(e) => log::warn!("Failed to save trackers to file: {e}"),
+        }
+    }
+
+    match config::load_trackers(config_dir) {
+        Ok(loaded_trackers) => {
+            for tracker_addr in loaded_trackers {
                 if let Some(http) = utils::get_http_tracker_addr(&tracker_addr) {
                     http_trackers.insert(http.into());
                 }
@@ -76,26 +92,14 @@ fn add_http_and_udp_trackers<'a>(
                     udp_trackers.insert(udp.into());
                 }
             }
-        };
-    }
-
-    let supplied_trackers = supplied_trackers.into_iter().collect::<Vec<_>>();
-    add_trackers!(&supplied_trackers);
-
-    if http_trackers.is_empty() && udp_trackers.is_empty() {
-        log::warn!("No trackers found - trying to load from config");
-        if let Ok(loaded_trackers) = config::load_trackers(config_dir) {
-            add_trackers!(loaded_trackers);
         }
-    } else {
-        match config::save_trackers(config_dir, supplied_trackers) {
-            Ok(()) => (),
-            Err(e) => log::warn!("Failed to save trackers: {e}"),
+        Err(e) => {
+            log::warn!("Failed to load trackers from file: {e}");
         }
     }
 
     if http_trackers.is_empty() && udp_trackers.is_empty() {
-        log::error!("No trackers found - download will fail");
+        log::error!("No trackers available - download will fail");
     }
 }
 
@@ -397,5 +401,85 @@ impl From<udp::AnnounceResponse> for ResponseData {
             interval: sec!(response.interval as u64),
             peers,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, iter};
+
+    #[test]
+    fn test_combine_supplied_and_saved_trackers() {
+        let config_dir = "test_combine_supplied_and_saved_trackers";
+        fs::create_dir_all(config_dir).unwrap();
+
+        {
+            let supplied_trackers = [
+                "udp://open.stealth.si:80/announce",
+                "invalid",
+                "https://example.com",
+            ];
+
+            let mut http_trackers = HashSet::new();
+            let mut udp_trackers = HashSet::new();
+            add_http_and_udp_trackers(
+                supplied_trackers,
+                config_dir,
+                &mut http_trackers,
+                &mut udp_trackers,
+            );
+
+            assert_eq!(
+                http_trackers,
+                ["https://example.com"].into_iter().map(Into::into).collect()
+            );
+            assert_eq!(udp_trackers, ["open.stealth.si:80"].into_iter().map(Into::into).collect());
+        }
+
+        {
+            let mut http_trackers = HashSet::new();
+            let mut udp_trackers = HashSet::new();
+            add_http_and_udp_trackers(
+                iter::empty(),
+                config_dir,
+                &mut http_trackers,
+                &mut udp_trackers,
+            );
+            assert_eq!(
+                http_trackers,
+                ["https://example.com"].into_iter().map(Into::into).collect()
+            );
+            assert_eq!(udp_trackers, ["open.stealth.si:80"].into_iter().map(Into::into).collect());
+        }
+
+        {
+            let supplied_trackers = ["http://tracker1.com", "udp://tracker.tiny-vps.com:6969"];
+
+            let mut http_trackers = HashSet::new();
+            let mut udp_trackers = HashSet::new();
+            add_http_and_udp_trackers(
+                supplied_trackers,
+                config_dir,
+                &mut http_trackers,
+                &mut udp_trackers,
+            );
+            assert_eq!(
+                http_trackers,
+                ["https://example.com", "http://tracker1.com"]
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
+            );
+            assert_eq!(
+                udp_trackers,
+                ["open.stealth.si:80", "tracker.tiny-vps.com:6969"]
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
+            );
+        }
+
+        fs::remove_dir_all(config_dir).unwrap();
     }
 }
