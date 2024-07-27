@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bitvec",
  "form_urlencoded",
