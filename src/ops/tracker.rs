@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
-use std::{cmp, fmt, io};
+use std::{fmt, io};
 use tokio::net::{self, UdpSocket};
 use tokio::time;
 
@@ -152,7 +152,7 @@ async fn announce_periodically(
             Ok(mut response) => {
                 log::info!("Received response from {}: {:?}", client.name(), response);
                 handler.process_response(&mut response);
-                let interval = cmp::min(sec!(300), response.interval);
+                let interval = response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {
                     cb_channel.send(peer_addr);
                 }
@@ -247,6 +247,11 @@ impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
             } else {
                 None
             },
+            num_want: if ctx.accountant.missing_bytes() == 0 {
+                0
+            } else {
+                100
+            },
         })
     }
 
@@ -267,6 +272,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
             local_peer_id: *ctx.const_data.local_peer_id(),
             listener_port: ctx.const_data.pwp_listener_public_addr().port(),
             event: Some(AnnounceEvent::Started),
+            num_want: 100,
         })
     }
 
@@ -276,8 +282,6 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
 }
 
 // ------------------------------------------------------------------------------------------------
-
-const NUM_WANT: usize = 100;
 
 #[derive(Clone, Copy)]
 enum AnnounceEvent {
@@ -295,6 +299,7 @@ struct AnnounceData {
     local_peer_id: PeerId,
     listener_port: u16,
     event: Option<AnnounceEvent>,
+    num_want: usize,
 }
 
 impl From<&AnnounceData> for udp::AnnounceRequest {
@@ -308,7 +313,7 @@ impl From<&AnnounceData> for udp::AnnounceRequest {
             event: data.event.map(Into::into).unwrap_or(udp::AnnounceEvent::None),
             ip: None,
             key: 0,
-            num_want: Some(NUM_WANT as i32),
+            num_want: Some(data.num_want as i32),
             port: data.listener_port,
         }
     }
@@ -326,7 +331,7 @@ impl TryFrom<(&str, &AnnounceData)> for http::TrackerRequestBuilder {
             .bytes_downloaded(data.downloaded)
             .bytes_left(data.left)
             .bytes_uploaded(data.uploaded)
-            .numwant(NUM_WANT)
+            .numwant(data.num_want)
             .compact_support()
             .no_peer_id()
             .port(data.listener_port);
