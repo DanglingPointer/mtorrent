@@ -8,10 +8,9 @@ use core::fmt;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 use std::{fs, io, mem};
-use tokio::time;
+use tokio::time::{self, Instant};
 
 pub struct Handle<C> {
     ctx: Rc<RefCell<C>>,
@@ -182,9 +181,9 @@ pub async fn periodic_metadata_check(
 ) -> io::Result<impl IntoIterator<Item = SocketAddr>> {
     define_with_ctx!(ctx_handle);
 
-    const INTERVAL: Duration = sec!(1);
+    let mut interval = time::interval(sec!(1));
     while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
-        time::sleep(INTERVAL).await;
+        interval.tick().await;
         with_ctx!(|ctx| log::info!("Periodic state dump:\n{}", ctx));
     }
 
@@ -217,14 +216,14 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: imp
         }
     });
 
-    #[cfg(debug_assertions)]
-    const INTERVAL: Duration = sec!(3);
-
     #[cfg(not(debug_assertions))]
-    const INTERVAL: Duration = sec!(10);
+    let mut interval = time::interval(sec!(10));
+
+    #[cfg(debug_assertions)]
+    let mut interval = time::interval_at(Instant::now() + sec!(3), sec!(1));
 
     loop {
-        time::sleep(INTERVAL).await;
+        interval.tick().await;
         let finished = with_ctx!(|ctx| {
             if let Err(e) = config::save_state(
                 &outputdir,
