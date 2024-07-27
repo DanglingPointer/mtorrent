@@ -1,3 +1,4 @@
+use crate::sec;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::{io, ops};
@@ -56,6 +57,9 @@ pub fn bound_tcp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     socket.set_reuseaddr(true)?;
     #[cfg(not(windows))]
     socket.set_reuseport(true)?;
+    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable lingering with 0 timeout
+    // See https://stackoverflow.com/a/71975993
+    socket.set_linger(Some(sec!(0)))?;
     socket.bind(local_addr)?;
     Ok(socket)
 }
