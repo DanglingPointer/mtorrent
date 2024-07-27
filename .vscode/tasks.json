@@ -60,6 +60,22 @@
 			],
 			"group": "none",
 			"label": "rust: cargo clippy"
+		},
+		{
+			"type": "cargo",
+			"command": "clippy",
+			"args": [
+				"--all-targets",
+				"--all-features",
+				"--release",
+				"--",
+				"-Dwarnings",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "none",
+			"label": "rust: cargo clippy --release"
 		}
 	],
 	"inputs": [

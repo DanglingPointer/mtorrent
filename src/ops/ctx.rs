@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::{cell::RefCell, rc::Rc};
 use std::{fs, io, mem};
-use tokio::time::{self, Instant};
+use tokio::time;
 
 pub struct Handle<C> {
     ctx: Rc<RefCell<C>>,
@@ -220,7 +220,7 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: imp
     let mut interval = time::interval(sec!(10));
 
     #[cfg(debug_assertions)]
-    let mut interval = time::interval_at(Instant::now() + sec!(3), sec!(1));
+    let mut interval = time::interval_at(time::Instant::now() + sec!(3), sec!(1));
 
     loop {
         interval.tick().await;

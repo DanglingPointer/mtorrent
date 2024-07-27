@@ -22,5 +22,7 @@ jobs:
       run: ./cargo.sh nextest run --all-targets --all-features
     - name: Lint
       run: ./cargo.sh clippy --all-targets --all-features -- -D warnings
+    - name: Lint release
+      run: ./cargo.sh clippy --release --all-targets --all-features -- -D warnings
     - name: Check formatting
       run: ./cargo.sh fmt --check --verbose
