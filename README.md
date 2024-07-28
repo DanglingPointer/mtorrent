@@ -18,6 +18,7 @@ CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently r
 - [x] [Extension Protocol](https://www.bittorrent.org/beps/bep_0010.html)
 - [x] [PEX](https://www.bittorrent.org/beps/bep_0011.html)
 - [x] [Magnet URIs](http://www.bittorrent.org/beps/bep_0009.html)
+- [x] [IPv6 Tracker Extension](https://www.bittorrent.org/beps/bep_0007.html)
 - [ ] [DHT](https://www.bittorrent.org/beps/bep_0005.html)
 - [ ] [IPv6 DHT](https://www.bittorrent.org/beps/bep_0032.html)
 - [ ] [STUN (for DHT)?](https://datatracker.ietf.org/doc/html/rfc8489)

@@ -77,11 +77,11 @@ impl Client {
         log::debug!("Sending announce request to {}", announce_url);
 
         let response_data = self.0.get(announce_url).send().await?.bytes().await?;
-        let entity = benc::Element::from_bytes(&response_data)
+        let bencoded = benc::Element::from_bytes(&response_data)
             .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
-        log::debug!("Received announce response: {entity}");
+        log::debug!("Received announce response: {bencoded}");
 
-        let content = AnnounceResponseContent::from_benc(entity)
+        let content = AnnounceResponseContent::from_benc(bencoded)
             .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))?;
 
         match content.failure_reason() {
@@ -98,7 +98,8 @@ impl Client {
         log::debug!("Sending scrape request to {}", scrape_url);
 
         let response_data = self.0.get(scrape_url).send().await?.bytes().await?;
-        let bencoded = benc::Element::from_bytes(&response_data)?;
+        let bencoded = benc::Element::from_bytes(&response_data)
+            .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
         log::debug!("Scrape response: {}", bencoded);
 
         // TODO: parse response
@@ -279,12 +280,24 @@ impl AnnounceResponseContent {
     }
 
     pub fn peers(&self) -> Option<Vec<SocketAddr>> {
-        match self.root.get("peers") {
-            Some(benc::Element::List(list)) => Some(dictionary_peers(list).collect()),
-            Some(benc::Element::ByteString(data)) => {
-                Some(utils::parse_binary_ipv4_peers(data).collect())
+        match (self.root.get("peers"), self.root.get("peers6")) {
+            (None, None) => None,
+            (peers, ipv6_peers) => {
+                let mut all_peers = Vec::new();
+                match peers {
+                    Some(benc::Element::ByteString(data)) => {
+                        all_peers.extend(utils::parse_binary_ipv4_peers(data));
+                    }
+                    Some(benc::Element::List(list)) => {
+                        all_peers.extend(dictionary_peers(list));
+                    }
+                    _ => (),
+                }
+                if let Some(benc::Element::ByteString(data)) = ipv6_peers {
+                    all_peers.extend(utils::parse_binary_ipv6_peers(data))
+                }
+                Some(all_peers)
             }
-            _ => None,
         }
     }
 }
@@ -396,5 +409,24 @@ mod tests {
         assert_eq!(4, peers.len());
         assert_eq!(1, peers.iter().filter(|addr| addr.is_ipv4()).count());
         assert_eq!(3, peers.iter().filter(|addr| addr.is_ipv6()).count());
+    }
+
+    #[test]
+    fn test_parse_compact_ipv4_and_ipv6_in_announce_response() {
+        let response_data = "d8:intervali1800e5:peers6:addrpn6:peers618:addraddraddraddrpne";
+
+        let entity = benc::Element::from_bytes(response_data.as_bytes()).unwrap();
+        let response_content = AnnounceResponseContent::from_benc(entity)
+            .ok_or(Error::Benc(benc::ParseError::ExternalError("Unexpected bencoding".into())))
+            .unwrap();
+
+        let peers = response_content.peers().unwrap();
+        assert_eq!(2, peers.len());
+
+        let ipv4 = *peers.iter().find(|addr| addr.is_ipv4()).expect("no ipv4 peer");
+        assert_eq!(ipv4, "97.100.100.114:28782".parse().unwrap());
+
+        let ipv6 = *peers.iter().find(|addr| addr.is_ipv6()).expect("no ipv6 peer");
+        assert_eq!(ipv6, "[6164:6472:6164:6472:6164:6472:6164:6472]:28782".parse().unwrap());
     }
 }

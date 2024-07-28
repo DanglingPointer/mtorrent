@@ -132,8 +132,9 @@ async fn test_https_scrape_and_announce() {
     if let benc::Element::Dictionary(root) = response {
         for (key, files) in root {
             if let benc::Element::Dictionary(torrents) = files {
-                for (info_hash_bytes, _info) in torrents {
+                for (info_hash_bytes, info) in torrents {
                     if let benc::Element::ByteString(info_hash) = info_hash_bytes {
+                        println!("Announce for torrent: {info}");
                         let mut request =
                             http::TrackerRequestBuilder::try_from(tracker_url).unwrap();
                         request

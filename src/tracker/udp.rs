@@ -1,7 +1,7 @@
 use super::utils;
 use crate::sec;
 use core::fmt;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::{error, io, str};
 use tokio::net::UdpSocket;
@@ -52,7 +52,7 @@ impl UdpTrackerConnection {
             &self.socket,
             request,
             |data: &[u8]| -> Option<io::Result<AnnounceResponse>> {
-                match parse_response(data, transaction_id) {
+                match parse_response(data, transaction_id, &self.remote_addr.ip()) {
                     Ok(AnyResponse::Announce(announce)) => {
                         log::debug!(
                             "Received announce response from {}: {:?}",
@@ -92,7 +92,7 @@ impl UdpTrackerConnection {
             &self.socket,
             request,
             |data: &[u8]| -> Option<io::Result<ScrapeResponse>> {
-                match parse_response(data, transaction_id) {
+                match parse_response(data, transaction_id, &self.remote_addr.ip()) {
                     Ok(AnyResponse::Scrape(scrape)) => {
                         log::debug!(
                             "Received scrape response from {}: {:?}",
@@ -123,7 +123,7 @@ impl UdpTrackerConnection {
 
         let connect_response =
             Self::do_request(&self.socket, request, |data: &[u8]| -> Option<ConnectResponse> {
-                match parse_response(data, transaction_id) {
+                match parse_response(data, transaction_id, &self.remote_addr.ip()) {
                     Ok(AnyResponse::Connect(connect)) => Some(connect),
                     _ => None,
                 }
@@ -215,7 +215,11 @@ enum AnyResponse {
     Error(ErrorResponse),
 }
 
-fn parse_response(src: &[u8], transaction_id: u32) -> Result<AnyResponse, ParseError> {
+fn parse_response(
+    src: &[u8],
+    transaction_id: u32,
+    remote_ip: &IpAddr,
+) -> Result<AnyResponse, ParseError> {
     let header = CommonResponseHeader::try_from(src)?;
     if header.transaction_id != transaction_id {
         return Err(ParseError::InvalidTransaction);
@@ -223,7 +227,7 @@ fn parse_response(src: &[u8], transaction_id: u32) -> Result<AnyResponse, ParseE
     let src = unsafe { src.get_unchecked(CommonResponseHeader::LENGTH..) };
     match header.action {
         ACTION_CONNECT => Ok(AnyResponse::Connect(ConnectResponse::try_from(src)?)),
-        ACTION_ANNOUNCE => Ok(AnyResponse::Announce(AnnounceResponse::try_from(src)?)),
+        ACTION_ANNOUNCE => Ok(AnyResponse::Announce(AnnounceResponse::try_from((src, remote_ip))?)),
         ACTION_SCRAPE => Ok(AnyResponse::Scrape(ScrapeResponse::try_from(src)?)),
         ACTION_ERROR => Ok(AnyResponse::Error(ErrorResponse::try_from(src)?)),
         _ => Err(ParseError::InvalidAction),
@@ -394,20 +398,24 @@ pub struct AnnounceResponse {
     pub ips: Vec<SocketAddr>,
 }
 
-impl TryFrom<&[u8]> for AnnounceResponse {
+impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     type Error = ParseError;
 
-    fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from((src, tracker_ip): (&[u8], &IpAddr)) -> Result<Self, Self::Error> {
         if src.len() < 12 {
             Err(ParseError::InvalidLength)
         } else {
             let (src, addrs) = src.split_at(12);
+            let peers: Vec<_> = match tracker_ip {
+                IpAddr::V4(_) => utils::parse_binary_ipv4_peers(addrs).collect(),
+                IpAddr::V6(_) => utils::parse_binary_ipv6_peers(addrs).collect(),
+            };
             Ok(unsafe {
                 AnnounceResponse {
                     interval: u32_from_be_bytes(src.get_unchecked(..4)),
                     leechers: u32_from_be_bytes(src.get_unchecked(4..8)),
                     seeders: u32_from_be_bytes(src.get_unchecked(8..12)),
-                    ips: utils::parse_binary_ipv4_peers(addrs).collect(),
+                    ips: peers,
                 }
             })
         }
@@ -473,6 +481,7 @@ unsafe fn u64_from_be_bytes(src: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use futures::join;
+    use std::net::Ipv6Addr;
 
     #[test]
     fn test_serialize_connect_request() {
@@ -535,5 +544,120 @@ mod tests {
         };
 
         join!(client_fut, server_fut);
+    }
+
+    #[test]
+    fn test_serialize_announce_request() {
+        let mut request = Vec::with_capacity(AnnounceRequest::MIN_LENGTH);
+        let ar = AnnounceRequest {
+            info_hash: [42u8; 20],
+            peer_id: [b'm'; 20],
+            downloaded: 1,
+            left: 2,
+            uploaded: 3,
+            event: AnnounceEvent::Started,
+            ip: None,
+            key: 0,
+            num_want: Some(256),
+            port: 6889u16,
+        };
+        ar.encode(10, 15, &mut request).unwrap();
+        assert_eq!(request.len(), 98);
+
+        assert_eq!([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a], request[..8]); // connection id
+        assert_eq!([0x00, 0x00, 0x00, 0x01], request[8..12]); // announce
+        assert_eq!([0x00, 0x00, 0x00, 0x0f], request[12..16]); // transaction id
+        assert_eq!([42u8; 20], request[16..36]); // info hash
+        assert_eq!([b'm'; 20], request[36..56]); // peer id
+        assert_eq!([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], request[56..64]); // downloaded
+        assert_eq!([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02], request[64..72]); // left
+        assert_eq!([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03], request[72..80]); // uploaded
+        assert_eq!([0x00, 0x00, 0x00, 0x02], request[80..84]); // event
+        assert_eq!([0u8; 4], request[84..88]); // ip
+        assert_eq!([0u8; 4], request[88..92]); // key
+        assert_eq!([0x00, 0x00, 0x01, 0x00], request[92..96]); // num want
+        assert_eq!([0x1a, 0xe9], request[96..98]);
+    }
+
+    #[test]
+    fn test_parse_ipv4_announce_response() {
+        let response = [
+            0x00, 0x00, 0x00, 0x01, // action
+            0x00, 0x00, 0x00, 0x0f, // transaction id
+            0x00, 0x00, 0x07, 0x08, // interval
+            0x00, 0x00, 0x00, 0x01, // leechers
+            0x00, 0x00, 0x00, 0x02, // seeders
+            0xc0, 0xa8, 0x01, 0x01, // ip
+            0x1a, 0xe9, // port
+            0xc0, 0xa8, 0x00, 0x01, // ip
+            0x1a, 0xe8, // port
+        ];
+
+        let parsed = parse_response(&response, 15, &Ipv4Addr::LOCALHOST.into()).unwrap();
+        let parsed = match parsed {
+            AnyResponse::Announce(response) => response,
+            _ => panic!("Wrong message type"),
+        };
+        assert_eq!(1800, parsed.interval);
+        assert_eq!(1, parsed.leechers);
+        assert_eq!(2, parsed.seeders);
+        assert_eq!(2, parsed.ips.len());
+        assert_eq!("192.168.1.1:6889".parse::<SocketAddr>().unwrap(), parsed.ips[0]);
+        assert_eq!("192.168.0.1:6888".parse::<SocketAddr>().unwrap(), parsed.ips[1]);
+    }
+
+    #[test]
+    fn test_parse_ipv6_announce_response() {
+        let response = [
+            0x00, 0x00, 0x00, 0x01, // action
+            0x00, 0x00, 0x00, 0x0f, // transaction id
+            0x00, 0x00, 0x07, 0x08, // interval
+            0x00, 0x00, 0x00, 0x01, // leechers
+            0x00, 0x00, 0x00, 0x02, // seeders
+            0x20, 0x01, 0x0d, 0xb8, // ip1
+            0x85, 0xa3, 0x00, 0x00, // ip1
+            0x8a, 0x2e, 0x03, 0x70, // ip1
+            0x73, 0x34, 0x00, 0x00, // ip1
+            0x1a, 0xe9, // port
+            0x20, 0x02, 0x0d, 0xb8, // ip2
+            0x85, 0xa3, 0x00, 0x00, // ip2
+            0x8a, 0x2e, 0x03, 0x70, // ip2
+            0x73, 0x35, 0x00, 0x00, // ip2
+            0x1a, 0xe8, // port
+        ];
+
+        let parsed = parse_response(&response, 15, &Ipv6Addr::LOCALHOST.into()).unwrap();
+        let parsed = match parsed {
+            AnyResponse::Announce(response) => response,
+            _ => panic!("Wrong message type"),
+        };
+        assert_eq!(1800, parsed.interval);
+        assert_eq!(1, parsed.leechers);
+        assert_eq!(2, parsed.seeders);
+        assert_eq!(2, parsed.ips.len());
+        assert_eq!(
+            "[2001:db8:85a3:0:8a2e:370:7334:0]:6889".parse::<SocketAddr>().unwrap(),
+            parsed.ips[0]
+        );
+        assert_eq!(
+            "[2002:db8:85a3:0:8a2e:370:7335:0]:6888".parse::<SocketAddr>().unwrap(),
+            parsed.ips[1]
+        );
+    }
+
+    #[test]
+    fn test_parse_error_response() {
+        let response = [
+            0x00, 0x00, 0x00, 0x03, // action
+            0x00, 0x00, 0x00, 0x0f, // transaction id
+            0x49, 0x6E, 0x76, 0x61, 0x6C, 0x69, 0x64,
+        ];
+
+        let parsed = parse_response(&response, 15, &Ipv6Addr::LOCALHOST.into()).unwrap();
+        let parsed = match parsed {
+            AnyResponse::Error(response) => response,
+            _ => panic!("Wrong message type"),
+        };
+        assert_eq!("Invalid", parsed.message);
     }
 }
