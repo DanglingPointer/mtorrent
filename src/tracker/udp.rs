@@ -46,7 +46,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        log::debug!("Sending announce request to {}", self.socket.peer_addr()?);
+        log::debug!("Sending announce request to {}", self.remote_addr);
 
         Self::do_request(
             &self.socket,
@@ -54,7 +54,11 @@ impl UdpTrackerConnection {
             |data: &[u8]| -> Option<io::Result<AnnounceResponse>> {
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Announce(announce)) => {
-                        log::debug!("Received announce response: {:?}", announce);
+                        log::debug!(
+                            "Received announce response from {}: {:?}",
+                            self.remote_addr,
+                            announce
+                        );
                         Some(Ok(announce))
                     }
                     Ok(AnyResponse::Error(error)) => {
@@ -81,13 +85,20 @@ impl UdpTrackerConnection {
             request_data.encode(self.connection_id, transaction_id, &mut buffer).unwrap();
             buffer
         };
+
+        log::debug!("Sending scrape request to {}", self.remote_addr);
+
         Self::do_request(
             &self.socket,
             request,
             |data: &[u8]| -> Option<io::Result<ScrapeResponse>> {
                 match parse_response(data, transaction_id) {
                     Ok(AnyResponse::Scrape(scrape)) => {
-                        log::debug!("Received scrape response: {:?}", scrape);
+                        log::debug!(
+                            "Received scrape response from {}: {:?}",
+                            self.remote_addr,
+                            scrape
+                        );
                         Some(Ok(scrape))
                     }
                     Ok(AnyResponse::Error(error)) => {
@@ -108,7 +119,7 @@ impl UdpTrackerConnection {
             buffer
         };
 
-        log::trace!("Sending connect request");
+        log::trace!("Sending connect request to {}", self.remote_addr);
 
         let connect_response =
             Self::do_request(&self.socket, request, |data: &[u8]| -> Option<ConnectResponse> {
@@ -119,7 +130,11 @@ impl UdpTrackerConnection {
             })
             .await?;
 
-        log::trace!("Received connect response, connection_id={}", connect_response.connection_id);
+        log::trace!(
+            "Received connect response from {}, connection_id={}",
+            self.remote_addr,
+            connect_response.connection_id
+        );
         self.connection_id = connect_response.connection_id;
         self.connection_eof = Instant::now() + sec!(60);
         Ok(())
