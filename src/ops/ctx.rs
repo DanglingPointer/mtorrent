@@ -176,7 +176,6 @@ impl Drop for MainCtx {
 
 pub async fn periodic_metadata_check(
     mut ctx_handle: Handle<PreliminaryCtx>,
-    config_dir: impl AsRef<Path>,
     metainfo_filepath: impl AsRef<Path>,
 ) -> io::Result<impl IntoIterator<Item = SocketAddr>> {
     define_with_ctx!(ctx_handle);
@@ -187,11 +186,7 @@ pub async fn periodic_metadata_check(
         with_ctx!(|ctx| log::info!("Periodic state dump:\n{}", ctx));
     }
 
-    with_ctx!(|ctx| {
-        fs::write(metainfo_filepath, &ctx.metainfo)?;
-        config::save_trackers(config_dir, ctx.magnet.trackers())?;
-        io::Result::Ok(())
-    })?;
+    with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
 
     Ok(with_ctx!(|ctx| mem::take(&mut ctx.known_peers)))
 }
@@ -216,11 +211,8 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: imp
         }
     });
 
-    #[cfg(not(debug_assertions))]
-    let mut interval = time::interval(sec!(10));
-
-    #[cfg(debug_assertions)]
-    let mut interval = time::interval_at(time::Instant::now() + sec!(3), sec!(1));
+    // first tick after 3s because of integration tests
+    let mut interval = time::interval_at(time::Instant::now() + sec!(3), sec!(10));
 
     loop {
         interval.tick().await;

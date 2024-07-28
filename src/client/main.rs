@@ -4,7 +4,7 @@ use crate::utils::{fifo, ip, magnet, startup, upnp};
 use futures::StreamExt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::net::TcpStream;
 use tokio::{runtime, task};
 
@@ -166,17 +166,14 @@ async fn preliminary_stage(
     }
 
     let tracker_ctx = ctx.clone();
-    let tracker_config_dir = PathBuf::from(config_dir.as_ref());
+    let config_dir = config_dir.as_ref().to_owned();
     local_task.spawn_local(async move {
-        ops::make_preliminary_announces(tracker_ctx, tracker_config_dir, peer_discovered_sink)
-            .await;
+        ops::make_preliminary_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
     });
 
     let metainfo_filepath_copy = metainfo_filepath.clone();
     let peers = local_task
-        .run_until(async move {
-            ops::periodic_metadata_check(ctx, config_dir, metainfo_filepath_copy).await
-        })
+        .run_until(async move { ops::periodic_metadata_check(ctx, metainfo_filepath_copy).await })
         .await?;
     Ok((metainfo_filepath, peers))
 }
@@ -258,7 +255,7 @@ async fn main_stage(
         }
     });
 
-    for peer_ip in extra_peers.into_iter() {
+    for peer_ip in extra_peers {
         peer_discovered_sink.send(peer_ip);
     }
 
