@@ -5,7 +5,9 @@ use futures::StreamExt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
+use std::rc::Rc;
 use tokio::net::TcpStream;
+use tokio::sync::broadcast;
 use tokio::{runtime, task};
 
 pub async fn single_torrent(
@@ -221,6 +223,7 @@ async fn main_stage(
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime,
             peer_discovered_channel: peer_discovered_sink.clone(),
+            piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
         },
     );
     local_task.spawn_local(async move {

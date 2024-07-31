@@ -9,9 +9,11 @@ use std::fmt::Debug;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio::{join, runtime, task, time};
 use tokio_test::io::Builder as MockBuilder;
 
@@ -149,6 +151,7 @@ async fn run_listening_seeder(
             ctx_handle: handle,
             pwp_worker_handle: runtime::Handle::current(),
             peer_discovered_channel: sink,
+            piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
         },
     );
 
@@ -357,17 +360,21 @@ impl PeerBuilder {
             });
         }
         let (sink, _src) = fifo::channel();
-        let run_future = super::run_peer_connection(
-            dlchans,
-            ulchans,
-            extchans,
-            content_storage,
-            metainfo_storage,
-            ctx_handle.clone(),
-            sink,
-        );
 
-        (ctx_handle, Box::pin(run_future))
+        let ctx_handle_clone = ctx_handle.clone();
+        let run_future = async move {
+            let data = super::MainConnectionData {
+                content_storage,
+                metainfo_storage,
+                ctx_handle: ctx_handle.clone(),
+                pwp_worker_handle: tokio::runtime::Handle::current(),
+                peer_discovered_channel: sink,
+                piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+            };
+            super::run_peer_connection(dlchans, ulchans, extchans, &data).await
+        };
+
+        (ctx_handle_clone, Box::pin(run_future))
     }
     #[must_use]
     fn build_preliminary(

@@ -32,6 +32,15 @@ impl<Q> PeerChannel<Q> {
     }
 }
 
+impl<Q: Clone> Clone for PeerChannel<Q> {
+    fn clone(&self) -> Self {
+        Self {
+            peer_info: self.peer_info.clone(),
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 type RxChannel<Msg> = PeerChannel<mpsc::Receiver<Msg>>;
 type TxChannel<Msg> = PeerChannel<mpsc::Sender<Option<Msg>>>;
 

@@ -17,6 +17,7 @@ struct Data {
     remote_extensions: HashMap<pwp::Extension, u8>,
     sent_metadata_pieces: pwp::Bitfield,
     last_shared_peers: HashSet<SocketAddr>,
+    peer_discovered_channel: fifo::Sender<SocketAddr>,
 }
 
 pub struct Peer(Box<Data>);
@@ -27,6 +28,7 @@ pub async fn new_peer(
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
     initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
+    peer_discovered_channel: fifo::Sender<SocketAddr>,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with_ctx(|ctx| ctx.metainfo.size());
     let inner = Box::new(Data {
@@ -37,6 +39,7 @@ pub async fn new_peer(
         remote_extensions: Default::default(),
         sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
         last_shared_peers: Default::default(),
+        peer_discovered_channel,
     });
 
     // send local handshake
@@ -113,12 +116,7 @@ pub async fn share_peers(peer: Peer) -> io::Result<Peer> {
     Ok(Peer(inner))
 }
 
-pub async fn handle_incoming(
-    peer: Peer,
-    until: Instant,
-    serve_metadata: bool,
-    peer_discovered_channel: &fifo::Sender<SocketAddr>,
-) -> io::Result<Peer> {
+pub async fn handle_incoming(peer: Peer, until: Instant, serve_metadata: bool) -> io::Result<Peer> {
     let mut inner = peer.0;
     define_with_ctx!(inner.handle);
 
@@ -147,7 +145,7 @@ pub async fn handle_incoming(
                     let connected_peers: HashSet<SocketAddr> =
                         with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
                     for peer_addr in pex.added.difference(&connected_peers) {
-                        peer_discovered_channel.send(*peer_addr);
+                        inner.peer_discovered_channel.send(*peer_addr);
                     }
                 };
             }

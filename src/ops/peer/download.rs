@@ -3,8 +3,10 @@ use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, min, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, io};
+use tokio::sync::broadcast;
 use tokio::time::Instant;
 use tokio::try_join;
 
@@ -15,6 +17,7 @@ struct Data {
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
+    piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
     state: pwp::DownloadState,
 }
 
@@ -81,12 +84,14 @@ pub async fn new_peer(
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
+    piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 ) -> io::Result<IdlePeer> {
     let mut inner = Box::new(Data {
         handle,
         rx,
         tx,
         storage,
+        piece_downloaded_channel,
         state: Default::default(),
     });
     // try wait for bitfield
@@ -248,6 +253,7 @@ pub async fn get_pieces(
 
     let mut handle = inner.handle.clone();
     let storage = inner.storage.clone();
+    let reporter = inner.piece_downloaded_channel.clone();
 
     let verify_pieces = async {
         let mut downloaded_pieces = piece_src;
@@ -270,7 +276,9 @@ pub async fn get_pieces(
                     ctx.piece_tracker.forget_piece(piece_index);
                     ctx.pending_requests.clear_requests_of(piece_index);
                 });
-                // TODO: send Have to everyone else
+                let _ = reporter.send(piece_index).inspect_err(|e| {
+                    log::warn!("Failed to broadcast downloaded piece {piece_index}: {e}")
+                });
             } else {
                 log::error!("Piece verification failed, piece_index={piece_index}");
                 handle.with_ctx(|ctx| ctx.accountant.remove_piece(piece_index));

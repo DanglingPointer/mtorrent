@@ -11,10 +11,12 @@ use super::{ctrl, ctx};
 use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, ip};
 use crate::{data, pwp, sec};
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::{cmp, io};
+use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
+use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
 use tokio::{runtime, try_join};
 
@@ -170,24 +172,17 @@ async fn run_upload(
     mut ctx_handle: MainHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
-    macro_rules! cap {
-        // because we need to update the peer (send Have's) periodically
-        ($timeout:expr) => {
-            cmp::min(sec!(60), $timeout)
-        };
-    }
     loop {
         with_ctx!(|ctx| ctrl::validate_peer_utility(&remote_ip, ctx))?;
-        peer = upload::update_peer(peer).await?;
         match peer {
             upload::Peer::Idle(idling_peer) => {
                 match with_ctx!(|ctx| ctrl::idle_upload_next_action(&remote_ip, &ctx.peer_states)) {
                     ctrl::IdleUploadAction::ActivateUploadAndServe(duration) => {
                         let leeching_peer = upload::activate(idling_peer).await?;
-                        peer = upload::serve_pieces(leeching_peer, cap!(duration)).await?;
+                        peer = upload::serve_pieces(leeching_peer, duration).await?;
                     }
                     ctrl::IdleUploadAction::Linger(timeout) => {
-                        peer = upload::linger(idling_peer, cap!(timeout)).await?;
+                        peer = upload::linger(idling_peer, timeout).await?;
                     }
                 }
             }
@@ -196,10 +191,10 @@ async fn run_upload(
                 {
                     ctrl::LeechUploadAction::DeactivateUploadAndLinger(timeout) => {
                         let idling_peer = upload::deactivate(leeching_peer).await?;
-                        peer = upload::linger(idling_peer, cap!(timeout)).await?;
+                        peer = upload::linger(idling_peer, timeout).await?;
                     }
                     ctrl::LeechUploadAction::Serve(duration) => {
-                        peer = upload::serve_pieces(leeching_peer, cap!(duration)).await?;
+                        peer = upload::serve_pieces(leeching_peer, duration).await?;
                     }
                 }
             }
@@ -211,7 +206,6 @@ async fn run_extensions(
     mut peer: extensions::Peer,
     remote_ip: SocketAddr,
     mut ctx_handle: MainHandle,
-    peer_discovered_channel: fifo::Sender<SocketAddr>,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
 
@@ -226,18 +220,16 @@ async fn run_extensions(
             peer,
             next_pex_time,
             with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx)),
-            &peer_discovered_channel,
         )
         .await?;
     }
 }
 
 macro_rules! maybe_run_extensions {
-    ($peer:expr, $remote_ip:expr, $ctx_handle:expr, $peer_discovered_channel:expr) => {
+    ($peer:expr, $remote_ip:expr, $ctx_handle:expr) => {
         async {
             if let Some(peer) = $peer {
-                run_extensions(peer, $remote_ip, $ctx_handle.clone(), $peer_discovered_channel)
-                    .await
+                run_extensions(peer, $remote_ip, $ctx_handle.clone()).await
             } else {
                 Ok(())
             }
@@ -251,20 +243,29 @@ async fn run_peer_connection(
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
-    content_storage: data::StorageClient,
-    metainfo_storage: data::StorageClient,
-    ctx_handle: MainHandle,
-    peer_discovered_channel: fifo::Sender<SocketAddr>,
+    data: &MainConnectionData,
 ) -> io::Result<()> {
     let remote_ip = *download_chans.0.remote_ip();
 
-    let pwp::DownloadChannels(tx, rx) = download_chans;
-    let download_fut = download::new_peer(ctx_handle.clone(), rx, tx, content_storage.clone());
-
     let pwp::UploadChannels(tx, rx) = upload_chans;
-    let upload_fut = upload::new_peer(ctx_handle.clone(), rx, tx, content_storage);
+    let upload_fut = upload::new_peer(
+        data.ctx_handle.clone(),
+        rx,
+        tx,
+        data.content_storage.clone(),
+        data.piece_downloaded_channel.subscribe(),
+    );
 
-    let handle_copy = ctx_handle.clone();
+    let pwp::DownloadChannels(tx, rx) = download_chans;
+    let download_fut = download::new_peer(
+        data.ctx_handle.clone(),
+        rx,
+        tx,
+        data.content_storage.clone(),
+        data.piece_downloaded_channel.clone(),
+    );
+
+    let handle_copy = data.ctx_handle.clone();
     let extensions_fut = async move {
         if let Some(pwp::ExtendedChannels(tx, rx)) = extended_chans {
             Ok(Some(
@@ -272,8 +273,9 @@ async fn run_peer_connection(
                     handle_copy,
                     rx,
                     tx,
-                    metainfo_storage,
+                    data.metainfo_storage.clone(),
                     ALL_SUPPORTED_EXTENSIONS,
+                    data.peer_discovered_channel.clone(),
                 )
                 .await?,
             ))
@@ -283,11 +285,13 @@ async fn run_peer_connection(
     };
 
     // create extensions before upload so that we send extended handshake before bitfield
-    let (extensions, download, upload) = try_join!(extensions_fut, download_fut, upload_fut)?;
+    let (extensions, download, (upload, reporter)) =
+        try_join!(extensions_fut, download_fut, upload_fut)?;
     try_join!(
-        run_download(download.into(), remote_ip, ctx_handle.clone()),
-        run_upload(upload.into(), remote_ip, ctx_handle.clone()),
-        maybe_run_extensions!(extensions, remote_ip, ctx_handle, peer_discovered_channel),
+        run_download(download.into(), remote_ip, data.ctx_handle.clone()),
+        run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
+        maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
+        reporter.run(),
     )?;
     Ok(())
 }
@@ -300,6 +304,7 @@ pub struct MainConnectionData {
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
     pub peer_discovered_channel: fifo::Sender<SocketAddr>,
+    pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 }
 
 pub async fn outgoing_pwp_connection(
@@ -326,16 +331,8 @@ pub async fn outgoing_pwp_connection(
         .await?;
         let connected_time = Instant::now();
 
-        let run_result = run_peer_connection(
-            download_chans,
-            upload_chans,
-            extended_chans,
-            permit.0.content_storage.clone(),
-            permit.0.metainfo_storage.clone(),
-            permit.0.ctx_handle.clone(),
-            permit.0.peer_discovered_channel.clone(),
-        )
-        .await;
+        let run_result =
+            run_peer_connection(download_chans, upload_chans, extended_chans, &permit.0).await;
 
         match run_result {
             Err(e) if e.kind() != io::ErrorKind::Other && connected_time.elapsed() > sec!(5) => {
@@ -372,16 +369,8 @@ pub async fn incoming_pwp_connection(
     )
     .await?;
 
-    let run_result = run_peer_connection(
-        download_chans,
-        upload_chans,
-        extended_chans,
-        permit.0.content_storage.clone(),
-        permit.0.metainfo_storage.clone(),
-        permit.0.ctx_handle.clone(),
-        permit.0.peer_discovered_channel.clone(),
-    )
-    .await;
+    let run_result =
+        run_peer_connection(download_chans, upload_chans, extended_chans, &permit.0).await;
 
     match run_result {
         Err(e) if e.kind() != io::ErrorKind::Other => {

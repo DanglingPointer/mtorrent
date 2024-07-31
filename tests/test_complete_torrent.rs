@@ -230,6 +230,7 @@ impl Peer for Seeder {
         });
 
         let mut remote_pieces = pwp::Bitfield::repeat(false, piece_count);
+        let mut haves_count = 0usize;
         let pwp::DownloadChannels(tx, mut rx) = download_chans;
         while let Ok(msg) = rx.receive_message().await {
             // println!("Seeder {index} received {msg}");
@@ -239,6 +240,7 @@ impl Peer for Seeder {
                         panic!("Seeder {index} received double Have");
                     }
                     remote_pieces.set(piece_index, true);
+                    haves_count += 1;
                 }
                 pwp::UploaderMessage::Bitfield(mut bf) => {
                     assert!(remote_pieces.len() <= bf.len());
@@ -250,11 +252,13 @@ impl Peer for Seeder {
                 }
                 _ => (),
             }
-            if remote_pieces.iter().all(|has_piece| has_piece == true) {
+            if remote_pieces.all() {
                 println!("Seeder {index} exiting: remote has all pieces");
-                return;
+                break;
             }
         }
+        assert_eq!(haves_count, remote_pieces.len());
+        assert!(remote_pieces.all());
         drop(tx);
     }
 }

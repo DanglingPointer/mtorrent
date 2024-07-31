@@ -4,8 +4,9 @@ use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
 use std::io;
-use std::ops::BitXorAssign;
 use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 use tokio::try_join;
 
@@ -17,7 +18,6 @@ struct Data {
     tx: pwp::UploadTxChannel,
     storage: data::StorageClient,
     state: pwp::UploadState,
-    local_pieces_snapshot: pwp::Bitfield,
 }
 
 impl Drop for Data {
@@ -50,21 +50,50 @@ impl From<LeechingPeer> for Peer {
     }
 }
 
+pub struct AvailabilityReporter {
+    tx: pwp::UploadTxChannel,
+    piece_downloaded_channel: broadcast::Receiver<usize>,
+    reported_pieces: pwp::Bitfield,
+}
+
+impl AvailabilityReporter {
+    pub async fn run(mut self) -> io::Result<()> {
+        loop {
+            match self.piece_downloaded_channel.recv().await {
+                Ok(downloaded_piece) => {
+                    let mut reported = self
+                        .reported_pieces
+                        .get_mut(downloaded_piece)
+                        .expect("Piece count mismatch");
+                    if reported == false {
+                        reported.set(true);
+                        self.tx
+                            .send_message(pwp::UploaderMessage::Have {
+                                piece_index: downloaded_piece,
+                            })
+                            .await?;
+                    }
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    log::warn!(
+                        "Failed to notify {} about {} downloaded pieces",
+                        self.tx.remote_ip(),
+                        skipped
+                    );
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+        Ok(())
+    }
+}
+
 macro_rules! to_enum {
     ($inner:expr) => {
         if $inner.state.peer_interested && !$inner.state.am_choking {
             LeechingPeer($inner).into()
         } else {
             IdlePeer($inner).into()
-        }
-    };
-}
-
-macro_rules! inner {
-    ($inner:expr) => {
-        match $inner {
-            Peer::Idle(IdlePeer(data)) => data,
-            Peer::Leech(LeechingPeer(data)) => data,
         }
     };
 }
@@ -107,7 +136,8 @@ pub async fn new_peer(
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
     storage: data::StorageClient,
-) -> io::Result<IdlePeer> {
+    piece_downloaded_channel: broadcast::Receiver<usize>,
+) -> io::Result<(IdlePeer, AvailabilityReporter)> {
     let bitfield = handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
     let mut inner = Box::new(Data {
         handle,
@@ -115,13 +145,17 @@ pub async fn new_peer(
         tx,
         storage,
         state: Default::default(),
-        local_pieces_snapshot: bitfield.clone(),
     });
     if bitfield.any() {
-        inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await?;
+        inner.tx.send_message(pwp::UploaderMessage::Bitfield(bitfield.clone())).await?;
     }
     update_ctx!(inner);
-    Ok(IdlePeer(inner))
+    let reporter = AvailabilityReporter {
+        tx: inner.tx.clone(),
+        piece_downloaded_channel,
+        reported_pieces: bitfield,
+    };
+    Ok((IdlePeer(inner), reporter))
 }
 
 pub async fn activate(peer: IdlePeer) -> io::Result<LeechingPeer> {
@@ -183,20 +217,6 @@ pub async fn linger(peer: IdlePeer, timeout: Duration) -> io::Result<Peer> {
         }
     }
     update_ctx!(inner);
-    Ok(to_enum!(inner))
-}
-
-pub async fn update_peer(peer: Peer) -> io::Result<Peer> {
-    let mut inner = inner!(peer);
-    let current_state = inner.handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
-    // local pieces don't disappear, so xor yields the new pieces since last time
-    inner.local_pieces_snapshot.bitxor_assign(&current_state);
-    for (piece_index, status_changed) in inner.local_pieces_snapshot.iter().enumerate() {
-        if *status_changed {
-            inner.tx.send_message(pwp::UploaderMessage::Have { piece_index }).await?;
-        }
-    }
-    inner.local_pieces_snapshot = current_state;
     Ok(to_enum!(inner))
 }
 
