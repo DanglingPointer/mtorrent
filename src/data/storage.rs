@@ -141,7 +141,7 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
                     .try_for_each(|offset| {
                         let bytes_to_read = cmp::min(buffer.len(), end - offset);
                         let dest = &mut buffer[..bytes_to_read];
-                        self.storage.read_block_at(offset, dest).map(|_| sha1.update(dest))
+                        self.storage.read_block_into(offset, dest).map(|_| sha1.update(dest))
                     })
                     .map(|_| {
                         let computed_sha1: [u8; 20] = sha1.digest().bytes();
@@ -290,13 +290,13 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
     }
 
     pub fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
-        self.write_block_at(global_offset, &block)?;
+        self.write_block_from(global_offset, &block)?;
         Ok(())
     }
 
     pub fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
         let mut dest = vec![0u8; length];
-        self.read_block_at(global_offset, &mut dest)?;
+        self.read_block_into(global_offset, &mut dest)?;
         Ok(dest)
     }
 
@@ -314,22 +314,22 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
         Ok((start_offset, file, next_start_offset))
     }
 
-    fn write_block_at(&self, global_offset: usize, block: &[u8]) -> Result<(), Error> {
+    fn write_block_from(&self, global_offset: usize, src: &[u8]) -> Result<(), Error> {
         let (start_offset, file, next_start_offset) = self.find_file_and_offset(global_offset)?;
         let local_offset = global_offset - start_offset;
 
         let available_space = next_start_offset - global_offset;
-        if block.len() <= available_space {
-            file.write_all_at_offset(block, local_offset as u64)?;
+        if src.len() <= available_space {
+            file.write_all_at_offset(src, local_offset as u64)?;
             Ok(())
         } else {
-            let (left, right) = block.split_at(available_space);
+            let (left, right) = src.split_at(available_space);
             file.write_all_at_offset(left, local_offset as u64)?;
-            self.write_block_at(next_start_offset, right)
+            self.write_block_from(next_start_offset, right)
         }
     }
 
-    fn read_block_at(&self, global_offset: usize, dest: &mut [u8]) -> Result<(), Error> {
+    fn read_block_into(&self, global_offset: usize, dest: &mut [u8]) -> Result<(), Error> {
         let (start_offset, file, next_start_offset) = self.find_file_and_offset(global_offset)?;
         let local_offset = global_offset - start_offset;
 
@@ -340,7 +340,7 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
         } else {
             let (left, right) = dest.split_at_mut(available_space);
             file.read_all_at_offset(left, local_offset as u64)?;
-            self.read_block_at(next_start_offset, right)
+            self.read_block_into(next_start_offset, right)
         }
     }
 }

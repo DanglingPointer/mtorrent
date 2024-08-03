@@ -686,7 +686,7 @@ impl PeerExchangeData {
 
     fn encode(&self) -> Vec<u8> {
         use crate::utils::benc::Element::{self, *};
-        let mut root = BTreeMap::new();
+        let mut root = BTreeMap::<Element, Element>::new();
 
         let mut added_ipv4 = Vec::new();
         let mut added_ipv6 = Vec::new();
@@ -702,8 +702,8 @@ impl PeerExchangeData {
                 }
             }
         }
-        root.insert(Element::from(Self::KEY_ADDED_V4), ByteString(added_ipv4));
-        root.insert(Element::from(Self::KEY_ADDED_V6), ByteString(added_ipv6));
+        root.insert(Self::KEY_ADDED_V4.into(), ByteString(added_ipv4));
+        root.insert(Self::KEY_ADDED_V6.into(), ByteString(added_ipv6));
 
         let mut dropped_ipv4 = Vec::new();
         let mut dropped_ipv6 = Vec::new();
@@ -719,8 +719,8 @@ impl PeerExchangeData {
                 }
             }
         }
-        root.insert(Element::from(Self::KEY_DROPPED_V4), ByteString(dropped_ipv4));
-        root.insert(Element::from(Self::KEY_DROPPED_V6), ByteString(dropped_ipv6));
+        root.insert(Self::KEY_DROPPED_V4.into(), ByteString(dropped_ipv4));
+        root.insert(Self::KEY_DROPPED_V6.into(), ByteString(dropped_ipv6));
 
         Dictionary(root).to_bytes()
     }
@@ -801,13 +801,13 @@ impl MetadataMsg {
         let mut root = BTreeMap::<Element, Element>::new();
         match self {
             MetadataMsg::Request { piece } => {
-                root.insert(Element::from(Self::KEY_TYPE), Integer(Self::TYPE_REQUEST.into()));
-                root.insert(Element::from(Self::KEY_PIECE), Integer(piece as i64));
+                root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_REQUEST.into()));
+                root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
                 Dictionary(root).to_bytes()
             }
             MetadataMsg::Reject { piece } => {
-                root.insert(Element::from(Self::KEY_TYPE), Integer(Self::TYPE_REJECT.into()));
-                root.insert(Element::from(Self::KEY_PIECE), Integer(piece as i64));
+                root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_REJECT.into()));
+                root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
                 Dictionary(root).to_bytes()
             }
             MetadataMsg::Block {
@@ -815,9 +815,9 @@ impl MetadataMsg {
                 total_size,
                 mut data,
             } => {
-                root.insert(Element::from(Self::KEY_TYPE), Integer(Self::TYPE_BLOCK.into()));
-                root.insert(Element::from(Self::KEY_PIECE), Integer(piece as i64));
-                root.insert(Element::from(Self::KEY_TOTAL_SIZE), Integer(total_size as i64));
+                root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_BLOCK.into()));
+                root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
+                root.insert(Self::KEY_TOTAL_SIZE.into(), Integer(total_size as i64));
                 let header = Dictionary(root).to_bytes();
                 let header_len = header.len();
                 let data_len = data.len();
