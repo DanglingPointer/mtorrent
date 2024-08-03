@@ -1,7 +1,7 @@
 use super::super::ctx;
 use super::CLIENT_NAME;
 use crate::{pwp, sec};
-use std::io;
+use std::{cmp, io};
 use tokio::time::Instant;
 
 type CtxHandle = ctx::Handle<ctx::PreliminaryCtx>;
@@ -91,6 +91,36 @@ fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) -> io::Res
     }
 }
 
+fn submit_block(ctx: &mut ctx::PreliminaryCtx, piece_index: usize, data: &[u8]) -> io::Result<()> {
+    let mut has_piece = ctx.metainfo_pieces.get_mut(piece_index).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("invalid metadata piece index ({})", piece_index),
+        )
+    })?;
+    if *has_piece {
+        return Ok(());
+    }
+    let offset = piece_index * pwp::MAX_BLOCK_SIZE;
+    let expected_len = cmp::min(pwp::MAX_BLOCK_SIZE, ctx.metainfo.len() - offset);
+    if data.len() != expected_len {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("invalid metadata block length ({})", data.len()),
+        ))
+    } else {
+        let chunk = ctx.metainfo.get_mut(offset..offset + data.len()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("invalid metadata block offset ({})", offset),
+            )
+        })?;
+        chunk.copy_from_slice(data);
+        *has_piece = true;
+        Ok(())
+    }
+}
+
 pub async fn new_peer(
     mut handle: CtxHandle,
     extended_chans: pwp::ExtendedChannels,
@@ -154,7 +184,7 @@ pub async fn wait_until_enabled(peer: DisabledPeer) -> io::Result<UploadingPeer>
                 }
             }
             msg => log::debug!(
-                "Received {} from {} while waiting for metadata to be unabled",
+                "Received {} from {} while waiting for metadata to be enabled",
                 msg,
                 inner.rx.remote_ip()
             ),
@@ -185,7 +215,7 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
                 }
             }
             Ok(pwp::ExtendedMessage::MetadataRequest { piece }) => {
-                log::trace!(
+                log::debug!(
                     "Rejecting metadata request (piece={}) from {}",
                     piece,
                     inner.rx.remote_ip()
@@ -255,7 +285,7 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                     }
                 }
                 pwp::ExtendedMessage::MetadataRequest { piece } => {
-                    log::trace!(
+                    log::debug!(
                         "Rejecting metadata request (piece={}) from {}",
                         piece,
                         inner.rx.remote_ip()
@@ -275,17 +305,7 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                 } => {
                     log::debug!("Received metadata piece {} from {}", piece, inner.tx.remote_ip());
                     with_ctx!(|ctx| init_metadata(ctx, total_size))?;
-                    with_ctx!(|ctx| if let Some(mut has_piece) =
-                        ctx.metainfo_pieces.get_mut(piece_index)
-                    {
-                        if has_piece == false {
-                            let offset = piece_index * pwp::MAX_BLOCK_SIZE;
-                            if let Some(chunk) = ctx.metainfo.get_mut(offset..offset + data.len()) {
-                                chunk.copy_from_slice(&data);
-                                has_piece.set(true);
-                            }
-                        }
-                    });
+                    with_ctx!(|ctx| submit_block(ctx, piece_index, &data))?;
                     if piece_index == piece {
                         break;
                     }
