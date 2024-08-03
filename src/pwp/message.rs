@@ -51,7 +51,7 @@ impl PeerMessage {
     pub(super) async fn read_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<PeerMessage> {
         use PeerMessage::*;
 
-        let msg_len = read_u32_from(src).await? as usize;
+        let msg_len = src.read_u32().await? as usize;
 
         if msg_len == 0 {
             return Ok(KeepAlive);
@@ -64,11 +64,7 @@ impl PeerMessage {
             ));
         }
 
-        let id = {
-            let mut id_byte = [0u8; 1];
-            src.read_exact(&mut id_byte).await?;
-            id_byte[0]
-        };
+        let id = src.read_u8().await?;
 
         match id {
             ID_CHOKE => Ok(Choke),
@@ -76,7 +72,7 @@ impl PeerMessage {
             ID_INTERESTED => Ok(Interested),
             ID_NOT_INTERESTED => Ok(NotInterested),
             ID_HAVE => Ok(Have {
-                piece_index: read_u32_from(src).await?,
+                piece_index: src.read_u32().await?,
             }),
             ID_BITFIELD => {
                 let mut bitfield_bytes = vec![0u8; msg_len - 1];
@@ -86,9 +82,9 @@ impl PeerMessage {
                 })
             }
             ID_REQUEST => {
-                let index = read_u32_from(src).await?;
-                let begin = read_u32_from(src).await?;
-                let length = read_u32_from(src).await?;
+                let index = src.read_u32().await?;
+                let begin = src.read_u32().await?;
+                let length = src.read_u32().await?;
                 Ok(Request {
                     index,
                     begin,
@@ -96,8 +92,8 @@ impl PeerMessage {
                 })
             }
             ID_PIECE => {
-                let index = read_u32_from(src).await?;
-                let begin = read_u32_from(src).await?;
+                let index = src.read_u32().await?;
+                let begin = src.read_u32().await?;
                 let mut block = vec![0u8; msg_len - 9];
                 src.read_exact(&mut block).await?;
                 Ok(Piece {
@@ -107,22 +103,18 @@ impl PeerMessage {
                 })
             }
             ID_CANCEL => {
-                let index = read_u32_from(src).await?;
-                let begin = read_u32_from(src).await?;
-                let length = read_u32_from(src).await?;
+                let index = src.read_u32().await?;
+                let begin = src.read_u32().await?;
+                let length = src.read_u32().await?;
                 Ok(Cancel {
                     index,
                     begin,
                     length,
                 })
             }
-            ID_PORT => {
-                let mut port_bytes = [0u8; 2];
-                src.read_exact(&mut port_bytes).await?;
-                Ok(DhtPort {
-                    listen_port: u16::from_be_bytes(port_bytes),
-                })
-            }
+            ID_PORT => Ok(DhtPort {
+                listen_port: src.read_u16().await?,
+            }),
             ID_EXTENDED => {
                 let id = src.read_u8().await?;
                 let mut data = vec![0u8; msg_len - 2];
@@ -142,29 +134,28 @@ impl PeerMessage {
     ) -> io::Result<()> {
         use PeerMessage::*;
 
-        let length = (self.get_length() as u32).to_be_bytes();
-        dest.write_all(&length).await?;
+        dest.write_u32(self.get_length() as u32).await?;
 
         match self {
             KeepAlive => (),
             Choke => {
-                dest.write_all(&[ID_CHOKE]).await?;
+                dest.write_u8(ID_CHOKE).await?;
             }
             Unchoke => {
-                dest.write_all(&[ID_UNCHOKE]).await?;
+                dest.write_u8(ID_UNCHOKE).await?;
             }
             Interested => {
-                dest.write_all(&[ID_INTERESTED]).await?;
+                dest.write_u8(ID_INTERESTED).await?;
             }
             NotInterested => {
-                dest.write_all(&[ID_NOT_INTERESTED]).await?;
+                dest.write_u8(ID_NOT_INTERESTED).await?;
             }
             Have { piece_index } => {
-                dest.write_all(&[ID_HAVE]).await?;
-                dest.write_all(&piece_index.to_be_bytes()).await?;
+                dest.write_u8(ID_HAVE).await?;
+                dest.write_u32(*piece_index).await?;
             }
             Bitfield { bitfield } => {
-                dest.write_all(&[ID_BITFIELD]).await?;
+                dest.write_u8(ID_BITFIELD).await?;
                 dest.write_all(bitfield.as_raw_slice()).await?;
             }
             Request {
@@ -172,19 +163,19 @@ impl PeerMessage {
                 begin,
                 length,
             } => {
-                dest.write_all(&[ID_REQUEST]).await?;
-                dest.write_all(&index.to_be_bytes()).await?;
-                dest.write_all(&begin.to_be_bytes()).await?;
-                dest.write_all(&length.to_be_bytes()).await?;
+                dest.write_u8(ID_REQUEST).await?;
+                dest.write_u32(*index).await?;
+                dest.write_u32(*begin).await?;
+                dest.write_u32(*length).await?;
             }
             Piece {
                 index,
                 begin,
                 block,
             } => {
-                dest.write_all(&[ID_PIECE]).await?;
-                dest.write_all(&index.to_be_bytes()).await?;
-                dest.write_all(&begin.to_be_bytes()).await?;
+                dest.write_u8(ID_PIECE).await?;
+                dest.write_u32(*index).await?;
+                dest.write_u32(*begin).await?;
                 dest.write_all(block).await?;
             }
             Cancel {
@@ -192,17 +183,17 @@ impl PeerMessage {
                 begin,
                 length,
             } => {
-                dest.write_all(&[ID_CANCEL]).await?;
-                dest.write_all(&index.to_be_bytes()).await?;
-                dest.write_all(&begin.to_be_bytes()).await?;
-                dest.write_all(&length.to_be_bytes()).await?;
+                dest.write_u8(ID_CANCEL).await?;
+                dest.write_u32(*index).await?;
+                dest.write_u32(*begin).await?;
+                dest.write_u32(*length).await?;
             }
             DhtPort { listen_port } => {
-                dest.write_all(&[ID_PORT]).await?;
-                dest.write_all(&listen_port.to_be_bytes()).await?;
+                dest.write_u8(ID_PORT).await?;
+                dest.write_u16(*listen_port).await?;
             }
             Extended { id, data } => {
-                dest.write_all(&[ID_EXTENDED]).await?;
+                dest.write_u8(ID_EXTENDED).await?;
                 dest.write_u8(*id).await?;
                 dest.write_all(data).await?;
             }
@@ -238,12 +229,6 @@ const ID_PIECE: u8 = 7;
 const ID_CANCEL: u8 = 8;
 const ID_PORT: u8 = 9;
 const ID_EXTENDED: u8 = 20;
-
-async fn read_u32_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<u32> {
-    let mut bytes = [0u8; 4];
-    src.read_exact(&mut bytes).await?;
-    Ok(u32::from_be_bytes(bytes))
-}
 
 // ------
 
