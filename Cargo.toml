@@ -21,6 +21,7 @@ igd = { version = "0.12.1", features = ["aio"] }
 log = "0.4.22"
 simple_logger = { version = "5.0.0", features = ["threads"] }
 sha1_smol = "1.0.1"
+bytes = "1.7.1"
 tokio = { version = "1.39.2", features = [
     "rt",
     "net",

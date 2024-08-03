@@ -1,4 +1,5 @@
 use bitvec::prelude::*;
+use bytes::BufMut;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
@@ -94,8 +95,7 @@ impl PeerMessage {
             ID_PIECE => {
                 let index = src.read_u32().await?;
                 let begin = src.read_u32().await?;
-                let mut block = vec![0u8; msg_len - 9];
-                src.read_exact(&mut block).await?;
+                let block = read_buf_exact(src, msg_len - 9).await?;
                 Ok(Piece {
                     index,
                     begin,
@@ -117,8 +117,7 @@ impl PeerMessage {
             }),
             ID_EXTENDED => {
                 let id = src.read_u8().await?;
-                let mut data = vec![0u8; msg_len - 2];
-                src.read_exact(&mut data).await?;
+                let data = read_buf_exact(src, msg_len - 2).await?;
                 Ok(Extended { id, data })
             }
             _ => Err(io::Error::new(
@@ -216,6 +215,13 @@ impl PeerMessage {
             Extended { data, .. } => 2 + data.len(),
         }
     }
+}
+
+#[inline]
+async fn read_buf_exact<S: AsyncReadExt + Unpin>(src: &mut S, len: usize) -> io::Result<Vec<u8>> {
+    let mut buffer = Vec::with_capacity(len).limit(len);
+    while 0 != src.read_buf(&mut buffer).await? {}
+    Ok(buffer.into_inner())
 }
 
 const ID_CHOKE: u8 = 0;
