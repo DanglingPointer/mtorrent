@@ -16,30 +16,35 @@ pub async fn single_torrent(
     output_dir: impl AsRef<Path>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
+    use_upnp: bool,
 ) -> io::Result<()> {
     let listener_addr =
         SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), ip::port_from_hash(&metainfo_uri));
     // get public ip to send correct listening port to trackers and peers later
-    let public_pwp_ip = match upnp::PortOpener::new(
-        SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
-        igd::PortMappingProtocol::TCP,
-    )
-    .await
-    {
-        Ok(port_opener) => {
-            let public_ipv4 = port_opener.external_ip();
-            log::info!("UPnP succeeded, public ip: {}", public_ipv4);
-            pwp_runtime.spawn(async move {
-                if let Err(e) = port_opener.do_continuous_renewal().await {
-                    log::error!("UPnP port renewal failed: {e}");
-                }
-            });
-            SocketAddr::V4(public_ipv4)
+    let public_pwp_ip = if use_upnp {
+        match upnp::PortOpener::new(
+            SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
+            igd::PortMappingProtocol::TCP,
+        )
+        .await
+        {
+            Ok(port_opener) => {
+                let public_ipv4 = port_opener.external_ip();
+                log::info!("UPnP succeeded, public ip: {}", public_ipv4);
+                pwp_runtime.spawn(async move {
+                    if let Err(e) = port_opener.do_continuous_renewal().await {
+                        log::error!("UPnP port renewal failed: {e}");
+                    }
+                });
+                SocketAddr::V4(public_ipv4)
+            }
+            Err(e) => {
+                log::error!("UPnP failed: {e}");
+                listener_addr
+            }
         }
-        Err(e) => {
-            log::error!("UPnP failed: {e}");
-            listener_addr
-        }
+    } else {
+        listener_addr
     };
 
     if Path::new(metainfo_uri).is_file() {
