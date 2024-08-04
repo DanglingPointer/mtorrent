@@ -516,6 +516,7 @@ async fn test_download_and_upload_multifile_torrent() {
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
+            .arg("--no-upnp")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -542,11 +543,15 @@ async fn test_download_and_upload_multifile_torrent() {
 
         let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
-            .arg(metainfo_file)
-            .arg(output_dir)
-            .spawn()
-            .expect("failed to execute 'mtorrent'");
+        let mtorrent = task::spawn(async move {
+            time::sleep(sec!(2)).await; // wait for listening peers to launch
+            process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+                .arg(metainfo_file)
+                .arg(output_dir)
+                .arg("--no-upnp")
+                .spawn()
+                .expect("failed to execute 'mtorrent'")
+        });
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -556,7 +561,7 @@ async fn test_download_and_upload_multifile_torrent() {
             },
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+        let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         tracker.kill().unwrap();
@@ -571,6 +576,7 @@ async fn test_download_and_upload_multifile_torrent() {
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(data_dir)
+            .arg("--no-upnp")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -602,6 +608,7 @@ async fn test_download_and_upload_monofile_torrent() {
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(output_dir)
+            .arg("--no-upnp")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -628,11 +635,15 @@ async fn test_download_and_upload_monofile_torrent() {
 
         let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
-            .arg(metainfo_file)
-            .arg(output_dir)
-            .spawn()
-            .expect("failed to execute 'mtorrent'");
+        let mtorrent = task::spawn(async move {
+            time::sleep(sec!(2)).await; // wait for listening peers to launch
+            process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+                .arg(metainfo_file)
+                .arg(output_dir)
+                .arg("--no-upnp")
+                .spawn()
+                .expect("failed to execute 'mtorrent'")
+        });
 
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
@@ -642,7 +653,7 @@ async fn test_download_and_upload_monofile_torrent() {
             },
         ));
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+        let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
         tracker.kill().unwrap();
@@ -657,6 +668,7 @@ async fn test_download_and_upload_monofile_torrent() {
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
             .arg(data_dir)
+            .arg("--no-upnp")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 

@@ -211,8 +211,8 @@ pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: imp
         }
     });
 
-    // first tick after 3s because of integration tests
-    let mut interval = time::interval_at(time::Instant::now() + sec!(3), sec!(10));
+    // first tick after 5s because of integration tests
+    let mut interval = time::interval_at(time::Instant::now() + sec!(5), sec!(10));
 
     loop {
         interval.tick().await;

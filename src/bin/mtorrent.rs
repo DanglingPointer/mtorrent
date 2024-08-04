@@ -58,6 +58,7 @@ fn main() -> io::Result<()> {
             output_dir,
             pwp_worker.runtime_handle(),
             storage_worker.runtime_handle(),
+            !args.next().is_some_and(|arg| arg == "--no-upnp"),
         ),
     )?;
 
