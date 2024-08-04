@@ -223,7 +223,7 @@ async fn main_stage(
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime,
             peer_discovered_channel: peer_discovered_sink.clone(),
-            piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+            piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
         },
     );
     local_task.spawn_local(async move {

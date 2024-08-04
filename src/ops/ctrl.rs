@@ -273,6 +273,11 @@ pub fn active_upload_next_action(
 // ------------------------------------------------------------------------------------------------
 
 pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
+    #[cfg(debug_assertions)]
+    if ctx.peer_states.iter().next().is_some() {
+        // needed for integration tests to make sure we report all downloaded pieces before exiting
+        return false;
+    }
     // finish if we have downloaded everything, and all active leeches (if any) have received at least 50 blocks
     ctx.accountant.missing_bytes() == 0
         && !ctx.peer_states.iter().any(|(_, state)| {

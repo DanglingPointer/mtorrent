@@ -80,6 +80,7 @@ impl AvailabilityReporter {
                         self.tx.remote_ip(),
                         skipped
                     );
+                    debug_assert!(false, "AvailabilityReporter overflow");
                 }
                 Err(RecvError::Closed) => break,
             }
