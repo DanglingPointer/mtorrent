@@ -636,7 +636,15 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
         })])
         .wait(sec!(5))
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 1 }])
-        .wait(sec!(30))
+        .wait(sec!(11 - 5))
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 0,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(5))
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 2 }])
+        .wait(sec!(6))
         .build();
 
     let (_, future) = PeerBuilder::new()
@@ -644,7 +652,7 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
         .with_metainfo_file(metainfo_filepath)
         .build_main();
 
-    let result = time::timeout(sec!(12), future).await.unwrap();
+    let result = time::timeout(sec!(22), future).await.unwrap();
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);

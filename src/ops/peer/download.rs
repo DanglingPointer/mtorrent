@@ -214,25 +214,39 @@ pub async fn get_pieces(
     }
 
     macro_rules! wait_for_block {
-        () => {{
-            let timeout = match inner.state.bytes_received {
-                0 => sec!(11),
-                _ => sec!(31),
+        ($requests:expr) => {{
+            const TIMEOUT: Duration = sec!(11);
+            let mut deadline = Instant::now() + TIMEOUT;
+            let mut retries_left = match inner.state.bytes_received {
+                0 => 1,
+                _ => 2,
             };
-            let deadline = Instant::now() + timeout;
             loop {
-                let msg = inner.rx.receive_message_timed(deadline - Instant::now()).await.map_err(
-                    |e| match e {
-                        pwp::ChannelError::Timeout => io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("peer failed to respond to requests within {:?}", timeout),
-                        ),
-                        pwp::ChannelError::ConnectionClosed => io::Error::from(e),
-                    },
-                )?;
-                match msg {
-                    pwp::UploaderMessage::Block(info, data) => break (info, data),
-                    _ => {
+                match inner.rx.receive_message_timed(deadline - Instant::now()).await {
+                    Err(pwp::ChannelError::Timeout) => {
+                        if retries_left == 0 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other, // using Other so that we don't try to reconnect
+                                format!("peer failed to respond to requests within {:?}", TIMEOUT),
+                            ));
+                        }
+                        debug_assert!(!$requests.is_empty());
+                        for block in &$requests {
+                            inner
+                                .tx
+                                .send_message(pwp::DownloaderMessage::Request(block.clone()))
+                                .await?;
+                        }
+                        retries_left -= 1;
+                        deadline = Instant::now() + TIMEOUT;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                    Ok(pwp::UploaderMessage::Block(info, data)) => {
+                        break (info, data);
+                    }
+                    Ok(msg) => {
                         if update_state_with_msg(&mut inner, &msg) && inner.state.peer_choking {
                             with_ctx!(|ctx| ctx
                                 .pending_requests
@@ -245,9 +259,9 @@ pub async fn get_pieces(
         }};
     }
 
-    for piece in pieces.clone() {
-        with_ctx!(|ctx| ctx.pending_requests.add(piece, inner.rx.remote_ip()));
-    }
+    with_ctx!(|ctx| for piece in pieces.clone() {
+        ctx.pending_requests.add(piece, inner.rx.remote_ip())
+    });
 
     let (piece_sink, piece_src) = fifo::channel::<usize>();
 
@@ -313,7 +327,7 @@ pub async fn get_pieces(
                 while !requests.is_empty()
                     && with_ctx!(|ctx| !ctx.accountant.has_piece(piece_index))
                 {
-                    let (info, data) = wait_for_block!();
+                    let (info, data) = wait_for_block!(requests);
                     if !requests.remove(&info) {
                         log::debug!(
                             "Received unexpected block ({info}) from {}",
