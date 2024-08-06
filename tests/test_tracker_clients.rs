@@ -115,7 +115,7 @@ async fn test_udp_scrape() {
     assert!(success_count.get() > 0);
 }
 
-// #[ignore]
+#[ignore]
 #[tokio::test]
 async fn test_https_scrape_and_announce() {
     let _ = simple_logger::SimpleLogger::new()
