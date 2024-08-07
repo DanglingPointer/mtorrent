@@ -8,11 +8,9 @@ mod tests;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
-use crate::utils::peer_id::PeerId;
-use crate::utils::{fifo, ip};
+use crate::utils::fifo;
 use crate::{data, pwp, sec};
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
@@ -31,100 +29,6 @@ const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
 const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
 const MAX_PENDING_REQUESTS: usize = 1024 * 3;
-
-macro_rules! marshal_stream {
-    ($stream:expr, $rt_handle:expr) => {{
-        let std_stream = $stream.into_std()?;
-        std_stream.set_nodelay(true)?;
-        // note: EnterGuard must NEVER live across a suspension point
-        let _g = $rt_handle.enter();
-        TcpStream::from_std(std_stream)?
-    }};
-}
-
-async fn channels_for_outgoing_connection(
-    local_peer_id: &PeerId,
-    info_hash: &[u8; 20],
-    extension_protocol_enabled: bool,
-    remote_ip: SocketAddr,
-    local_port: u16,
-    pwp_worker_handle: runtime::Handle,
-) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
-    log::debug!("Connecting to {remote_ip}...");
-    const MAX_RETRY_COUNT: usize = 3;
-    let mut attempts_left = MAX_RETRY_COUNT;
-    let mut reconnect_interval = sec!(2);
-
-    let local_addr = match &remote_ip {
-        SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-        SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
-    };
-    let stream = loop {
-        let socket = ip::bound_tcp_socket(SocketAddr::new(local_addr, local_port))?;
-        match time::timeout(sec!(30), socket.connect(remote_ip)).await? {
-            Ok(stream) => break stream,
-            Err(e) => match e.kind() {
-                io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
-                    if attempts_left > 0 =>
-                {
-                    time::sleep(reconnect_interval).await;
-                    attempts_left -= 1;
-                    reconnect_interval *= 2;
-                }
-                _ => return Err(e),
-            },
-        }
-    };
-    // re-register socket so that it will be polled on PWP thread
-    let stream = marshal_stream!(stream, pwp_worker_handle);
-    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_outgoing(
-        local_peer_id,
-        info_hash,
-        extension_protocol_enabled,
-        remote_ip,
-        stream,
-        None,
-    )
-    .await?;
-    log::info!("Successful outgoing connection to {remote_ip}");
-
-    pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.await {
-            log::debug!("Peer runner exited: {}", e);
-        }
-    });
-
-    Ok((download_chans, upload_chans, extended_chans))
-}
-
-async fn channels_for_incoming_connection(
-    local_peer_id: &[u8; 20],
-    info_hash: &[u8; 20],
-    extension_protocol_enabled: bool,
-    remote_ip: SocketAddr,
-    stream: TcpStream,
-    pwp_worker_handle: runtime::Handle,
-) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
-    // re-register socket so that it will be polled on PWP thread
-    let stream = marshal_stream!(stream, pwp_worker_handle);
-    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
-        local_peer_id,
-        Some(info_hash),
-        extension_protocol_enabled,
-        remote_ip,
-        stream,
-    )
-    .await?;
-    log::info!("Successful incoming connection from {remote_ip}");
-
-    pwp_worker_handle.spawn(async move {
-        if let Err(e) = runner.await {
-            log::debug!("Peer runner exited: {}", e);
-        }
-    });
-
-    Ok((download_chans, upload_chans, extended_chans))
-}
 
 // ------------------------------------------------------------------------------------------------
 
@@ -320,7 +224,7 @@ pub async fn outgoing_pwp_connection(
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
+        let (download_chans, upload_chans, extended_chans) = pwp::channels_for_outgoing_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
@@ -359,7 +263,7 @@ pub async fn incoming_pwp_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
 
-    let (download_chans, upload_chans, extended_chans) = channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
         &local_peer_id,
         &info_hash,
         EXTENSION_PROTOCOL_ENABLED,
@@ -459,7 +363,7 @@ pub async fn outgoing_preliminary_connection(
         )
     });
 
-    let (download_chans, upload_chans, extended_chans) = channels_for_outgoing_connection(
+    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_outgoing_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled
@@ -483,7 +387,7 @@ pub async fn incoming_preliminary_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
 
-    let (download_chans, upload_chans, extended_chans) = channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled

@@ -1,6 +1,6 @@
-use crate::ops;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{fifo, ip, magnet, startup, upnp};
+use crate::{ops, pwp};
 use futures::StreamExt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -87,7 +87,7 @@ pub async fn single_torrent(
 }
 
 const MAX_PRELIMINARY_CONNECTIONS: usize = 30;
-const MAX_PEER_CONNECTIONS: usize = 50;
+const MAX_PEER_CONNECTIONS: usize = 100;
 
 macro_rules! log {
     ($e:expr, $($arg:tt)+) => {{
@@ -162,7 +162,7 @@ async fn preliminary_stage(
         }
     };
     local_task.spawn_local(async move {
-        match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
+        match pwp::run_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
         }
@@ -257,7 +257,7 @@ async fn main_stage(
         }
     };
     local_task.spawn_local(async move {
-        match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
+        match pwp::run_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
         }

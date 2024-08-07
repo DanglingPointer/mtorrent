@@ -31,6 +31,12 @@ impl From<&[u8; 20]> for PeerId {
     }
 }
 
+impl From<[u8; 20]> for PeerId {
+    fn from(value: [u8; 20]) -> Self {
+        Self(value)
+    }
+}
+
 impl Deref for PeerId {
     type Target = [u8; 20];
 

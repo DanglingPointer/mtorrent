@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task, time};
 use tokio_test::io::Builder as MockBuilder;
@@ -29,17 +29,18 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     let mut local_id = [0u8; 20];
     local_id[..4].copy_from_slice("meta".as_bytes());
 
-    let stream = TcpStream::connect(remote_ip).await.unwrap();
-    stream.set_nodelay(true).unwrap();
-    let (mut download_chans, mut upload_chans, extended_chans, runner) =
-        pwp::channels_from_outgoing(&local_id, metainfo.info_hash(), true, remote_ip, stream, None)
-            .await
-            .unwrap();
+    let (mut download_chans, mut upload_chans, extended_chans) =
+        pwp::channels_for_outgoing_connection(
+            &local_id.into(),
+            metainfo.info_hash(),
+            true,
+            remote_ip,
+            0u16,
+            runtime::Handle::current(),
+        )
+        .await
+        .unwrap();
     let extended_chans = extended_chans.unwrap();
-
-    runtime::Handle::current().spawn(async move {
-        let _ = runner.await;
-    });
 
     let download_fut = async {
         while let Ok(msg) = download_chans.1.receive_message().await {
