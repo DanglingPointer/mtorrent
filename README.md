@@ -1,4 +1,4 @@
-[![Build and test](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/rust.yml)
+[![Build and test](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
 
 # mtorrent
 CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently runs 3 threads in total). Blazingly fast, amazingly robust and pretty awesome in general.
