@@ -1,13 +1,14 @@
 use super::channels::{channels_from_incoming, channels_from_outgoing};
-use crate::sec;
 use crate::utils::ip;
 use crate::utils::peer_id::PeerId;
-use std::io;
+use crate::{min, sec};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::{cmp, io};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 use tokio::{runtime, time};
 
+/// Re-register socket so that it will be polled on the specified runtime
 macro_rules! marshal_stream {
     ($stream:expr, $rt_handle:expr) => {{
         let std_stream = $stream.into_std()?;
@@ -39,22 +40,36 @@ pub async fn channels_for_outgoing_connection(
     quick: bool,
 ) -> io::Result<(super::DownloadChannels, super::UploadChannels, Option<super::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
-    let mut attempts_left = if quick { 0 } else { 2 };
+    let mut attempts_left = if quick { 0 } else { 3 };
     let mut timeout = if quick { sec!(5) } else { sec!(15) };
 
     let local_addr = match &remote_ip {
         SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
         SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
     };
-    let stream = loop {
-        let socket = ip::bound_tcp_socket(SocketAddr::new(local_addr, local_port))?;
+
+    let (download_chans, upload_chans, extended_chans, runner) = loop {
+        let connect_and_handshake = async {
+            let socket = ip::bound_tcp_socket(SocketAddr::new(local_addr, local_port))?;
+            let stream = socket.connect(remote_ip).await?;
+            let stream = marshal_stream!(stream, pwp_runtime);
+            channels_from_outgoing(
+                local_peer_id,
+                info_hash,
+                extension_protocol_enabled,
+                remote_ip,
+                stream,
+                None,
+            )
+            .await
+        };
         let next_attempt_time = Instant::now() + timeout;
-        match time::timeout_at(next_attempt_time, socket.connect(remote_ip))
+        match time::timeout_at(next_attempt_time, connect_and_handshake)
             .await
             .map_err(io::Error::from)
         {
-            Ok(Ok(stream)) => {
-                break stream;
+            Ok(Ok(channels)) => {
+                break channels;
             }
             Ok(Err(e)) | Err(e) if !can_retry(&e, attempts_left) => {
                 return Err(e);
@@ -65,24 +80,13 @@ pub async fn channels_for_outgoing_connection(
             _ => (),
         }
         attempts_left -= 1;
-        timeout *= 2;
+        timeout = cmp::min(min!(1), timeout * 2);
     };
-    // re-register socket so that it will be polled on PWP runtime
-    let stream = marshal_stream!(stream, pwp_runtime);
-    let (download_chans, upload_chans, extended_chans, runner) = channels_from_outgoing(
-        local_peer_id,
-        info_hash,
-        extension_protocol_enabled,
-        remote_ip,
-        stream,
-        None,
-    )
-    .await?;
     log::info!("Successful outgoing connection to {remote_ip}");
 
     pwp_runtime.spawn(async move {
         if let Err(e) = runner.await {
-            log::debug!("Peer runner exited: {}", e);
+            log::debug!("Peer runner for {remote_ip} exited: {e}");
         }
     });
 
@@ -97,7 +101,6 @@ pub async fn channels_for_incoming_connection(
     stream: TcpStream,
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(super::DownloadChannels, super::UploadChannels, Option<super::ExtendedChannels>)> {
-    // re-register socket so that it will be polled on PWP runtime
     let stream = marshal_stream!(stream, pwp_runtime);
     let (download_chans, upload_chans, extended_chans, runner) = channels_from_incoming(
         local_peer_id,
@@ -111,7 +114,7 @@ pub async fn channels_for_incoming_connection(
 
     pwp_runtime.spawn(async move {
         if let Err(e) = runner.await {
-            log::debug!("Peer runner exited: {}", e);
+            log::debug!("Peer runner for {remote_ip} exited: {e}");
         }
     });
 
