@@ -1,6 +1,6 @@
-use mtorrent::sec;
-use mtorrent::tracker::{http, udp, utils};
-use mtorrent::utils::{benc, ip, startup};
+use super::{http, udp, utils};
+use crate::sec;
+use crate::utils::{benc, ip, startup};
 use std::cell::Cell;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;

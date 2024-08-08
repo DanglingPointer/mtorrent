@@ -30,21 +30,23 @@ pub fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &s
     }
 }
 
-pub fn get_udp_tracker_addr<'t, T: AsRef<str> + 't>(tracker: &'t T) -> Option<&'t str> {
+pub fn get_udp_tracker_addr<'t, T: AsRef<str> + ?Sized + 't>(tracker: &'t T) -> Option<&'t str> {
     let tracker = tracker.as_ref();
     let udp_addr = tracker.strip_prefix("udp://")?;
     Some(udp_addr.strip_suffix("/announce").unwrap_or(udp_addr))
 }
 
-pub fn get_http_tracker_addr<'t, T: AsRef<str> + 't>(tracker: &'t T) -> Option<&'t str> {
+pub fn get_http_tracker_addr<'t, T: AsRef<str> + ?Sized + 't>(tracker: &'t T) -> Option<&'t str> {
     let tracker = tracker.as_ref();
     (tracker.starts_with("http://") || tracker.starts_with("https://")).then_some(tracker)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::metainfo;
+
     use super::*;
-    use std::collections::HashSet;
+    use std::{collections::HashSet, fs};
 
     #[test]
     fn test_extract_udp_trackers() {
@@ -88,5 +90,30 @@ mod tests {
             .filter_map(|tracker| get_http_tracker_addr(&tracker).map(ToString::to_string))
             .collect();
         assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
+    }
+
+    #[test]
+    fn test_extract_trackers_from_metainfo() {
+        let data = fs::read("tests/assets/example.torrent").unwrap();
+        let info = metainfo::Metainfo::new(&data).unwrap();
+
+        let mut http_iter = trackers_from_metainfo(&info).filter_map(get_http_tracker_addr);
+        assert_eq!("http://tracker.trackerfix.com:80/announce", http_iter.next().unwrap());
+        assert!(http_iter.next().is_none());
+        let udp_trackers = trackers_from_metainfo(&info)
+            .filter_map(get_udp_tracker_addr)
+            .collect::<HashSet<_>>();
+        assert_eq!(4, udp_trackers.len());
+        assert!(udp_trackers.contains("9.rarbg.me:2720"));
+        assert!(udp_trackers.contains("9.rarbg.to:2740"));
+        assert!(udp_trackers.contains("tracker.fatkhoala.org:13780"));
+        assert!(udp_trackers.contains("tracker.tallpenguin.org:15760"));
+
+        let data = fs::read("tests/assets/pcap.torrent").unwrap();
+        let info = metainfo::Metainfo::new(&data).unwrap();
+
+        let mut http_iter = trackers_from_metainfo(&info).filter_map(get_http_tracker_addr);
+        assert_eq!("http://localhost:8000/announce", http_iter.next().unwrap());
+        assert!(http_iter.next().is_none());
     }
 }
