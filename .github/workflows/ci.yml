@@ -54,4 +54,5 @@ jobs:
         override: true
     - uses: cargo-bins/cargo-binstall@main
     - run: cargo binstall cargo-nextest --secure -y
-    - run: cargo nextest run --all-targets --all-features
+    - run: cargo nextest run --no-run
+    - run: cargo nextest run --all-targets --all-features --failure-output=immediate-final
