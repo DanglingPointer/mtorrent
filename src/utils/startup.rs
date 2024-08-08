@@ -43,3 +43,75 @@ pub fn create_metainfo_storage(
     })?;
     Ok(data::new_async_storage(parent, iter::once((metainfo_filelen, PathBuf::from(filename))))?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::metainfo;
+
+    fn count_files(dir: impl AsRef<Path>) -> io::Result<usize> {
+        let mut count = 0usize;
+        if dir.as_ref().is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_files(&path)?;
+                } else {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    #[test]
+    fn test_read_metainfo_and_spawn_files() {
+        let data = fs::read("tests/assets/example.torrent").unwrap();
+        let info = metainfo::Metainfo::new(&data).unwrap();
+
+        let parent_dir = "test_read_metainfo_and_spawn_files_output";
+        let filedir = Path::new(parent_dir).join("files");
+        let storage = create_content_storage(&info, &filedir).unwrap();
+
+        assert_eq!(info.files().unwrap().count(), count_files(parent_dir).unwrap());
+
+        for (length, path) in info.files().unwrap() {
+            let path = Path::new(&filedir).join(path);
+            let file = fs::File::open(&path)
+                .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
+            assert_eq!(length as u64, file.metadata().unwrap().len());
+        }
+
+        fs::remove_dir_all(&filedir).unwrap();
+        drop(storage);
+
+        assert_eq!(0, count_files(parent_dir).unwrap());
+
+        fs::remove_dir_all(parent_dir).unwrap();
+    }
+
+    #[test]
+    fn test_read_metainfo_and_spawn_single_file() {
+        let data = fs::read("tests/assets/pcap.torrent").unwrap();
+        let info = metainfo::Metainfo::new(&data).unwrap();
+
+        let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
+        let filedir = Path::new(parent_dir).join("files");
+        let storage = create_content_storage(&info, &filedir).unwrap();
+
+        assert_eq!(1, count_files(parent_dir).unwrap());
+
+        let path = Path::new(&filedir).join(info.name().unwrap());
+        let file = fs::File::open(&path)
+            .unwrap_or_else(|_| panic!("{} does not exist", path.to_string_lossy()));
+        assert_eq!(info.length().unwrap() as u64, file.metadata().unwrap().len());
+
+        fs::remove_dir_all(&filedir).unwrap();
+        drop(storage);
+
+        assert_eq!(0, count_files(parent_dir).unwrap());
+
+        fs::remove_dir_all(parent_dir).unwrap();
+    }
+}
