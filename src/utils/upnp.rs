@@ -92,3 +92,26 @@ impl Drop for PortOpener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::ip;
+    use log::Level;
+    use tokio::time;
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_async_port_opener() {
+        simple_logger::init_with_level(Level::Debug).unwrap();
+
+        let local_ip = ip::get_local_addr().unwrap();
+        let local_internal_ip = SocketAddrV4::new(local_ip, 23015);
+        let port_opener =
+            PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP).await.unwrap();
+        log::info!("port opener created, external ip: {}", port_opener.external_ip());
+        time::sleep(sec!(1)).await;
+        drop(port_opener);
+        log::info!("port opener dropped");
+    }
+}
