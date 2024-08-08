@@ -206,7 +206,7 @@ pub async fn get_pieces(
 
     macro_rules! wait_for_block {
         ($requests:expr) => {{
-            const TIMEOUT: Duration = sec!(11);
+            const TIMEOUT: Duration = sec!(20);
             let mut deadline = Instant::now() + TIMEOUT;
             let mut retries_left = match inner.state.bytes_received {
                 0 => 1,
@@ -222,6 +222,7 @@ pub async fn get_pieces(
                             ));
                         }
                         debug_assert!(!$requests.is_empty());
+                        log::warn!("Re-sending block requests to {}", inner.rx.remote_ip());
                         for block in &$requests {
                             inner
                                 .tx

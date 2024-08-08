@@ -680,7 +680,7 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
         })])
         .wait(sec!(5))
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 1 }])
-        .wait(sec!(11 - 5))
+        .wait(sec!(20 - 5))
         .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
             piece_index: 0,
             in_piece_offset: 0,
@@ -688,7 +688,7 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
         })])
         .wait(sec!(5))
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 2 }])
-        .wait(sec!(6))
+        .wait(sec!(16))
         .build();
 
     let (_, future) = PeerBuilder::new()
@@ -696,11 +696,11 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
         .with_metainfo_file(metainfo_filepath)
         .build_main();
 
-    let result = time::timeout(sec!(22), future).await.unwrap();
+    let result = time::timeout(sec!(40), future).await.unwrap();
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
-    assert_eq!(err.to_string(), "peer failed to respond to requests within 11s");
+    assert_eq!(err.to_string(), "peer failed to respond to requests within 20s");
 }
 
 #[tokio::test(start_paused = true)]
