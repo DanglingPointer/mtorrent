@@ -231,6 +231,7 @@ pub async fn outgoing_pwp_connection(
             remote_ip,
             local_port,
             permit.0.pwp_worker_handle.clone(),
+            false,
         )
         .await?;
         let connected_time = Instant::now();
@@ -261,7 +262,7 @@ pub async fn incoming_pwp_connection(
     define_with_ctx!(handle);
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()) });
+        with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
 
     let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
         &local_peer_id,
@@ -355,13 +356,11 @@ pub async fn outgoing_preliminary_connection(
     let mut handle = permit.0.ctx_handle.clone();
     define_with_ctx!(handle);
 
-    let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| {
-        (
-            *ctx.magnet.info_hash(),
-            *ctx.const_data.local_peer_id(),
-            ctx.const_data.pwp_local_tcp_port(),
-        )
-    });
+    let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
+        *ctx.magnet.info_hash(),
+        *ctx.const_data.local_peer_id(),
+        ctx.const_data.pwp_local_tcp_port(),
+    ));
 
     let (download_chans, upload_chans, extended_chans) = pwp::channels_for_outgoing_connection(
         &local_peer_id,
@@ -370,6 +369,7 @@ pub async fn outgoing_preliminary_connection(
         remote_ip,
         local_port,
         permit.0.pwp_worker_handle.clone(),
+        true,
     )
     .await?;
 
@@ -385,7 +385,7 @@ pub async fn incoming_preliminary_connection(
     define_with_ctx!(handle);
 
     let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| { (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()) });
+        with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
 
     let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
         &local_peer_id,

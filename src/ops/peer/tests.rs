@@ -37,6 +37,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
             remote_ip,
             0u16,
             runtime::Handle::current(),
+            false,
         )
         .await
         .unwrap();
