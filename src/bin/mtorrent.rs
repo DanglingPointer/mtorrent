@@ -1,6 +1,6 @@
 use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::worker;
-use mtorrent::{client, info_stopwatch};
+use mtorrent::{app, info_stopwatch};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
     let peer_id = PeerId::generate_new();
 
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(
-        client::main::single_torrent(
+        app::main::single_torrent(
             peer_id,
             &metainfo_uri,
             output_dir,
