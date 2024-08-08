@@ -116,7 +116,7 @@ where
 
 // ------
 
-const HANDSHAKE_TIMEOUT: Duration = sec!(30);
+const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 
 pub async fn channels_from_incoming<S>(
     local_peer_id: &[u8; 20],
