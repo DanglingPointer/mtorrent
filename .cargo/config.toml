@@ -1,2 +1,5 @@
+[target.'cfg(all())']
+rustflags = ["-D", "warnings"]
+
 [target.'cfg(target_family = "windows")']
 rustflags = ["-C", "target-feature=+crt-static"]

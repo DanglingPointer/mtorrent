@@ -10,9 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-
-  lint:
-    name: Lint
+  format:
+    name: Check formatting
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -21,14 +20,34 @@ jobs:
         toolchain: 1.80.0
         profile: minimal
         override: true
-        components: rustfmt, clippy
+        components: rustfmt
+    - run: cargo fmt --check --verbose
+
+  lint:
+    name: Lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: 1.80.0
+        profile: minimal
+        override: true
+        components: clippy
     - run: cargo clippy --all-targets --all-features -- -D warnings
     - run: cargo clippy --release --all-targets --all-features -- -D warnings
-    - run: cargo fmt --check --verbose
 
   build:
     name: Build release
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - uses: actions-rs/toolchain@v1
@@ -38,7 +57,7 @@ jobs:
         override: true
     - run: cargo build --release --all-targets --verbose
 
-  tests:
+  test:
     name: Run tests
     strategy:
       fail-fast: false
@@ -54,4 +73,5 @@ jobs:
         override: true
     - uses: cargo-bins/cargo-binstall@main
     - run: cargo binstall cargo-nextest --secure -y
-    - run: cargo nextest run --all-targets --all-features
+    - run: cargo nextest run --no-run
+    - run: cargo nextest run --all-targets --all-features --failure-output=immediate-final
