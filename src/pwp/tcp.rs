@@ -36,11 +36,11 @@ pub async fn channels_for_outgoing_connection(
     remote_ip: SocketAddr,
     local_port: u16,
     pwp_runtime: runtime::Handle,
+    quick: bool,
 ) -> io::Result<(super::DownloadChannels, super::UploadChannels, Option<super::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
-    const MAX_RETRY_COUNT: usize = 3;
-    let mut attempts_left = MAX_RETRY_COUNT;
-    let mut timeout = sec!(15);
+    let mut attempts_left = if quick { 0 } else { 2 };
+    let mut timeout = if quick { sec!(5) } else { sec!(15) };
 
     let local_addr = match &remote_ip {
         SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),

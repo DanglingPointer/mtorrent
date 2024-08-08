@@ -86,7 +86,7 @@ pub async fn single_torrent(
     Ok(())
 }
 
-const MAX_PRELIMINARY_CONNECTIONS: usize = 30;
+const MAX_PRELIMINARY_CONNECTIONS: usize = 10;
 const MAX_PEER_CONNECTIONS: usize = 100;
 
 macro_rules! log {

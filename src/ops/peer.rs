@@ -231,6 +231,7 @@ pub async fn outgoing_pwp_connection(
             remote_ip,
             local_port,
             permit.0.pwp_worker_handle.clone(),
+            false,
         )
         .await?;
         let connected_time = Instant::now();
@@ -370,6 +371,7 @@ pub async fn outgoing_preliminary_connection(
         remote_ip,
         local_port,
         permit.0.pwp_worker_handle.clone(),
+        true,
     )
     .await?;
 
