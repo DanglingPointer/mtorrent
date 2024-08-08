@@ -116,43 +116,34 @@ pub async fn new_peer(
     Ok(IdlePeer(inner))
 }
 
-pub async fn activate(peer: IdlePeer) -> io::Result<SeedingPeer> {
+pub async fn activate(peer: IdlePeer) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(!inner.state.am_interested || inner.state.peer_choking);
     if !inner.state.am_interested {
         inner.tx.send_message(pwp::DownloaderMessage::Interested).await?;
         inner.state.am_interested = true;
+        update_ctx!(inner);
     }
     if !inner.state.peer_choking {
-        update_ctx!(inner);
-        Ok(SeedingPeer(inner))
+        Ok(to_enum!(inner))
     } else {
-        const RETRY_INTERVAL: Duration = min!(1);
-        let max_retry_count = if inner.state.bytes_received == 0 {
-            5
-        } else {
-            u32::MAX
-        };
-
-        let ip = *inner.tx.remote_ip();
         let mut peer = to_enum!(inner);
-
-        for retry in 0..max_retry_count {
-            let next_retry_at = Instant::now() + RETRY_INTERVAL;
-
-            while Instant::now() < next_retry_at {
-                peer = linger(peer, next_retry_at).await?;
-                if let Peer::Seeder(seeder) = peer {
-                    log::debug!("Activated download from {} after {} retries", ip, retry);
-                    return Ok(seeder);
+        let deadline = Instant::now() + min!(1);
+        loop {
+            peer = linger(peer, deadline).await?;
+            match peer {
+                Peer::Seeder(_) => {
+                    return Ok(peer);
                 }
+                Peer::Idle(ref mut idle) if Instant::now() >= deadline => {
+                    idle.0.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
+                    idle.0.state.am_interested = false;
+                    update_ctx!(idle.0);
+                    return Ok(peer);
+                }
+                _ => (),
             }
-            log::debug!("Retrying to activate download from {}, attempt {}", ip, retry + 1);
-            let inner = inner!(&mut peer);
-            inner.tx.send_message(pwp::DownloaderMessage::NotInterested).await?;
-            inner.tx.send_message(pwp::DownloaderMessage::Interested).await?;
         }
-        Err(io::Error::new(io::ErrorKind::Other, "peer is parasite"))
     }
 }
 

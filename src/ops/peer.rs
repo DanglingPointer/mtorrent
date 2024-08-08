@@ -44,7 +44,7 @@ async fn run_download(
             download::Peer::Idle(idling_peer) => {
                 match with_ctx!(|ctx| ctrl::idle_download_next_action(&remote_ip, ctx)) {
                     ctrl::IdleDownloadAction::ActivateDownload => {
-                        peer = download::activate(idling_peer).await?.into();
+                        peer = download::activate(idling_peer).await?;
                     }
                     ctrl::IdleDownloadAction::WaitForUpdates(timeout) => {
                         peer =

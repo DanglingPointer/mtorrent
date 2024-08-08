@@ -14,7 +14,7 @@ use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
-use tokio::{join, runtime, task, time};
+use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
 
 async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_path: &'static str) {
@@ -600,7 +600,7 @@ async fn test_disconnect_parasite_after_5_min() {
     socket_builder
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
         .write(&msgs![pwp::DownloaderMessage::Interested]);
-    for _retry in 0..5 {
+    for _retry in 0..4 {
         socket_builder
             .wait(sec!(30))
             .write(KEEPALIVE)
@@ -611,6 +611,12 @@ async fn test_disconnect_parasite_after_5_min() {
             ])
             .read(KEEPALIVE);
     }
+    socket_builder
+        .wait(sec!(30))
+        .write(KEEPALIVE)
+        .wait(sec!(30))
+        .write(&msgs![pwp::DownloaderMessage::NotInterested])
+        .read(KEEPALIVE);
     let socket = socket_builder.wait(sec!(30)).build();
 
     let (_, future) = PeerBuilder::new().with_socket(socket).build_main();
@@ -618,7 +624,44 @@ async fn test_disconnect_parasite_after_5_min() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
-    assert_eq!(err.to_string(), "peer is parasite");
+    assert_eq!(err.to_string(), "peer is useless");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_reevaluate_interest_every_min() {
+    setup(true);
+
+    let socket = MockBuilder::new()
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested])
+        .wait(sec!(30))
+        .write(KEEPALIVE)
+        .wait(sec!(30))
+        .write(&msgs![
+            pwp::DownloaderMessage::NotInterested,
+            pwp::DownloaderMessage::Interested,
+        ])
+        .read(KEEPALIVE)
+        .wait(sec!(30))
+        .write(KEEPALIVE)
+        .wait(sec!(30))
+        .write(&msgs![pwp::DownloaderMessage::NotInterested])
+        .read(KEEPALIVE)
+        .wait(sec!(30))
+        .write(KEEPALIVE)
+        .build();
+
+    let (mut ctx, peer_future) = PeerBuilder::new().with_socket(socket).build_main();
+
+    let submit_piece_fut = async move {
+        time::sleep(sec!(119)).await;
+        ctx.with_ctx(|ctx| {
+            ctx.piece_tracker.forget_piece(0);
+        });
+        Ok(())
+    };
+
+    let _ = try_join!(submit_piece_fut, time::timeout(min!(3), peer_future)).unwrap();
 }
 
 #[tokio::test(start_paused = true)]

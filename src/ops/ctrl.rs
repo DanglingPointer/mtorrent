@@ -325,7 +325,7 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
     };
     if state.last_upload_time.elapsed() >= TIMEOUT
         && state.last_download_time.elapsed() >= TIMEOUT
-        && !owns_missing_piece()
+        && (!owns_missing_piece() || state.download.bytes_received == 0)
         && (!supports_pex() || ctx.peer_states.seeders_count() > 2)
     {
         Err(io::Error::new(io::ErrorKind::Other, "peer is useless"))
