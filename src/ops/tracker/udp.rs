@@ -390,6 +390,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: u32,
@@ -422,6 +423,7 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,

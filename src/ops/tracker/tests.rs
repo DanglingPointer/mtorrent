@@ -1,10 +1,74 @@
-use super::{http, udp, utils};
+use super::*;
 use crate::sec;
 use crate::utils::{benc, ip, startup};
 use std::cell::Cell;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;
+use std::{fs, iter};
 use tokio::net::UdpSocket;
+
+#[test]
+fn test_combine_supplied_and_saved_trackers() {
+    let config_dir = "test_combine_supplied_and_saved_trackers";
+    fs::create_dir_all(config_dir).unwrap();
+
+    {
+        let supplied_trackers = [
+            "udp://open.stealth.si:80/announce",
+            "invalid",
+            "https://example.com",
+        ];
+
+        let mut http_trackers = HashSet::new();
+        let mut udp_trackers = HashSet::new();
+        add_http_and_udp_trackers(
+            supplied_trackers,
+            config_dir,
+            &mut http_trackers,
+            &mut udp_trackers,
+        );
+
+        assert_eq!(http_trackers, ["https://example.com"].into_iter().map(Into::into).collect());
+        assert_eq!(udp_trackers, ["open.stealth.si:80"].into_iter().map(Into::into).collect());
+    }
+
+    {
+        let mut http_trackers = HashSet::new();
+        let mut udp_trackers = HashSet::new();
+        add_http_and_udp_trackers(iter::empty(), config_dir, &mut http_trackers, &mut udp_trackers);
+        assert_eq!(http_trackers, ["https://example.com"].into_iter().map(Into::into).collect());
+        assert_eq!(udp_trackers, ["open.stealth.si:80"].into_iter().map(Into::into).collect());
+    }
+
+    {
+        let supplied_trackers = ["http://tracker1.com", "udp://tracker.tiny-vps.com:6969"];
+
+        let mut http_trackers = HashSet::new();
+        let mut udp_trackers = HashSet::new();
+        add_http_and_udp_trackers(
+            supplied_trackers,
+            config_dir,
+            &mut http_trackers,
+            &mut udp_trackers,
+        );
+        assert_eq!(
+            http_trackers,
+            ["https://example.com", "http://tracker1.com"]
+                .into_iter()
+                .map(Into::into)
+                .collect()
+        );
+        assert_eq!(
+            udp_trackers,
+            ["open.stealth.si:80", "tracker.tiny-vps.com:6969"]
+                .into_iter()
+                .map(Into::into)
+                .collect()
+        );
+    }
+
+    fs::remove_dir_all(config_dir).unwrap();
+}
 
 #[ignore]
 #[tokio::test]
