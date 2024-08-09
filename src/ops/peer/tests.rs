@@ -654,15 +654,14 @@ async fn test_reevaluate_interest_every_min() {
 
     let (mut ctx, peer_future) = PeerBuilder::new().with_socket(socket).build_main();
 
-    let submit_piece_fut = async move {
+    let _ = try_join!(time::timeout(min!(3), peer_future), async move {
         time::sleep(sec!(119)).await;
         ctx.with_ctx(|ctx| {
             ctx.piece_tracker.forget_piece(0);
         });
         Ok(())
-    };
-
-    let _ = try_join!(submit_piece_fut, time::timeout(min!(3), peer_future)).unwrap();
+    })
+    .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -700,7 +699,63 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
     let result = time::timeout(sec!(40), future).await.unwrap();
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert_eq!(err.kind(), io::ErrorKind::Other); // i.e. we won't try to reconnect
+    assert_eq!(err.to_string(), "peer failed to respond to requests within 20s");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_block_request_extra_retry_when_peer_has_seeded() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/screenshots.torrent"; // piece length 16K
+
+    let socket = MockBuilder::new()
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested])
+        .read(&msgs![pwp::UploaderMessage::Unchoke])
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 0,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .read(&msgs![pwp::UploaderMessage::Block(
+            BlockInfo {
+                piece_index: 0,
+                in_piece_offset: 0,
+                block_length: pwp::MAX_BLOCK_SIZE
+            },
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .write(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 1 }])
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 1,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(20))
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 1,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(20))
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 1,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(20))
+        .build();
+
+    let (_, future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    let result = time::timeout(sec!(61), future).await.unwrap();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut); // i.e. we will reconnect
     assert_eq!(err.to_string(), "peer failed to respond to requests within 20s");
 }
 
@@ -721,7 +776,7 @@ async fn test_respect_peer_reqq() {
             .with_extensions()
             .build_main();
 
-        let test_future = async move {
+        let _ = join!(peer_future, async move {
             let mut buf = vec![0u8; 17 * 1024];
 
             sock.write_all(&msgs![
@@ -771,8 +826,182 @@ async fn test_respect_peer_reqq() {
 
             let result = time::timeout(sec!(1), sock.read(&mut buf)).await;
             assert!(matches!(result, Err(_timeout)));
-        };
-
-        let _ = join!(peer_future, test_future);
+        });
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_always_keep_reqq_requests_in_flight() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/pcap.torrent"; // piece size > 16K
+    let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
+    let peer_reqq = 2;
+
+    // using duplex as socket because of timeouts
+    let (mut sock, farend_sock) = io::duplex(17 * 1024);
+    let (mut ctx, peer_future) = PeerBuilder::new()
+        .with_socket(farend_sock)
+        .with_local_ip(local_ip)
+        .with_remote_ip(remote_ip)
+        .with_metainfo_file(metainfo_filepath)
+        .with_extensions()
+        .build_main();
+
+    let _ = join!(peer_future, async move {
+        let mut buf = vec![0u8; 17 * 1024];
+
+        sock.write_all(&msgs![
+            pwp::ExtendedMessage::Handshake(Box::new(pwp::ExtendedHandshake {
+                extensions: super::ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect(),
+                request_limit: Some(peer_reqq),
+                ..Default::default()
+            })),
+            pwp::UploaderMessage::Have { piece_index: 3 }
+        ])
+        .await
+        .unwrap();
+
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(
+            &buf[..bytes_read],
+            &msgs![pwp::ExtendedMessage::Handshake(Box::new(
+                pwp::ExtendedHandshake {
+                    extensions: super::ALL_SUPPORTED_EXTENSIONS
+                        .iter()
+                        .map(|e| (*e, e.local_id()))
+                        .collect(),
+                    listen_port: Some(local_ip.port()),
+                    client_type: Some(super::CLIENT_NAME.to_string()),
+                    yourip: Some(remote_ip.ip()),
+                    metadata_size: Some(7947),
+                    request_limit: Some(super::LOCAL_REQQ),
+                    ..Default::default()
+                }
+            ))]
+        );
+
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Interested]);
+
+        sock.write_all(&msgs![pwp::UploaderMessage::Unchoke]).await.unwrap();
+
+        // request 1
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(
+            &buf[..bytes_read],
+            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
+                piece_index: 3,
+                in_piece_offset: 0,
+                block_length: pwp::MAX_BLOCK_SIZE
+            })]
+        );
+
+        // request 2
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(
+            &buf[..bytes_read],
+            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
+                piece_index: 3,
+                in_piece_offset: pwp::MAX_BLOCK_SIZE,
+                block_length: pwp::MAX_BLOCK_SIZE
+            })]
+        );
+
+        // when: one of the requests is served
+        sock.write_all(&msgs![pwp::UploaderMessage::Block(
+            BlockInfo {
+                piece_index: 3,
+                in_piece_offset: pwp::MAX_BLOCK_SIZE,
+                block_length: pwp::MAX_BLOCK_SIZE
+            },
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .await
+        .unwrap();
+
+        // then: request 3
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(
+            &buf[..bytes_read],
+            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
+                piece_index: 3,
+                in_piece_offset: pwp::MAX_BLOCK_SIZE * 2,
+                block_length: pwp::MAX_BLOCK_SIZE
+            })]
+        );
+
+        time::timeout(sec!(1), sock.read(&mut buf)).await.expect_err("unexpected msg");
+        assert!(ctx.with_ctx(|ctx| ctx.pending_requests.is_piece_requested(3)));
+
+        // when: peer chokes
+        sock.write_all(&msgs![pwp::UploaderMessage::Choke]).await.unwrap();
+
+        // then: clear pending requests
+        time::timeout(sec!(1), sock.read(&mut buf)).await.expect_err("unexpected msg");
+        assert!(!ctx.with_ctx(|ctx| ctx.pending_requests.is_piece_requested(3)));
+    });
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_clear_pending_requests_when_peer_chokes() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/screenshots.torrent"; // piece length 16K
+
+    let socket = MockBuilder::new()
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested])
+        .read(&msgs![pwp::UploaderMessage::Unchoke])
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 0,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .wait(sec!(15))
+        .read(&msgs![pwp::UploaderMessage::Choke])
+        .wait(sec!(15))
+        .write(KEEPALIVE)
+        .read(&msgs![pwp::UploaderMessage::Unchoke])
+        .write(&msgs![pwp::DownloaderMessage::Request(BlockInfo {
+            piece_index: 0,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE
+        })])
+        .build();
+
+    let (mut ctx, peer_future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    let (peer_result, _) = try_join!(time::timeout(sec!(31), peer_future), async move {
+        time::sleep(sec!(14)).await;
+        ctx.with_ctx(|ctx| {
+            assert!(ctx.pending_requests.is_piece_requested(0));
+        });
+        time::sleep(sec!(2)).await;
+        ctx.with_ctx(|ctx| {
+            assert!(!ctx.pending_requests.is_piece_requested(0));
+        });
+        Ok(())
+    })
+    .unwrap();
+    let error = peer_result.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
 }

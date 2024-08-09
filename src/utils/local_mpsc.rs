@@ -1,5 +1,7 @@
 use super::sealed::Queue;
+use futures::FutureExt;
 use std::cell::Cell;
+use std::future::{poll_fn, Future};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -135,6 +137,12 @@ impl<T> Clone for Sender<T> {
     }
 }
 
+impl<T> Receiver<T> {
+    pub fn has_pending_data(&self) -> bool {
+        !self.0.queue.is_empty()
+    }
+}
+
 impl<T> futures::Stream for Receiver<T> {
     type Item = T;
 
@@ -147,6 +155,66 @@ impl<T> futures::Stream for Receiver<T> {
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         self.0.has_receiver.set(false);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+struct SemaphoreData {
+    capacity: Cell<usize>,
+    has_notifier: Cell<bool>,
+}
+
+impl Source for SemaphoreData {
+    type Item = ();
+
+    fn closed(&self) -> bool {
+        !self.has_notifier.get()
+    }
+
+    fn extract_item(&self) -> Option<Self::Item> {
+        let current_capacity = self.capacity.get();
+        if current_capacity > 0 {
+            self.capacity.set(current_capacity - 1);
+            Some(())
+        } else {
+            None
+        }
+    }
+}
+
+type SemaphoreStateRc = Rc<SharedState<SemaphoreData>>;
+
+pub struct Notifier(SemaphoreStateRc);
+
+pub struct Waiter(SemaphoreStateRc);
+
+pub fn semaphore(initial_capacity: usize) -> (Notifier, Waiter) {
+    let state = SharedState::new(SemaphoreData {
+        capacity: Cell::new(initial_capacity),
+        has_notifier: Cell::new(true),
+    });
+    (Notifier(state.clone()), Waiter(state))
+}
+
+impl Notifier {
+    pub fn signal_one(&self) {
+        let current_capacity = self.0.capacity.get();
+        self.0.capacity.set(current_capacity + 1);
+        self.0.notify();
+    }
+}
+
+impl Drop for Notifier {
+    fn drop(&mut self) {
+        self.0.has_notifier.set(false);
+        self.0.notify();
+    }
+}
+
+impl Waiter {
+    pub fn acquire_one(&mut self) -> impl Future<Output = bool> + '_ {
+        poll_fn(|cx| self.0.poll_wait(cx)).map(|v| v.is_some())
     }
 }
 
@@ -235,5 +303,43 @@ mod tests {
             assert_eq!(Some(i), received);
         }
         assert_eq!(None, assert_ready!(receiver.poll_next()));
+    }
+
+    #[tokio::test]
+    async fn test_semaphore() {
+        let (notifier, mut waiter) = semaphore(2);
+
+        let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
+        assert!(ret);
+        let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
+        assert!(ret);
+        let mut wait_fut = spawn(waiter.acquire_one());
+        assert_pending!(wait_fut.poll());
+
+        notifier.signal_one();
+        assert!(wait_fut.is_woken());
+
+        let ret = assert_ready!(wait_fut.poll());
+        assert!(ret);
+        drop(wait_fut);
+        let mut wait_fut = spawn(waiter.acquire_one());
+        assert_pending!(wait_fut.poll());
+
+        notifier.signal_one();
+        notifier.signal_one();
+        assert!(wait_fut.is_woken());
+
+        let ret = assert_ready!(wait_fut.poll());
+        assert!(ret);
+        drop(wait_fut);
+        let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
+        assert!(ret);
+
+        let mut wait_fut = spawn(waiter.acquire_one());
+        assert_pending!(wait_fut.poll());
+
+        drop(notifier);
+        let ret = assert_ready!(wait_fut.poll());
+        assert!(!ret);
     }
 }
