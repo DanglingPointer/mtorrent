@@ -87,7 +87,7 @@ pub async fn single_torrent(
 }
 
 const MAX_PRELIMINARY_CONNECTIONS: usize = 10;
-const MAX_PEER_CONNECTIONS: usize = 100;
+const MAX_PEER_CONNECTIONS: usize = 200;
 
 macro_rules! log {
     ($e:expr, $($arg:tt)+) => {{
