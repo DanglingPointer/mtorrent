@@ -117,7 +117,7 @@ pub struct MainCtx {
     pub(super) piece_tracker: data::PieceTracker,
     pub(super) metainfo: metainfo::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
-    pub(super) pending_requests: pwp::PendingRequests,
+    pub(super) pending_requests: data::PendingRequests,
     pub(super) const_data: ConstData,
 }
 
