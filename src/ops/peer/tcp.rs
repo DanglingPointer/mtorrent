@@ -1,4 +1,4 @@
-use super::channels::{channels_from_incoming, channels_from_outgoing};
+use crate::pwp;
 use crate::utils::ip;
 use crate::utils::peer_id::PeerId;
 use crate::{min, sec};
@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 use tokio::time::Instant;
 use tokio::{runtime, time};
 
-/// Re-register socket so that it will be polled on the specified runtime
+/// Re-register socket so that it will be polled on PWP runtime
 macro_rules! marshal_stream {
     ($stream:expr, $rt_handle:expr) => {{
         let std_stream = $stream.into_std()?;
@@ -38,7 +38,7 @@ pub async fn channels_for_outgoing_connection(
     local_port: u16,
     pwp_runtime: runtime::Handle,
     quick: bool,
-) -> io::Result<(super::DownloadChannels, super::UploadChannels, Option<super::ExtendedChannels>)> {
+) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
     let mut attempts_left = if quick { 0 } else { 3 };
     let mut timeout = if quick { sec!(5) } else { sec!(15) };
@@ -53,7 +53,7 @@ pub async fn channels_for_outgoing_connection(
             let socket = ip::bound_tcp_socket(SocketAddr::new(local_addr, local_port))?;
             let stream = socket.connect(remote_ip).await?;
             let stream = marshal_stream!(stream, pwp_runtime);
-            channels_from_outgoing(
+            pwp::channels_from_outgoing(
                 local_peer_id,
                 info_hash,
                 extension_protocol_enabled,
@@ -100,9 +100,9 @@ pub async fn channels_for_incoming_connection(
     remote_ip: SocketAddr,
     stream: TcpStream,
     pwp_runtime: runtime::Handle,
-) -> io::Result<(super::DownloadChannels, super::UploadChannels, Option<super::ExtendedChannels>)> {
+) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let stream = marshal_stream!(stream, pwp_runtime);
-    let (download_chans, upload_chans, extended_chans, runner) = channels_from_incoming(
+    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
         local_peer_id,
         Some(info_hash),
         extension_protocol_enabled,

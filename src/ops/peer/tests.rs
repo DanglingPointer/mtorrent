@@ -30,7 +30,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
     local_id[..4].copy_from_slice("meta".as_bytes());
 
     let (mut download_chans, mut upload_chans, extended_chans) =
-        pwp::channels_for_outgoing_connection(
+        super::tcp::channels_for_outgoing_connection(
             &local_id.into(),
             metainfo.info_hash(),
             true,

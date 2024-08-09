@@ -3,7 +3,6 @@ mod handshake;
 mod message;
 mod peer_states;
 mod requests;
-mod tcp;
 
 #[cfg(test)]
 pub(crate) mod testutils;
@@ -16,8 +15,5 @@ pub use message::{
 };
 pub(crate) use peer_states::*;
 pub(crate) use requests::PendingRequests;
-pub(crate) use tcp::{
-    channels_for_incoming_connection, channels_for_outgoing_connection, run_listener,
-};
 
 pub(crate) const MAX_BLOCK_SIZE: usize = 16 * 1024;

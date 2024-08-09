@@ -1,10 +1,13 @@
 mod download;
 mod extensions;
 mod metadata;
+mod tcp;
 mod upload;
 
 #[cfg(test)]
 mod tests;
+
+pub use tcp::run_listener as run_pwp_listener;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
@@ -224,7 +227,7 @@ pub async fn outgoing_pwp_connection(
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        let (download_chans, upload_chans, extended_chans) = pwp::channels_for_outgoing_connection(
+        let (download_chans, upload_chans, extended_chans) = tcp::channels_for_outgoing_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
@@ -264,7 +267,7 @@ pub async fn incoming_pwp_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
 
-    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_incoming_connection(
         &local_peer_id,
         &info_hash,
         EXTENSION_PROTOCOL_ENABLED,
@@ -362,7 +365,7 @@ pub async fn outgoing_preliminary_connection(
         ctx.const_data.pwp_local_tcp_port(),
     ));
 
-    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_outgoing_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_outgoing_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled
@@ -387,7 +390,7 @@ pub async fn incoming_preliminary_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
 
-    let (download_chans, upload_chans, extended_chans) = pwp::channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_incoming_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled
