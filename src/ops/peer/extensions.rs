@@ -1,5 +1,5 @@
 use super::super::ctx;
-use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, MAX_PENDING_REQUESTS};
+use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, LOCAL_REQQ};
 use crate::utils::fifo;
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
@@ -85,7 +85,7 @@ pub async fn send_handshake(
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(inner.rx.remote_ip().ip()),
         metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
-        request_limit: Some(MAX_PENDING_REQUESTS),
+        request_limit: Some(LOCAL_REQQ),
         ..Default::default()
     });
     log::debug!("Sending extended handshake to {}: {}", inner.rx.remote_ip(), local_handshake);

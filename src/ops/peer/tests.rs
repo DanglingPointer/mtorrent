@@ -554,7 +554,7 @@ async fn test_send_extended_handshake_before_bitfield() {
                 client_type: Some(super::CLIENT_NAME.to_string()),
                 yourip: Some(remote_ip.ip()),
                 metadata_size: Some(1724),
-                request_limit: Some(super::MAX_PENDING_REQUESTS),
+                request_limit: Some(super::LOCAL_REQQ),
                 ..Default::default()
             }
         ))])
@@ -748,7 +748,7 @@ async fn test_respect_peer_reqq() {
                         client_type: Some(super::CLIENT_NAME.to_string()),
                         yourip: Some(remote_ip.ip()),
                         metadata_size: Some(7947),
-                        request_limit: Some(super::MAX_PENDING_REQUESTS),
+                        request_limit: Some(super::LOCAL_REQQ),
                         ..Default::default()
                     }
                 ))]

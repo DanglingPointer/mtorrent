@@ -1,10 +1,9 @@
 use crate::pwp;
-use crate::utils::ip;
 use crate::utils::peer_id::PeerId;
 use crate::{min, sec};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{cmp, io};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::Instant;
 use tokio::{runtime, time};
 
@@ -17,6 +16,26 @@ macro_rules! marshal_stream {
         let _g = $rt_handle.enter();
         TcpStream::from_std(std_stream)?
     }};
+}
+
+fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
+    let socket = match local_addr {
+        SocketAddr::V4(_) => TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => TcpSocket::new_v6()?,
+    };
+
+    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
+    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
+    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
+    // See https://stackoverflow.com/a/14388707/4432988 for details.
+    socket.set_reuseaddr(true)?;
+    #[cfg(not(windows))]
+    socket.set_reuseport(true)?;
+    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0 timeout
+    // See https://stackoverflow.com/a/71975993
+    socket.set_linger(Some(sec!(0)))?;
+    socket.bind(local_addr)?;
+    Ok(socket)
 }
 
 fn can_retry(e: &io::Error, attempts_left: usize) -> bool {
@@ -50,7 +69,7 @@ pub async fn channels_for_outgoing_connection(
 
     let (download_chans, upload_chans, extended_chans, runner) = loop {
         let connect_and_handshake = async {
-            let socket = ip::bound_tcp_socket(SocketAddr::new(local_addr, local_port))?;
+            let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
             let stream = socket.connect(remote_ip).await?;
             let stream = marshal_stream!(stream, pwp_runtime);
             pwp::channels_from_outgoing(
@@ -125,7 +144,7 @@ pub async fn run_listener(
     local_addr: SocketAddr,
     mut callback: impl FnMut(TcpStream, SocketAddr),
 ) -> io::Result<()> {
-    let socket = ip::bound_tcp_socket(local_addr)?;
+    let socket = bound_pwp_socket(local_addr)?;
     let listener = socket.listen(1024)?;
     log::info!("TCP listener started on {}", listener.local_addr()?);
     loop {

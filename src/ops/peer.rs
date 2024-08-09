@@ -31,7 +31,7 @@ const ALL_SUPPORTED_EXTENSIONS: &[pwp::Extension] =
 
 const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
-const MAX_PENDING_REQUESTS: usize = 1024 * 3;
+const LOCAL_REQQ: usize = 1024 * 2;
 
 // ------------------------------------------------------------------------------------------------
 

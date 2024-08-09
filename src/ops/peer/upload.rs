@@ -1,5 +1,5 @@
 use super::super::ctx;
-use super::MAX_PENDING_REQUESTS;
+use super::LOCAL_REQQ;
 use crate::utils::{bandwidth, fifo};
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
@@ -241,7 +241,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 .await
             {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    if !request_sink.try_send(MAX_PENDING_REQUESTS, info) {
+                    if !request_sink.try_send(LOCAL_REQQ, info) {
                         discarded_requests = discarded_requests.saturating_add(1);
                     }
                 }

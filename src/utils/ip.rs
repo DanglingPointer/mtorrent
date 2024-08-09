@@ -1,8 +1,6 @@
-use crate::sec;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::{io, ops};
-use tokio::net::TcpSocket;
 
 #[cfg(target_family = "unix")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
@@ -42,24 +40,4 @@ pub fn port_from_hash(h: &impl Hash) -> u16 {
     let hashed = hasher.finish();
     let port = hashed % DYNAMIC_PORT_RANGE.len() as u64 + DYNAMIC_PORT_RANGE.start as u64;
     port as u16
-}
-
-pub fn bound_tcp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
-    let socket = match local_addr {
-        SocketAddr::V4(_) => TcpSocket::new_v4()?,
-        SocketAddr::V6(_) => TcpSocket::new_v6()?,
-    };
-
-    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
-    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
-    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
-    // See https://stackoverflow.com/a/14388707/4432988 for details.
-    socket.set_reuseaddr(true)?;
-    #[cfg(not(windows))]
-    socket.set_reuseport(true)?;
-    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable lingering with 0 timeout
-    // See https://stackoverflow.com/a/71975993
-    socket.set_linger(Some(sec!(0)))?;
-    socket.bind(local_addr)?;
-    Ok(socket)
 }
