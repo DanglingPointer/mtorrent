@@ -1,5 +1,5 @@
 use crate::ops::{ctrl, ctx};
-use crate::utils::{bandwidth, fifo};
+use crate::utils::{bandwidth, local_mpsc};
 use crate::{data, debug_stopwatch, min, pwp, sec};
 use futures::prelude::*;
 use std::collections::HashSet;
@@ -255,7 +255,7 @@ pub async fn get_pieces(
         ctx.pending_requests.add(piece, inner.rx.remote_ip())
     });
 
-    let (piece_sink, piece_src) = fifo::channel::<usize>();
+    let (piece_sink, piece_src) = local_mpsc::channel::<usize>();
 
     let mut handle = inner.handle.clone();
     let storage = inner.storage.clone();

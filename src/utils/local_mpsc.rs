@@ -1,99 +1,104 @@
-use std::cell::{Cell, UnsafeCell};
-use std::task::{Poll, Waker};
-use std::{collections::VecDeque, rc::Rc};
+use super::sealed::Queue;
+use std::cell::Cell;
+use std::ops::Deref;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
-pub struct Queue<T>(UnsafeCell<VecDeque<T>>);
+trait Source {
+    type Item;
+    fn closed(&self) -> bool;
+    fn extract_item(&self) -> Option<Self::Item>;
+}
 
-impl<T> Queue<T> {
-    pub fn new() -> Self {
-        Self(UnsafeCell::new(VecDeque::new()))
+struct SharedState<T> {
+    waker: Cell<Option<Waker>>,
+    inner: T,
+}
+
+impl<T: Source> SharedState<T> {
+    fn new(inner: T) -> Rc<Self> {
+        Rc::new(Self {
+            waker: Cell::new(None),
+            inner,
+        })
     }
 
-    pub fn push(&self, item: T) {
-        let inner = unsafe { &mut *self.0.get() };
-        inner.push_back(item);
+    fn notify(&self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
     }
 
-    pub fn pop(&self) -> Option<T> {
-        let inner = unsafe { &mut *self.0.get() };
-        inner.pop_front()
-    }
-
-    pub fn contains(&self, item: &T) -> bool
-    where
-        T: PartialEq<T>,
-    {
-        let inner = unsafe { &*self.0.get() };
-        inner.contains(item)
-    }
-
-    pub fn remove_all(&self, item: &T) -> bool
-    where
-        T: PartialEq<T>,
-    {
-        let inner = unsafe { &mut *self.0.get() };
-        let initial_len = inner.len();
-        inner.retain(|e| e != item);
-        inner.len() != initial_len
-    }
-
-    pub fn remove_if<F>(&mut self, mut pred: F) -> bool
-    where
-        F: FnMut(&T) -> bool,
-    {
-        let inner = self.0.get_mut();
-        let initial_len = inner.len();
-        inner.retain(|e| !pred(e));
-        inner.len() != initial_len
-    }
-
-    pub fn len(&self) -> usize {
-        let inner = unsafe { &*self.0.get() };
-        inner.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    // This should NEVER be called concurrently from different futures/tasks,
+    // because we store only 1 waker
+    fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<Option<T::Item>> {
+        if let Some(item) = self.inner.extract_item() {
+            Poll::Ready(Some(item))
+        } else if self.inner.closed() {
+            Poll::Ready(None)
+        } else {
+            let new_waker = match self.waker.replace(None) {
+                Some(waker) if waker.will_wake(cx.waker()) => waker,
+                _ => cx.waker().clone(),
+            };
+            self.waker.set(Some(new_waker));
+            Poll::Pending
+        }
     }
 }
 
-impl<T> Default for Queue<T> {
-    fn default() -> Self {
-        Self::new()
+impl<T> Deref for SharedState<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
+
+// ------------------------------------------------------------------------------------------------
 
 struct ChannelData<T> {
     queue: Queue<T>,
-    waker: Cell<Option<Waker>>,
     sender_count: Cell<usize>,
     #[cfg(debug_assertions)]
     has_receiver: Cell<bool>,
 }
 
+impl<T> Source for ChannelData<T> {
+    type Item = T;
+
+    fn closed(&self) -> bool {
+        self.sender_count.get() == 0
+    }
+
+    fn extract_item(&self) -> Option<Self::Item> {
+        self.queue.pop()
+    }
+}
+
+type ChannelStateRc<T> = Rc<SharedState<ChannelData<T>>>;
+
+pub struct Sender<T>(ChannelStateRc<T>);
+
+pub struct Receiver<T>(ChannelStateRc<T>);
+
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let state = Rc::new(ChannelData {
+    let state = SharedState::new(ChannelData {
         queue: Default::default(),
-        waker: Cell::new(None),
         sender_count: Cell::new(1),
         #[cfg(debug_assertions)]
         has_receiver: Cell::new(true),
     });
-    let sender = Sender(state.clone());
-    let receiver = Receiver(state);
-    (sender, receiver)
+    (Sender(state.clone()), Receiver(state))
 }
-
-pub struct Sender<T>(Rc<ChannelData<T>>);
 
 impl<T> Sender<T> {
     pub fn send(&self, item: T) {
         #[cfg(debug_assertions)]
         debug_assert!(self.0.has_receiver.get());
         self.0.queue.push(item);
-        if let Some(waker) = self.0.waker.take() {
-            waker.wake();
-        }
+        self.0.notify();
     }
 
     #[must_use]
@@ -118,9 +123,7 @@ impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let prev_count = self.0.sender_count.get();
         self.0.sender_count.set(prev_count - 1);
-        if let Some(waker) = self.0.waker.take() {
-            waker.wake();
-        }
+        self.0.notify();
     }
 }
 
@@ -132,31 +135,11 @@ impl<T> Clone for Sender<T> {
     }
 }
 
-pub struct Receiver<T>(Rc<ChannelData<T>>);
-
 impl<T> futures::Stream for Receiver<T> {
     type Item = T;
 
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if let Some(item) = self.0.queue.pop() {
-            Poll::Ready(Some(item))
-        } else if self.0.sender_count.get() == 0 {
-            Poll::Ready(None)
-        } else {
-            let new_waker = match self.0.waker.replace(None) {
-                Some(waker) if waker.will_wake(cx.waker()) => waker,
-                _ => cx.waker().clone(),
-            };
-            self.0.waker.set(Some(new_waker));
-            Poll::Pending
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.0.queue.len(), Some(self.0.queue.len()))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.0.poll_wait(cx)
     }
 }
 
@@ -167,22 +150,16 @@ impl<T> Drop for Receiver<T> {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::prelude::*;
     use static_assertions::*;
-    use std::{rc::Rc, sync::Arc};
+    use std::sync::Arc;
     use tokio_test::task::spawn;
     use tokio_test::{assert_pending, assert_ready};
-
-    #[test]
-    fn test_queue_is_send_but_not_sync() {
-        assert_impl_all!(Queue<usize>: std::marker::Send);
-        assert_not_impl_any!(Queue<Rc<usize>>: std::marker::Send);
-        assert_not_impl_any!(Queue<Arc<usize>>: Sync);
-        assert_not_impl_any!(Arc<Queue<usize>>: std::marker::Send, Sync);
-    }
 
     #[test]
     fn test_channel_static_properties() {

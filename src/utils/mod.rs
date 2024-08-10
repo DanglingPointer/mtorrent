@@ -1,13 +1,13 @@
 pub(crate) mod bandwidth;
 pub mod benc;
 pub(crate) mod config;
-pub(crate) mod fifo;
 pub mod ip;
 pub(crate) mod magnet;
 // pub mod matcher;
+pub(crate) mod local_mpsc;
 pub mod metainfo;
 pub mod peer_id;
-pub(crate) mod set;
+pub(crate) mod sealed;
 pub mod startup;
 pub mod stopwatch;
 pub mod time;

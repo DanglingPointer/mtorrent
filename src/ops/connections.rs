@@ -1,4 +1,4 @@
-use crate::utils::set::Set;
+use crate::utils::sealed::Set;
 use std::cell::Cell;
 use std::future::poll_fn;
 use std::net::SocketAddr;

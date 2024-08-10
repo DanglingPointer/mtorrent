@@ -1,6 +1,6 @@
 use crate::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use crate::utils::peer_id::PeerId;
-use crate::utils::{fifo, magnet, startup};
+use crate::utils::{local_mpsc, magnet, startup};
 use crate::{data, millisec, min, msgs};
 use crate::{ops::ctx, pwp, sec};
 use futures::future::LocalBoxFuture;
@@ -144,7 +144,7 @@ async fn run_listening_seeder(
             ctx.piece_tracker.forget_piece(piece_index);
         }
     });
-    let (sink, _src) = fifo::channel();
+    let (sink, _src) = local_mpsc::channel();
     let (_outgoing_ctrl, mut incoming_ctrl) = super::super::connection_control(
         50,
         super::MainConnectionData {
@@ -361,7 +361,7 @@ impl PeerBuilder {
                 }
             });
         }
-        let (sink, _src) = fifo::channel();
+        let (sink, _src) = local_mpsc::channel();
 
         let ctx_handle_clone = ctx_handle.clone();
         let run_future = async move {
