@@ -6,6 +6,8 @@ mod upload;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
 
