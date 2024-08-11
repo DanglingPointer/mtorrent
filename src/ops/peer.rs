@@ -59,8 +59,8 @@ async fn run_download(
             }
             download::Peer::Seeder(seeding_peer) => {
                 match with_ctx!(|ctx| ctrl::active_download_next_action(&remote_ip, ctx)) {
-                    ctrl::SeederDownloadAction::RequestPieces(requests) => {
-                        peer = download::get_pieces(seeding_peer, requests.into_iter()).await?;
+                    ctrl::SeederDownloadAction::RequestPieces => {
+                        peer = download::get_pieces(seeding_peer).await?;
                     }
                     ctrl::SeederDownloadAction::WaitForUpdates(timeout) => {
                         peer =

@@ -163,6 +163,8 @@ impl<T> Drop for Receiver<T> {
 struct SemaphoreData {
     capacity: Cell<usize>,
     has_notifier: Cell<bool>,
+    #[cfg(debug_assertions)]
+    has_waiter: Cell<bool>,
 }
 
 impl Source for SemaphoreData {
@@ -174,7 +176,7 @@ impl Source for SemaphoreData {
 
     fn extract_item(&self) -> Option<Self::Item> {
         let current_capacity = self.capacity.get();
-        if current_capacity > 0 {
+        if !self.closed() && current_capacity > 0 {
             self.capacity.set(current_capacity - 1);
             Some(())
         } else {
@@ -193,12 +195,16 @@ pub fn semaphore(initial_capacity: usize) -> (Notifier, Waiter) {
     let state = SharedState::new(SemaphoreData {
         capacity: Cell::new(initial_capacity),
         has_notifier: Cell::new(true),
+        #[cfg(debug_assertions)]
+        has_waiter: Cell::new(true),
     });
     (Notifier(state.clone()), Waiter(state))
 }
 
 impl Notifier {
     pub fn signal_one(&self) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.0.has_waiter.get());
         let current_capacity = self.0.capacity.get();
         self.0.capacity.set(current_capacity + 1);
         self.0.notify();
@@ -215,6 +221,17 @@ impl Drop for Notifier {
 impl Waiter {
     pub fn acquire_one(&mut self) -> impl Future<Output = bool> + '_ {
         poll_fn(|cx| self.0.poll_wait(cx)).map(|v| v.is_some())
+    }
+
+    pub fn drain(&mut self) -> usize {
+        self.0.capacity.replace(0)
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        self.0.has_waiter.set(false);
     }
 }
 
@@ -271,8 +288,8 @@ mod tests {
         assert_eq!((42..84).collect::<Vec<i32>>(), result2);
     }
 
-    #[tokio::test]
-    async fn test_sender_notifies_receiver() {
+    #[test]
+    fn test_sender_notifies_receiver() {
         let (sender, receiver) = channel::<i32>();
 
         let mut receiver = spawn(receiver);
@@ -288,8 +305,8 @@ mod tests {
         assert_eq!(None, assert_ready!(receiver.poll_next()));
     }
 
-    #[tokio::test]
-    async fn test_receiver_drains_queue_after_sender_dies() {
+    #[test]
+    fn test_receiver_drains_queue_after_sender_dies() {
         let (sender, receiver) = channel::<i32>();
 
         for i in 0..42 {
@@ -305,8 +322,8 @@ mod tests {
         assert_eq!(None, assert_ready!(receiver.poll_next()));
     }
 
-    #[tokio::test]
-    async fn test_semaphore() {
+    #[test]
+    fn test_semaphore() {
         let (notifier, mut waiter) = semaphore(2);
 
         let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
@@ -339,7 +356,34 @@ mod tests {
         assert_pending!(wait_fut.poll());
 
         drop(notifier);
+        assert!(wait_fut.is_woken());
         let ret = assert_ready!(wait_fut.poll());
         assert!(!ret);
+    }
+
+    #[test]
+    fn test_semaphore_ignores_capacity_when_notifier_dies() {
+        let (notifier, mut waiter) = semaphore(2);
+        drop(notifier);
+
+        let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
+        assert!(!ret);
+    }
+
+    #[test]
+    fn test_drain_semaphore() {
+        let (notifier, mut waiter) = semaphore(3);
+
+        let ret = assert_ready!(spawn(waiter.acquire_one()).poll());
+        assert!(ret);
+
+        assert_eq!(2, waiter.drain());
+        let mut wait_fut = spawn(waiter.acquire_one());
+        assert_pending!(wait_fut.poll());
+
+        notifier.signal_one();
+        assert!(wait_fut.is_woken());
+        let ret = assert_ready!(wait_fut.poll());
+        assert!(ret);
     }
 }

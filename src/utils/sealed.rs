@@ -73,6 +73,10 @@ impl<T: Eq + Hash> Set<T> {
         Self::default()
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(UnsafeCell::new(HashSet::with_capacity(capacity)))
+    }
+
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
         T: Borrow<Q>,
@@ -94,6 +98,11 @@ impl<T: Eq + Hash> Set<T> {
     {
         let inner = unsafe { &mut *self.0.get() };
         inner.remove(value)
+    }
+
+    pub fn clear(&self) {
+        let inner = unsafe { &mut *self.0.get() };
+        inner.clear();
     }
 
     pub fn len(&self) -> usize {

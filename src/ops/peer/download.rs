@@ -1,15 +1,14 @@
 use crate::ops::{ctrl, ctx};
-use crate::utils::{bandwidth, local_mpsc};
-use crate::{data, debug_stopwatch, min, pwp, sec};
+use crate::utils::{bandwidth, local_mpsc, sealed};
+use crate::{data, debug_stopwatch, min, pwp, sec, trace_stopwatch};
 use futures::prelude::*;
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
-use std::{cmp, io};
+use std::{cmp, io, iter};
 use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
-use tokio::try_join;
+use tokio::{select, try_join};
 
 type CtxHandle = ctx::Handle<ctx::MainCtx>;
 
@@ -189,46 +188,41 @@ pub async fn linger(peer: Peer, deadline: Instant) -> io::Result<Peer> {
     Ok(to_enum!(inner))
 }
 
-pub async fn get_pieces(
-    peer: SeedingPeer,
-    pieces: impl ExactSizeIterator<Item = usize> + Clone,
-) -> io::Result<Peer> {
+pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
     let mut inner = peer.0;
     debug_assert!(inner.state.am_interested && !inner.state.peer_choking);
     define_with_ctx!(inner.handle);
-    let _sw =
-        debug_stopwatch!("Download of {} piece(s) from {}", pieces.len(), inner.rx.remote_ip());
-
-    with_ctx!(|ctx| for piece in pieces.clone() {
-        ctx.pending_requests.add(piece, inner.rx.remote_ip())
-    });
+    let _sw = debug_stopwatch!("Download from {}", inner.rx.remote_ip());
 
     let received_ever = inner.state.bytes_received > 0;
     let peer_reqq = with_ctx!(|ctx| ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx));
 
+    let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
     let (piece_sink, piece_src) = local_mpsc::channel::<usize>();
-    let (block_sink, block_src) = local_mpsc::channel::<pwp::BlockInfo>();
     let (reqq_slot_sink, reqq_slot_src) = local_mpsc::semaphore(peer_reqq);
 
     try_join!(
-        request_pieces(
-            pieces.clone(),
-            inner.handle.clone(),
-            &mut inner.tx,
-            reqq_slot_src,
-            block_src,
-            received_ever
-        ),
-        receive_pieces(
-            pieces,
-            inner.handle.clone(),
-            &mut inner.state,
-            &mut inner.rx,
-            &inner.storage,
-            reqq_slot_sink,
-            block_sink,
-            piece_sink
-        ),
+        async {
+            select! {
+                biased;
+                request_result = request_pieces(
+                    inner.handle.clone(),
+                    &mut inner.tx,
+                    received_ever,
+                    reqq_slot_src,
+                    &requests_in_flight,
+                ) => request_result,
+                receive_result = receive_pieces(
+                    inner.handle.clone(),
+                    &mut inner.rx,
+                    &mut inner.state,
+                    &inner.storage,
+                    reqq_slot_sink,
+                    piece_sink,
+                    &requests_in_flight,
+                ) => receive_result,
+            }
+        },
         verify_pieces(
             inner.handle.clone(),
             &inner.storage,
@@ -237,7 +231,7 @@ pub async fn get_pieces(
             &mut inner.verified_pieces,
         )
     )?;
-
+    debug_assert!(requests_in_flight.is_empty());
     update_ctx!(inner);
     Ok(to_enum!(inner))
 }
@@ -257,151 +251,136 @@ fn divide_piece_into_blocks(
         })
 }
 
-macro_rules! wait_or_resend_requests {
-    ($signal:expr, $tx:expr, $received_blocks_ever:expr, $requests_to_resend:expr) => {{
-        // wait for a slot in the request queue, resend all pending requests if no block has been received in 20s
-        let mut retries_left = if $received_blocks_ever { 2 } else { 1 };
-        loop {
-            match time::timeout(BLOCK_TIMEOUT, $signal).await {
-                Ok(result) => break Ok(result),
-                Err(_timeout) if retries_left > 0 => {
-                    assert!(!$requests_to_resend.is_empty());
-                    log::warn!("Re-sending block requests to {}", $tx.remote_ip());
-                    for block in $requests_to_resend {
-                        $tx.send_message(pwp::DownloaderMessage::Request(block.clone())).await?;
-                    }
-                    retries_left -= 1;
+async fn wait_with_retries(
+    signal: &mut local_mpsc::Waiter,
+    tx: &mut pwp::DownloadTxChannel,
+    received_data_before: bool,
+    requests_to_resend: &(impl IntoIterator<Item = pwp::BlockInfo> + Clone),
+) -> io::Result<bool> {
+    // wait for signal, resend all pending requests if the signal times out
+    let mut retries_left = if received_data_before { 2 } else { 1 };
+    loop {
+        match time::timeout(BLOCK_TIMEOUT, signal.acquire_one()).await {
+            Ok(result) => break Ok(result),
+            Err(_timeout) if retries_left > 0 => {
+                let mut resent_requests = 0usize;
+                for block in requests_to_resend.clone() {
+                    tx.send_message(pwp::DownloaderMessage::Request(block)).await?;
+                    resent_requests += 1;
                 }
-                Err(_timeout) => {
-                    let error_kind = match $received_blocks_ever {
-                        true => io::ErrorKind::TimedOut,
-                        false => io::ErrorKind::Other, // don't try to reconnect
-                    };
-                    break Err(io::Error::new(
-                        error_kind,
-                        format!("peer failed to respond to requests within {BLOCK_TIMEOUT:?}"),
-                    ));
-                }
+                assert!(resent_requests > 0);
+                log::warn!("Re-sent {} block requests to {}", resent_requests, tx.remote_ip());
+                retries_left -= 1;
+            }
+            Err(_timeout) => {
+                let error_kind = match received_data_before {
+                    true => io::ErrorKind::TimedOut,
+                    false => io::ErrorKind::Other, // don't try to reconnect
+                };
+                break Err(io::Error::new(
+                    error_kind,
+                    format!("peer failed to respond to requests within {BLOCK_TIMEOUT:?}"),
+                ));
             }
         }
-    }};
+    }
 }
 
 async fn request_pieces(
-    pieces: impl Iterator<Item = usize>,
     mut handle: CtxHandle,
     tx: &mut pwp::DownloadTxChannel,
-    mut reqq_slot_signal: local_mpsc::Waiter,
-    mut block_received_signal: local_mpsc::Receiver<pwp::BlockInfo>,
     received_blocks_ever: bool,
+    mut reqq_slot_signal: local_mpsc::Waiter,
+    requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
-    let mut sent_requests = HashSet::<pwp::BlockInfo>::new();
+    let _sw = trace_stopwatch!("Requesting pieces from {}", tx.remote_ip());
+    let mut request_count = 0usize;
 
-    // send out block requests, respecting peer's reqq
+    debug_assert!(with_ctx!(|ctx| ctrl::next_piece_to_request(tx.remote_ip(), ctx).is_some()));
+
     let piece_info = with_ctx!(|ctx| ctx.pieces.clone());
-    for block in pieces
+    let peer_ip = *tx.remote_ip();
+
+    let request_generator = || {
+        with_ctx!(|ctx| ctrl::next_piece_to_request(&peer_ip, ctx)
+            .inspect(|&piece| ctx.pending_requests.add(piece, &peer_ip)))
+    };
+    for block in iter::from_fn(request_generator)
         .flat_map(|piece| divide_piece_into_blocks(piece, piece_info.piece_len(piece)))
-        .filter(|block| with_ctx!(|ctx| !ctx.accountant.has_exact_block(block)))
     {
-        let received_ever = received_blocks_ever || block_received_signal.has_pending_data();
-        let reqq_notifier_alive = wait_or_resend_requests!(
-            reqq_slot_signal.acquire_one(),
+        let reqq_notifier_alive = wait_with_retries(
+            &mut reqq_slot_signal,
             tx,
-            received_ever,
-            &sent_requests
-        )?;
+            received_blocks_ever || requests_in_flight.len() < request_count,
+            requests_in_flight,
+        )
+        .await?;
         if !reqq_notifier_alive {
-            // the receive task has exited, which means either the peer chokes us, or
-            // we've already received all pieces (from other peers)
+            // the receive task has exited, which means the peer started choking
             break;
         }
-        sent_requests.insert(block.clone());
+        requests_in_flight.insert(block.clone());
         tx.send_message(pwp::DownloaderMessage::Request(block)).await?;
+        request_count += 1;
     }
-    // wait for the receive task to exit, re-send or cancel requests if necessary
-    let mut received_ever = received_blocks_ever || block_received_signal.has_pending_data();
-    while !sent_requests.is_empty() {
-        match wait_or_resend_requests!(
-            block_received_signal.next(),
+    // wait until all requested pieces have been received, retry if necessary
+    reqq_slot_signal.drain();
+    while !requests_in_flight.is_empty() {
+        let reqq_notifier_alive = wait_with_retries(
+            &mut reqq_slot_signal,
             tx,
-            received_ever,
-            &sent_requests
-        )? {
-            Some(received_block) => {
-                sent_requests.remove(&received_block);
-                received_ever = true;
-            }
-            None => {
-                // the receive task has exited, which means either the peer chokes us, or
-                // we've already received all pieces (from other peers)
-
-                // // TODO: cancel outstanding requests unless peer chokes
-                // for block in sent_requests {
-                //     tx.send_message(pwp::DownloaderMessage::Cancel(block)).await?;
-                // }
-                break;
-            }
+            received_blocks_ever || requests_in_flight.len() < request_count,
+            requests_in_flight,
+        )
+        .await?;
+        if !reqq_notifier_alive {
+            // the receive task has exited, which means the peer started choking
+            break;
         }
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn receive_pieces(
-    pieces: impl Iterator<Item = usize>,
     mut handle: CtxHandle,
-    state: &mut pwp::DownloadState,
     rx: &mut pwp::DownloadRxChannel,
+    state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
     reqq_slot_reporter: local_mpsc::Notifier,
-    block_reporter: local_mpsc::Sender<pwp::BlockInfo>,
-    piece_reporter: local_mpsc::Sender<usize>,
+    verification_channel: local_mpsc::Sender<usize>,
+    requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
-    let mut expected_pieces = pieces.collect::<HashSet<_>>();
+    let _sw = trace_stopwatch!("Receiving pieces from {}", rx.remote_ip());
     let mut speed_measurer = bandwidth::BitrateGauge::new();
-    while !expected_pieces.is_empty() {
+
+    loop {
         match rx.receive_message().await? {
-            pwp::UploaderMessage::Block(info, data) => {
-                if info.block_length > pwp::MAX_BLOCK_SIZE
-                    || info.in_piece_offset % pwp::MAX_BLOCK_SIZE != 0
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("received invalid block {info}"),
-                    ));
-                }
-                if expected_pieces.contains(&info.piece_index) {
-                    reqq_slot_reporter.signal_one();
+            pwp::UploaderMessage::Block(info, data) if requests_in_flight.remove(&info) => {
+                // update state
+                state.bytes_received += data.len();
+                state.last_bitrate_bps = speed_measurer.update(data.len()).get_bps();
+                with_ctx!(|ctx| ctx.peer_states.update_download(rx.remote_ip(), state));
+                // submit the block if needed
+                if with_ctx!(|ctx| !ctx.accountant.has_exact_block(&info)) {
                     let global_offset = with_ctx!(|ctx| ctx.accountant.submit_block(&info))
-                        .map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("Received invalid block {info}"),
-                            )
-                        })?;
-                    block_reporter.send(info.clone());
-                    let bytes_received = data.len();
+                        .unwrap_or_else(|e| panic!("Requested invalid block {info}: {e}"));
                     storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
                         panic!("Failed to start write ({info}) to storage: {e}")
                     });
-                    state.bytes_received += bytes_received;
-                    state.last_bitrate_bps = speed_measurer.update(bytes_received).get_bps();
-                    with_ctx!(|ctx| ctx.peer_states.update_download(rx.remote_ip(), state));
                     if with_ctx!(|ctx| ctx.accountant.has_piece(info.piece_index)) {
-                        piece_reporter.send(info.piece_index);
-                        expected_pieces.remove(&info.piece_index);
+                        verification_channel.send(info.piece_index);
                     }
-                } else {
-                    // This can be a canceled block, so don't disconnect peer
-                    log::debug!("Received unexpected block ({info}) from {}", rx.remote_ip());
                 }
+                // notify the request task
+                reqq_slot_reporter.signal_one();
             }
             msg => {
                 if update_state_with_msg(&mut handle, state, rx.remote_ip(), &msg)
                     && state.peer_choking
                 {
+                    requests_in_flight.clear();
                     with_ctx!(|ctx| ctx.pending_requests.clear_requests_to(rx.remote_ip()));
                     break;
                 }
@@ -421,6 +400,8 @@ async fn verify_pieces(
     verified_pieces: &mut usize,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
+    let _sw = trace_stopwatch!("Verifying pieces");
+
     while let Some(piece_index) = downloaded_pieces.next().await {
         let piece_len = with_ctx!(|ctx| ctx.pieces.piece_len(piece_index));
         let global_offset = with_ctx!(|ctx| ctx.pieces.global_offset(piece_index, 0, piece_len))
@@ -448,7 +429,7 @@ async fn verify_pieces(
             }
         }
     }
-    io::Result::Ok(())
+    Ok(())
 }
 
 fn update_state_with_msg(
@@ -459,6 +440,7 @@ fn update_state_with_msg(
 ) -> bool {
     match msg {
         pwp::UploaderMessage::Unchoke => {
+            log::trace!("Received Unchoke from {ip}");
             if state.peer_choking {
                 state.peer_choking = false;
                 true
@@ -480,6 +462,7 @@ fn update_state_with_msg(
             true
         }
         pwp::UploaderMessage::Choke => {
+            log::trace!("Received Choke from {ip}");
             if !state.peer_choking {
                 state.peer_choking = true;
                 true

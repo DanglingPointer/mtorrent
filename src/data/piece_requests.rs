@@ -25,6 +25,10 @@ impl PendingRequests {
     pub fn is_piece_requested(&self, piece: usize) -> bool {
         self.piece_requested_from.get(&piece).is_some_and(|peers| !peers.is_empty())
     }
+
+    pub fn is_piece_requested_from(&self, peer: &SocketAddr, piece: usize) -> bool {
+        self.piece_requested_from.get(&piece).is_some_and(|peers| peers.contains(peer))
+    }
 }
 
 impl fmt::Display for PendingRequests {

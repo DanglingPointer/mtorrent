@@ -1,7 +1,7 @@
 use super::ctx;
 use crate::utils::metainfo;
 use crate::{min, pwp, sec};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 use std::{cmp, io};
@@ -18,7 +18,7 @@ pub fn get_peer_reqq(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> usize {
     )
 }
 
-const MAX_SEEDER_COUNT: usize = 50;
+const MAX_SEEDER_COUNT: usize = 100;
 
 fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
     let has_missing_pieces = || {
@@ -51,47 +51,25 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
     }
 }
 
-fn pieces_to_request(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> Vec<usize> {
-    // Calculate the number of pieces to request based on the following:
-    // peer_reqq * 16kB == piece_len * piece_count
-    // Note that piece_len/MAX_BLOCK_SIZE might still exceed reqq. This is being dealt with in download::get_pieces()
-    let max_request_count =
-        (pwp::MAX_BLOCK_SIZE * get_peer_reqq(peer_ip, ctx) / ctx.pieces.piece_len(0)).clamp(1, 50);
-    let available_pieces: HashSet<usize> =
-        if let Some(it) = ctx.piece_tracker.get_peer_pieces(peer_ip) {
-            it.collect()
-        } else {
-            Default::default()
-        };
-    let mut ret = Vec::new();
-    if !available_pieces.is_empty() {
-        ret.reserve(max_request_count);
-        for piece in ctx
-            .piece_tracker
-            .get_rarest_pieces()
-            .filter(|piece| {
-                available_pieces.contains(piece) && !ctx.pending_requests.is_piece_requested(*piece)
-            })
-            .take(max_request_count)
-        {
-            ret.push(piece);
-        }
-        if ret.len() < max_request_count {
-            for piece in ctx
-                .piece_tracker
-                .get_rarest_pieces()
-                .filter(|piece| available_pieces.contains(piece))
-            {
-                if !ret.contains(&piece) {
-                    ret.push(piece);
-                }
-                if ret.len() == max_request_count {
-                    break;
-                }
-            }
-        }
-    }
-    ret
+pub fn next_piece_to_request(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> Option<usize> {
+    let (piece_tracker, accountant, pending_requests) =
+        (&ctx.piece_tracker, &ctx.accountant, &ctx.pending_requests);
+
+    let not_requested_from_peer =
+        |piece: &usize| !pending_requests.is_piece_requested_from(peer_addr, *piece);
+
+    let not_requested_from_anyone = |piece: &usize| !pending_requests.is_piece_requested(*piece);
+
+    // piece_tracker returns not verified pieces while accountant returns not downloaded pieces
+    let missing_pieces_owned_by_peer = || {
+        piece_tracker.missing_pieces_rarest_first().filter(|&piece| {
+            piece_tracker.has_peer_piece(peer_addr, piece) && !accountant.has_piece(piece)
+        })
+    };
+
+    missing_pieces_owned_by_peer()
+        .find(not_requested_from_peer)
+        .or_else(|| missing_pieces_owned_by_peer().find(not_requested_from_anyone))
 }
 
 pub enum IdleDownloadAction {
@@ -108,7 +86,7 @@ pub fn idle_download_next_action(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> 
 }
 
 pub enum SeederDownloadAction {
-    RequestPieces(Vec<usize>),
+    RequestPieces,
     WaitForUpdates(Duration),
     DeactivateDownload,
 }
@@ -117,9 +95,8 @@ pub fn active_download_next_action(
     peer_addr: &SocketAddr,
     ctx: &ctx::MainCtx,
 ) -> SeederDownloadAction {
-    let pieces = pieces_to_request(peer_addr, ctx);
-    if !pieces.is_empty() {
-        SeederDownloadAction::RequestPieces(pieces)
+    if next_piece_to_request(peer_addr, ctx).is_some() {
+        SeederDownloadAction::RequestPieces
     } else if !is_peer_interesting(peer_addr, ctx) {
         SeederDownloadAction::DeactivateDownload
     } else {

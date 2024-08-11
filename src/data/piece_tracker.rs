@@ -30,7 +30,7 @@ impl PieceTracker {
         }
     }
 
-    pub fn get_rarest_pieces(&self) -> impl Iterator<Item = usize> + '_ {
+    pub fn missing_pieces_rarest_first(&self) -> impl Iterator<Item = usize> + '_ {
         self.owner_count_to_piece_indices
             .iter()
             .skip_while(|(count, _indices)| **count == 0usize)
@@ -54,6 +54,12 @@ impl PieceTracker {
         peer: &SocketAddr,
     ) -> Option<impl Iterator<Item = usize> + Clone + '_> {
         self.owners_to_piece_indices.get(peer).map(|pieces| pieces.iter().map(|i| i.0))
+    }
+
+    pub fn has_peer_piece(&self, peer: &SocketAddr, piece_index: usize) -> bool {
+        self.owners_to_piece_indices
+            .get(peer)
+            .map_or(false, |pieces| pieces.contains(&piece_index.into()))
     }
 
     pub fn add_single_record(&mut self, piece_owner: &SocketAddr, piece_index: usize) -> bool {
@@ -249,13 +255,13 @@ mod tests {
     #[test]
     fn test_add_records_and_get_rarest_and_poorest() {
         let mut pa = PieceTracker::new(4);
-        assert!(pa.get_rarest_pieces().next().is_none());
+        assert!(pa.missing_pieces_rarest_first().next().is_none());
 
         pa.add_bitfield_record(&ip(6000), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 0]));
         pa.add_bitfield_record(&ip(6001), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 0, 0]));
         pa.add_bitfield_record(&ip(6002), &BitVec::from_bitslice(bits![u8, Msb0; 1, 0, 0, 0]));
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(1, rarest.next().unwrap());
             assert_eq!(0, rarest.next().unwrap());
@@ -271,7 +277,7 @@ mod tests {
 
         pa.add_bitfield_record(&ip(6003), &BitVec::from_bitslice(bits![u8, Msb0; 1, 1, 1, 1]));
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(3, rarest.next().unwrap());
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(1, rarest.next().unwrap());
@@ -289,7 +295,7 @@ mod tests {
 
         pa.add_single_record(&ip(6002), 1);
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(3, rarest.next().unwrap());
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(HashSet::from([0, 1]), rarest.collect());
@@ -317,7 +323,7 @@ mod tests {
         assert_eq!(HashSet::from([1, 2]), pa.get_peer_pieces(&ip(6001)).unwrap().collect());
         assert_eq!(HashSet::from([1, 2, 3]), pa.get_peer_pieces(&ip(6000)).unwrap().collect());
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(3, rarest.next().unwrap());
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(1, rarest.next().unwrap());
@@ -337,7 +343,7 @@ mod tests {
         assert_eq!(HashSet::from([1, 2]), pa.get_peer_pieces(&ip(6001)).unwrap().collect());
         assert_eq!(HashSet::from([1, 2]), pa.get_peer_pieces(&ip(6000)).unwrap().collect());
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(1, rarest.next().unwrap());
             assert!(rarest.next().is_none());
@@ -353,7 +359,7 @@ mod tests {
         assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6002)).unwrap().collect());
         assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6001)).unwrap().collect());
         assert_eq!(HashSet::new(), pa.get_peer_pieces(&ip(6000)).unwrap().collect());
-        assert!(pa.get_rarest_pieces().next().is_none());
+        assert!(pa.missing_pieces_rarest_first().next().is_none());
     }
 
     #[test]
@@ -377,7 +383,7 @@ mod tests {
             pa.get_piece_owners(0).unwrap().collect()
         );
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(1, rarest.next().unwrap());
             assert_eq!(0, rarest.next().unwrap());
@@ -403,7 +409,7 @@ mod tests {
             pa.get_piece_owners(0).unwrap().collect()
         );
         {
-            let mut rarest = pa.get_rarest_pieces();
+            let mut rarest = pa.missing_pieces_rarest_first();
             assert_eq!(2, rarest.next().unwrap());
             assert_eq!(HashSet::from([1, 0]), rarest.collect());
 
@@ -466,7 +472,7 @@ mod tests {
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(1).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(2).unwrap().collect());
         assert_eq!(HashSet::from([&ip(6000)]), pa.get_piece_owners(3).unwrap().collect());
-        assert_eq!(HashSet::from([1, 2, 3]), pa.get_rarest_pieces().collect());
+        assert_eq!(HashSet::from([1, 2, 3]), pa.missing_pieces_rarest_first().collect());
         assert_eq!(HashSet::from([1, 2, 3]), pa.get_peer_pieces(&ip(6000)).unwrap().collect());
     }
 }

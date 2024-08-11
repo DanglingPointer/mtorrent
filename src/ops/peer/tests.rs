@@ -4,7 +4,7 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{local_mpsc, startup};
 use crate::{millisec, min, msgs};
 use crate::{ops::ctx, pwp, sec};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::{fs, panic};
@@ -194,18 +194,25 @@ async fn pass_torrent_from_peer_to_peer(
     output_dir: &'static str,
     input_dir: &'static str,
 ) {
+    let ip1 = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let ip2 = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
 
     let tasks = task::LocalSet::new();
 
     let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
         .with_socket(downloader_sock)
+        .with_local_ip(ip1)
+        .with_remote_ip(ip2)
         .with_metainfo_file(metainfo_filepath)
         .with_content_storage(output_dir)
         .build_main();
 
     let (_, uploader_fut) = PeerBuilder::new()
         .with_socket(uploader_sock)
+        .with_local_ip(ip2)
+        .with_remote_ip(ip1)
         .with_all_pieces()
         .with_metainfo_file(metainfo_filepath)
         .with_content_storage(input_dir)
@@ -219,7 +226,7 @@ async fn pass_torrent_from_peer_to_peer(
             loop {
                 let finished = downloader_ctx_handle.with_ctx(|ctx| {
                     ctx.accountant.missing_bytes() == 0
-                        && ctx.piece_tracker.get_rarest_pieces().count() == 0
+                        && ctx.piece_tracker.missing_pieces_rarest_first().count() == 0
                 });
                 if finished {
                     break;
@@ -600,7 +607,7 @@ async fn test_always_keep_reqq_requests_in_flight() {
 
     // using duplex as socket because of timeouts
     let (mut sock, farend_sock) = io::duplex(17 * 1024);
-    let (mut ctx, peer_future) = PeerBuilder::new()
+    let (_, peer_future) = PeerBuilder::new()
         .with_socket(farend_sock)
         .with_local_ip(local_ip)
         .with_remote_ip(remote_ip)
@@ -653,68 +660,73 @@ async fn test_always_keep_reqq_requests_in_flight() {
         sock.write_all(&msgs![pwp::UploaderMessage::Unchoke]).await.unwrap();
 
         // request 1
+        let request_1 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
         let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
             .await
             .expect("timeout")
             .expect("io error");
-        assert_eq!(
-            &buf[..bytes_read],
-            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
-                piece_index: 3,
-                in_piece_offset: 0,
-                block_length: pwp::MAX_BLOCK_SIZE
-            })]
-        );
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_1.clone())]);
 
         // request 2
+        let request_2 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: pwp::MAX_BLOCK_SIZE,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
         let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
             .await
             .expect("timeout")
             .expect("io error");
-        assert_eq!(
-            &buf[..bytes_read],
-            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
-                piece_index: 3,
-                in_piece_offset: pwp::MAX_BLOCK_SIZE,
-                block_length: pwp::MAX_BLOCK_SIZE
-            })]
-        );
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_2.clone())]);
 
-        // when: one of the requests is served
+        time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
+
+        // when: request 2 is served
         sock.write_all(&msgs![pwp::UploaderMessage::Block(
-            BlockInfo {
-                piece_index: 3,
-                in_piece_offset: pwp::MAX_BLOCK_SIZE,
-                block_length: pwp::MAX_BLOCK_SIZE
-            },
+            request_2,
             vec![0u8; pwp::MAX_BLOCK_SIZE]
         )])
         .await
         .unwrap();
 
         // then: request 3
+        let request_3 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: pwp::MAX_BLOCK_SIZE * 2,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
         let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
             .await
             .expect("timeout")
             .expect("io error");
-        assert_eq!(
-            &buf[..bytes_read],
-            &msgs![pwp::DownloaderMessage::Request(BlockInfo {
-                piece_index: 3,
-                in_piece_offset: pwp::MAX_BLOCK_SIZE * 2,
-                block_length: pwp::MAX_BLOCK_SIZE
-            })]
-        );
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_3.clone())]);
 
-        time::timeout(sec!(1), sock.read(&mut buf)).await.expect_err("unexpected msg");
-        assert!(ctx.with_ctx(|ctx| ctx.pending_requests.is_piece_requested(3)));
+        // when: request 1 and 3 not served within timeout
+        time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
 
-        // when: peer chokes
-        sock.write_all(&msgs![pwp::UploaderMessage::Choke]).await.unwrap();
+        // then: retransmit request 1 and 3
+        let mut expected_retransmissions: HashSet<_> = [
+            msgs![pwp::DownloaderMessage::Request(request_1)],
+            msgs![pwp::DownloaderMessage::Request(request_3)],
+        ]
+        .into_iter()
+        .collect();
+        let bytes_read = time::timeout(sec!(2), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert!(expected_retransmissions.remove(&buf[..bytes_read]));
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert!(expected_retransmissions.remove(&buf[..bytes_read]));
 
-        // then: clear pending requests
-        time::timeout(sec!(1), sock.read(&mut buf)).await.expect_err("unexpected msg");
-        assert!(!ctx.with_ctx(|ctx| ctx.pending_requests.is_piece_requested(3)));
+        time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
     });
 }
 
