@@ -358,13 +358,12 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
 
         macro_rules! process_msg {
             ($msg:expr, $source:expr $(,$proj:tt)?) => {
-                let first = $msg.expect("First msg must be non-None");
-                let formattable = &first;
-                $(let formattable = &formattable.$proj;)?
-                log::trace!("{} <= {}", self.remote_ip, formattable);
-                PeerMessage::from(first).write_to(&mut self.sink).await?;
-                let second = $source.next().await.ok_or_else(new_channel_closed_error)?;
-                debug_assert!(second.is_none(), "Second msg must be None");
+                if let Some(msg) = $msg {
+                    let formattable = &msg;
+                    $(let formattable = &formattable.$proj;)?
+                    log::trace!("{} <= {}", self.remote_ip, formattable);
+                    PeerMessage::from(msg).write_to(&mut self.sink).await?;
+                }
             };
         }
 
@@ -1016,6 +1015,39 @@ mod tests {
             assert_pending!(runner_fut.poll());
             assert!(assert_ready!(send_fut.poll()).is_ok());
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_clone_channel_and_send_msgs_concurrently() {
+        let socket = MockBuilder::new()
+            .write(msgs![PeerMessage::Have { piece_index: 0 }])
+            .write(msgs![PeerMessage::Unchoke])
+            .wait(sec!(1))
+            .build();
+
+        let (_download, UploadChannels(mut tx, _), _, runner) = setup_channels(
+            socket,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
+            Default::default(),
+            false,
+        );
+        let mut runner_fut = spawn(runner);
+
+        let mut tx_clone = tx.clone();
+
+        let mut send_have_fut = spawn(tx.send_message(UploaderMessage::Have { piece_index: 0 }));
+        assert_pending!(send_have_fut.poll());
+
+        let mut send_unchoke_fut = spawn(tx_clone.send_message(UploaderMessage::Unchoke));
+        assert_pending!(send_unchoke_fut.poll());
+
+        assert_pending!(runner_fut.poll()); // this used to panic
+        assert_pending!(send_have_fut.poll());
+        assert_pending!(send_unchoke_fut.poll());
+
+        assert_pending!(runner_fut.poll());
+        assert_ready!(send_have_fut.poll()).expect("send_message() returned Error");
+        assert_ready!(send_unchoke_fut.poll()).expect("send_message() returned Error");
     }
 
     #[tokio::test(start_paused = true)]
