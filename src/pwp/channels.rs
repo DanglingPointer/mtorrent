@@ -3,7 +3,7 @@ use super::message::*;
 use super::MAX_BLOCK_SIZE;
 use crate::sec;
 use futures::channel::mpsc;
-use futures::{select_biased, try_join, FutureExt, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use std::future::{self, Future};
 use std::io;
 use std::net::SocketAddr;
@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::time::{sleep, timeout};
+use tokio::{select, try_join};
 
 #[derive(Debug)]
 pub enum ChannelError {
@@ -375,20 +376,21 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             }
         };
 
-        select_biased! {
-            dl_msg = self.dl_msg_source.next().fuse() => {
+        select! {
+            biased;
+            dl_msg = self.dl_msg_source.next() => {
                 let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg!(msg, &mut self.dl_msg_source);
             }
-            ext_msg = next_ext_msg_fut.fuse() => {
+            ext_msg = next_ext_msg_fut => {
                 let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
             }
-            ul_msg = self.ul_msg_source.next().fuse() => {
+            ul_msg = self.ul_msg_source.next() => {
                 let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
                 process_msg!(msg, &mut self.ul_msg_source);
             }
-            _ = sleep(Self::PING_INTERVAL).fuse() => {
+            _ = sleep(Self::PING_INTERVAL) => {
                 let ping_msg = PeerMessage::KeepAlive;
                 log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
                 ping_msg.write_to(&mut self.sink).await?;
@@ -418,7 +420,7 @@ impl From<ChannelError> for io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::join;
+    use futures::{join, FutureExt};
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};
@@ -889,6 +891,7 @@ mod tests {
             .write(msgs![PeerMessage::Interested])
             .wait(sec!(1))
             .write(msgs![PeerMessage::NotInterested])
+            .wait(sec!(1))
             .build();
 
         let (mut download, _upload, _, runner) = setup_channels(
@@ -930,6 +933,7 @@ mod tests {
             .write(msgs![PeerMessage::Choke])
             .wait(sec!(1))
             .write(msgs![PeerMessage::Unchoke])
+            .wait(sec!(1))
             .build();
 
         let (_download, mut upload, _, runner) = setup_channels(
@@ -977,6 +981,7 @@ mod tests {
                 id: 1,
                 data: Vec::from("d8:msg_typei0e5:piecei3ee"),
             }])
+            .wait(sec!(1))
             .build();
         let (_download, _upload, extended, runner) = setup_channels(
             socket,
