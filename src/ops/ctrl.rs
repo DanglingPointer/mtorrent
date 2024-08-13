@@ -68,8 +68,8 @@ pub fn next_piece_to_request(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> Opti
     };
 
     missing_pieces_owned_by_peer()
-        .find(not_requested_from_peer)
-        .or_else(|| missing_pieces_owned_by_peer().find(not_requested_from_anyone))
+        .find(not_requested_from_anyone)
+        .or_else(|| missing_pieces_owned_by_peer().find(not_requested_from_peer))
 }
 
 pub enum IdleDownloadAction {
@@ -316,6 +316,8 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::startup;
+    use ctx::MainCtx;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     fn ip(port: u16) -> SocketAddr {
@@ -699,5 +701,33 @@ mod tests {
         //         },
         //     );
         // }
+    }
+
+    #[test]
+    fn test_request_rarest_piece_not_already_requested() {
+        let metainfo = startup::read_metainfo("tests/assets/example.torrent").unwrap();
+        let mut handle = MainCtx::new(metainfo, [0u8; 20].into(), ip(1234), 12345).unwrap();
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            ctx.piece_tracker.add_single_record(&ip(1), 0);
+            ctx.piece_tracker.add_single_record(&ip(1), 1);
+
+            ctx.piece_tracker.add_single_record(&ip(2), 0);
+            ctx.piece_tracker.add_single_record(&ip(2), 1);
+
+            ctx.piece_tracker.add_single_record(&ip(3), 1);
+
+            assert_eq!(next_piece_to_request(&ip(2), ctx), Some(0));
+            ctx.pending_requests.add(0, &ip(2));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), Some(1));
+            ctx.pending_requests.add(1, &ip(1));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), Some(0));
+            ctx.pending_requests.add(0, &ip(1));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), None);
+        });
     }
 }
