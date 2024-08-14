@@ -1,7 +1,7 @@
 use super::testutils::*;
 use crate::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use crate::utils::peer_id::PeerId;
-use crate::utils::{local_mpsc, startup};
+use crate::utils::{local_sync, startup};
 use crate::{millisec, min, msgs};
 use crate::{ops::ctx, pwp, sec};
 use std::collections::{HashMap, HashSet};
@@ -141,7 +141,7 @@ async fn run_listening_seeder(
             ctx.piece_tracker.forget_piece(piece_index);
         }
     });
-    let (sink, _src) = local_mpsc::channel();
+    let (sink, _src) = local_sync::channel();
     let (_outgoing_ctrl, mut incoming_ctrl) = super::super::connection_control(
         50,
         super::MainConnectionData {

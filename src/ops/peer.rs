@@ -13,7 +13,7 @@ pub use tcp::run_listener as run_pwp_listener;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
-use crate::utils::local_mpsc;
+use crate::utils::local_sync;
 use crate::{data, pwp, sec};
 use std::io;
 use std::rc::Rc;
@@ -212,7 +212,7 @@ pub struct MainConnectionData {
     pub metainfo_storage: data::StorageClient,
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
-    pub peer_discovered_channel: local_mpsc::Sender<SocketAddr>,
+    pub peer_discovered_channel: local_sync::channel::Sender<SocketAddr>,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 }
 

@@ -4,7 +4,7 @@ pub(crate) mod config;
 pub mod ip;
 pub(crate) mod magnet;
 // pub mod matcher;
-pub(crate) mod local_mpsc;
+pub(crate) mod local_sync;
 pub mod metainfo;
 pub mod peer_id;
 pub(crate) mod sealed;

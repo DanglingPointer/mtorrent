@@ -1,5 +1,5 @@
 use crate::ops::{ctrl, ctx};
-use crate::utils::{bandwidth, local_mpsc, sealed};
+use crate::utils::{bandwidth, local_sync, sealed};
 use crate::{data, debug_stopwatch, min, pwp, sec, trace_stopwatch};
 use futures::prelude::*;
 use std::net::SocketAddr;
@@ -198,8 +198,8 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
     let peer_reqq = with_ctx!(|ctx| ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx));
 
     let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
-    let (piece_sink, piece_src) = local_mpsc::channel::<usize>();
-    let (reqq_slot_sink, reqq_slot_src) = local_mpsc::semaphore(peer_reqq);
+    let (piece_sink, piece_src) = local_sync::channel::<usize>();
+    let (reqq_slot_sink, reqq_slot_src) = local_sync::semaphore(peer_reqq);
 
     try_join!(
         async {
@@ -252,7 +252,7 @@ fn divide_piece_into_blocks(
 }
 
 async fn wait_with_retries(
-    signal: &mut local_mpsc::Waiter,
+    signal: &mut local_sync::semaphore::Receiver,
     tx: &mut pwp::DownloadTxChannel,
     received_data_before: bool,
     requests_to_resend: &(impl IntoIterator<Item = pwp::BlockInfo> + Clone),
@@ -290,7 +290,7 @@ async fn request_pieces(
     mut handle: CtxHandle,
     tx: &mut pwp::DownloadTxChannel,
     received_blocks_ever: bool,
-    mut reqq_slot_signal: local_mpsc::Waiter,
+    mut reqq_slot_signal: local_sync::semaphore::Receiver,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -347,8 +347,8 @@ async fn receive_pieces(
     rx: &mut pwp::DownloadRxChannel,
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
-    reqq_slot_reporter: local_mpsc::Notifier,
-    verification_channel: local_mpsc::Sender<usize>,
+    reqq_slot_reporter: local_sync::semaphore::Sender,
+    verification_channel: local_sync::channel::Sender<usize>,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -396,7 +396,7 @@ async fn verify_pieces(
     mut handle: CtxHandle,
     storage: &data::StorageClient,
     progress_reporter: &broadcast::Sender<usize>,
-    mut downloaded_pieces: local_mpsc::Receiver<usize>,
+    mut downloaded_pieces: local_sync::channel::Receiver<usize>,
     verified_pieces: &mut usize,
 ) -> io::Result<()> {
     define_with_ctx!(handle);

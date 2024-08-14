@@ -1,6 +1,6 @@
 use crate::data;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{local_mpsc, magnet, startup};
+use crate::utils::{local_sync, magnet, startup};
 use crate::{ops::ctx, pwp};
 use futures::future::LocalBoxFuture;
 use std::fmt::Debug;
@@ -184,7 +184,7 @@ impl PeerBuilder {
                 }
             });
         }
-        let (sink, _src) = local_mpsc::channel();
+        let (sink, _src) = local_sync::channel();
 
         let ctx_handle_clone = ctx_handle.clone();
         let run_future = async move {
