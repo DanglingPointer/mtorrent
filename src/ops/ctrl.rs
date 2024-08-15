@@ -2,20 +2,19 @@ use super::ctx;
 use crate::utils::metainfo;
 use crate::{min, pwp, sec};
 use std::collections::BTreeMap;
+use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-use std::{cmp, io};
 
 pub fn get_peer_reqq(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> usize {
-    const MIN_PENDING_REQUESTS: usize = 250;
-    cmp::max(
-        1,
-        ctx.peer_states
-            .get(peer_ip)
-            .and_then(|state| state.extensions.as_deref())
-            .and_then(|hs| hs.request_limit)
-            .unwrap_or(MIN_PENDING_REQUESTS),
-    )
+    const DEFAULT_REQQ: usize = 250;
+    const MAX_REQQ: usize = 1024 * 2;
+    ctx.peer_states
+        .get(peer_ip)
+        .and_then(|state| state.extensions.as_deref())
+        .and_then(|hs| hs.request_limit)
+        .map(|reqq| reqq.clamp(1, MAX_REQQ))
+        .unwrap_or(DEFAULT_REQQ)
 }
 
 const MAX_SEEDER_COUNT: usize = 100;
