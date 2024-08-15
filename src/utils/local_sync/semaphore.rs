@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::shared_state::{SharedState, Source};
 use futures::FutureExt;
 use std::cell::Cell;

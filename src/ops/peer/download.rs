@@ -199,7 +199,7 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
 
     let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
     let (piece_sink, piece_src) = local_sync::channel::<usize>();
-    let (reqq_slot_sink, reqq_slot_src) = local_sync::semaphore(peer_reqq);
+    let (block_received_notifier, block_received_waiter) = local_sync::condvar();
 
     try_join!(
         async {
@@ -209,7 +209,8 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
                     inner.handle.clone(),
                     &mut inner.tx,
                     received_ever,
-                    reqq_slot_src,
+                    block_received_waiter,
+                    peer_reqq,
                     &requests_in_flight,
                 ) => request_result,
                 receive_result = receive_pieces(
@@ -217,7 +218,7 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
                     &mut inner.rx,
                     &mut inner.state,
                     &inner.storage,
-                    reqq_slot_sink,
+                    block_received_notifier,
                     piece_sink,
                     &requests_in_flight,
                 ) => receive_result,
@@ -252,7 +253,7 @@ fn divide_piece_into_blocks(
 }
 
 async fn wait_with_retries(
-    signal: &mut local_sync::semaphore::Receiver,
+    signal: &mut local_sync::condvar::Receiver,
     tx: &mut pwp::DownloadTxChannel,
     received_data_before: bool,
     requests_to_resend: &(impl IntoIterator<Item = pwp::BlockInfo> + Clone),
@@ -260,7 +261,7 @@ async fn wait_with_retries(
     // wait for signal, resend all pending requests if the signal times out
     let mut retries_left = if received_data_before { 2 } else { 1 };
     loop {
-        match time::timeout(BLOCK_TIMEOUT, signal.acquire_one()).await {
+        match time::timeout(BLOCK_TIMEOUT, signal.wait_for_one()).await {
             Ok(result) => break Ok(result),
             Err(_timeout) if retries_left > 0 => {
                 let mut resent_requests = 0usize;
@@ -290,7 +291,8 @@ async fn request_pieces(
     mut handle: CtxHandle,
     tx: &mut pwp::DownloadTxChannel,
     received_blocks_ever: bool,
-    mut reqq_slot_signal: local_sync::semaphore::Receiver,
+    mut block_received_signal: local_sync::condvar::Receiver,
+    peer_reqq: usize,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -309,26 +311,29 @@ async fn request_pieces(
     for block in iter::from_fn(request_generator)
         .flat_map(|piece| divide_piece_into_blocks(piece, piece_info.piece_len(piece)))
     {
-        let reqq_notifier_alive = wait_with_retries(
-            &mut reqq_slot_signal,
-            tx,
-            received_blocks_ever || requests_in_flight.len() < request_count,
-            requests_in_flight,
-        )
-        .await?;
-        if !reqq_notifier_alive {
-            // the receive task has exited, which means the peer started choking
-            break;
+        debug_assert!(requests_in_flight.len() <= peer_reqq);
+        while requests_in_flight.len() == peer_reqq {
+            let reqq_notifier_alive = wait_with_retries(
+                &mut block_received_signal,
+                tx,
+                received_blocks_ever || requests_in_flight.len() < request_count,
+                requests_in_flight,
+            )
+            .await?;
+            if !reqq_notifier_alive {
+                // the receive task has exited, which means the peer started choking
+                break;
+            }
         }
+        debug_assert!(requests_in_flight.len() < peer_reqq);
         requests_in_flight.insert(block.clone());
         tx.send_message(pwp::DownloaderMessage::Request(block)).await?;
         request_count += 1;
     }
     // wait until all requested pieces have been received, retry if necessary
-    reqq_slot_signal.drain();
     while !requests_in_flight.is_empty() {
         let reqq_notifier_alive = wait_with_retries(
-            &mut reqq_slot_signal,
+            &mut block_received_signal,
             tx,
             received_blocks_ever || requests_in_flight.len() < request_count,
             requests_in_flight,
@@ -347,7 +352,7 @@ async fn receive_pieces(
     rx: &mut pwp::DownloadRxChannel,
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
-    reqq_slot_reporter: local_sync::semaphore::Sender,
+    block_received_reporter: local_sync::condvar::Sender,
     verification_channel: local_sync::channel::Sender<usize>,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
@@ -374,7 +379,7 @@ async fn receive_pieces(
                     }
                 }
                 // notify the request task
-                reqq_slot_reporter.signal_one();
+                block_received_reporter.signal_one();
             }
             msg => {
                 if update_state_with_msg(&mut handle, state, rx.remote_ip(), &msg)
