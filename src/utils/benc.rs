@@ -28,7 +28,7 @@ impl Element {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut dest = Vec::<u8>::new();
-        write_element(self, &mut dest).unwrap();
+        write_element(self, &mut dest);
         dest
     }
 }
@@ -161,32 +161,31 @@ const PREFIX_LIST: u8 = b'l';
 const PREFIX_DICTIONARY: u8 = b'd';
 const SUFFIX_COMMON: u8 = b'e';
 
-fn write_element(e: &Element, dest: &mut Vec<u8>) -> std::io::Result<()> {
+fn write_element(e: &Element, dest: &mut Vec<u8>) {
     match e {
         Element::Integer(number) => {
-            write!(dest, "{}{}{}", PREFIX_INTEGER as char, number, SUFFIX_COMMON as char)?;
+            let _ = write!(dest, "{}{}{}", PREFIX_INTEGER as char, number, SUFFIX_COMMON as char);
         }
         Element::ByteString(data) => {
-            write!(dest, "{}{}", data.len(), DELIMITER_STRING as char)?;
-            dest.write_all(data)?;
+            let _ = write!(dest, "{}{}", data.len(), DELIMITER_STRING as char);
+            dest.extend_from_slice(data);
         }
         Element::List(list) => {
             dest.push(PREFIX_LIST);
             for e in list {
-                write_element(e, dest)?;
+                write_element(e, dest);
             }
             dest.push(SUFFIX_COMMON);
         }
         Element::Dictionary(map) => {
             dest.push(PREFIX_DICTIONARY);
             for (key, value) in map {
-                write_element(key, dest)?;
-                write_element(value, dest)?;
+                write_element(key, dest);
+                write_element(value, dest);
             }
             dest.push(SUFFIX_COMMON);
         }
     };
-    Ok(())
 }
 
 fn read_element(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
