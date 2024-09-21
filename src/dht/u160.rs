@@ -1,4 +1,4 @@
-use super::Error;
+use super::error::Error;
 use crate::utils::benc;
 use std::{fmt, iter, ops};
 

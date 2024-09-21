@@ -92,7 +92,7 @@ impl<T> futures::Stream for Receiver<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.0.poll_wait(cx)
+        self.get_mut().0.poll_wait(cx)
     }
 }
 

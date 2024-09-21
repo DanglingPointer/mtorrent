@@ -1,19 +1,18 @@
-#![allow(dead_code)]
-
+use super::error::Error;
 use super::u160::U160;
-use super::Error;
 use crate::utils::benc;
+use derive_more::derive::From;
 use std::collections::BTreeMap;
 use std::iter;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-pub struct Message {
+pub(super) struct Message {
     pub transaction_id: Vec<u8>,
     pub version: Option<String>,
     pub data: MessageData,
 }
 
-pub enum MessageData {
+pub(super) enum MessageData {
     Query(QueryMsg),
     Response(ResponseMsg),
     Error(ErrorMsg),
@@ -181,6 +180,7 @@ impl TryFrom<benc::Element> for ErrorCode {
     }
 }
 
+#[derive(Debug)]
 pub struct ErrorMsg {
     pub error_code: ErrorCode,
     pub error_msg: String,
@@ -220,13 +220,15 @@ impl TryFrom<benc::Element> for ErrorMsg {
 
 // ------------------------------------------------------------------------------------------------
 
-pub enum QueryMsg {
+#[derive(From)]
+pub(super) enum QueryMsg {
     Ping(PingArgs),
     FindNode(FindNodeArgs),
     GetPeers(GetPeersArgs),
     AnnouncePeer(AnnouncePeerArgs),
 }
 
+#[derive(Debug)]
 pub struct PingArgs {
     pub id: U160,
 }
@@ -248,6 +250,7 @@ impl TryFrom<benc::Element> for PingArgs {
     }
 }
 
+#[derive(Debug)]
 pub struct FindNodeArgs {
     pub id: U160,
     pub target: U160,
@@ -277,6 +280,7 @@ impl TryFrom<benc::Element> for FindNodeArgs {
     }
 }
 
+#[derive(Debug)]
 pub struct GetPeersArgs {
     pub id: U160,
     pub info_hash: U160,
@@ -309,6 +313,7 @@ impl TryFrom<benc::Element> for GetPeersArgs {
     }
 }
 
+#[derive(Debug)]
 pub struct AnnouncePeerArgs {
     pub id: U160,
     pub info_hash: U160,
@@ -374,7 +379,7 @@ impl TryFrom<benc::Element> for AnnouncePeerArgs {
 
 // ------------------------------------------------------------------------------------------------
 
-pub struct ResponseMsg {
+pub(super) struct ResponseMsg {
     data: BTreeMap<String, benc::Element>,
 }
 
@@ -394,6 +399,7 @@ impl TryFrom<benc::Element> for ResponseMsg {
     }
 }
 
+#[derive(Debug)]
 pub struct PingResponse {
     pub id: U160,
 }
@@ -417,6 +423,7 @@ impl TryFrom<ResponseMsg> for PingResponse {
     }
 }
 
+#[derive(Debug)]
 pub struct FindNodeResponse {
     pub id: U160,
     pub nodes: Vec<(U160, SocketAddrV4)>,
@@ -453,12 +460,14 @@ impl TryFrom<ResponseMsg> for FindNodeResponse {
     }
 }
 
+#[derive(Debug)]
 pub struct GetPeersResponse {
     pub id: U160,
     pub token: Vec<u8>,
     pub data: GetPeersResponseData,
 }
 
+#[derive(Debug)]
 pub enum GetPeersResponseData {
     Nodes(Vec<(U160, SocketAddrV4)>),
     Peers(Vec<SocketAddrV4>),
@@ -536,6 +545,7 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
     }
 }
 
+#[derive(Debug)]
 pub struct AnnouncePeerResponse {
     pub id: U160,
 }
