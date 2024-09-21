@@ -1,3 +1,4 @@
+use super::Error;
 use crate::utils::benc;
 use std::{fmt, iter, ops};
 
@@ -14,6 +15,21 @@ impl AsRef<[u8]> for U160 {
 impl From<U160> for benc::Element {
     fn from(value: U160) -> Self {
         benc::Element::ByteString(value.0.into())
+    }
+}
+
+impl TryFrom<benc::Element> for U160 {
+    type Error = Error;
+
+    fn try_from(value: benc::Element) -> Result<Self, Self::Error> {
+        match value {
+            benc::Element::ByteString(bytes) => {
+                let bytes: [u8; 20] =
+                    bytes.try_into().map_err(|_| Error::ParseError("U160 not 20 bytes long"))?;
+                Ok(bytes.into())
+            }
+            _ => Err(Error::ParseError("U160 not a byte string")),
+        }
     }
 }
 
