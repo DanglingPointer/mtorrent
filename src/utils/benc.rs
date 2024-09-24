@@ -21,6 +21,11 @@ impl Element {
         }
     }
 
+    pub fn from_bytes_with_len(src: &[u8]) -> Result<(Element, usize), ParseError> {
+        let (entity, rest) = read_element(src)?;
+        Ok((entity, src.len() - rest.len()))
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut dest = Vec::<u8>::new();
         write_element(self, &mut dest).unwrap();

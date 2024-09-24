@@ -757,7 +757,7 @@ impl MetadataMsg {
 
     fn decode(mut payload: Vec<u8>) -> Result<Self, Vec<u8>> {
         use benc::Element::{self, *};
-        let bencode = match Element::from_bytes(&payload) {
+        let (bencode, bencode_len) = match Element::from_bytes_with_len(&payload) {
             Ok(b) => b,
             Err(_) => return Err(payload),
         };
@@ -787,7 +787,7 @@ impl MetadataMsg {
             (Self::TYPE_REQUEST, _) => Ok(Self::Request { piece }),
             (Self::TYPE_REJECT, _) => Ok(Self::Reject { piece }),
             (Self::TYPE_BLOCK, Some(total_size)) => {
-                let header_len = bencode.to_bytes().len();
+                let header_len = bencode_len;
                 let total_len = payload.len();
                 // remove bencode from the front and retain only the data that follows
                 payload.copy_within(header_len..total_len, 0);
