@@ -3,8 +3,9 @@
 use super::error::Error;
 use super::msgs::*;
 use crate::sec;
+use crate::utils::local_sync;
 use derive_more::derive::From;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use std::collections::BTreeMap;
 use std::future::pending;
 use std::marker::PhantomData;
@@ -14,12 +15,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::{sleep_until, Instant};
 
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
-pub struct Client(mpsc::Sender<OutgoingQuery>);
+pub struct Client(local_sync::channel::Sender<OutgoingQuery>);
 
 impl Client {
     pub async fn ping(
@@ -59,33 +60,31 @@ impl Client {
         Q: Into<QueryMsg>,
         R: TryFrom<ResponseMsg, Error = Error>,
     {
-        let (tx, rx) = oneshot::channel();
-        self.0
-            .send(OutgoingQuery {
-                query: args.into(),
-                destination_addr: dst_addr,
-                response_sink: tx,
-            })
-            .await?;
-        rx.await?.and_then(TryFrom::try_from)
+        let (tx, rx) = local_sync::oneshot();
+        self.0.send(OutgoingQuery {
+            query: args.into(),
+            destination_addr: dst_addr,
+            response_sink: tx,
+        });
+        rx.await.ok_or(Error::ChannelClosed)?.and_then(R::try_from)
     }
 }
 
 /// Server for receiving incoming queries from different nodes.
-pub struct Server(mpsc::Receiver<IncomingQuery>);
+pub struct Server(local_sync::channel::Receiver<IncomingQuery>);
 
 impl Stream for Server {
     type Item = IncomingQuery;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.0.poll_recv(cx)
+        self.0.poll_next_unpin(cx)
     }
 }
 
 /// Actor that routes queries between app layer and network layer.
 pub struct Runner {
     queries: details::QueryManager,
-    outgoing_queries_source: mpsc::Receiver<OutgoingQuery>,
+    outgoing_queries_source: local_sync::channel::Receiver<OutgoingQuery>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 }
 
@@ -95,7 +94,7 @@ impl Runner {
             let next_timeout = self.queries.next_timeout();
             select! {
                 biased;
-                outgoing = self.outgoing_queries_source.recv() => {
+                outgoing = self.outgoing_queries_source.next() => {
                     let query = outgoing.ok_or(Error::ChannelClosed)?;
                     self.queries.handle_one_outgoing(query).await?;
                 }
@@ -131,12 +130,8 @@ pub fn setup_routing(
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 ) -> (Client, Server, Runner) {
-    // We want to have backpressure on the app layer, hence the unit-sized channel
-    let (outgoing_queries_sink, outgoing_queries_source) = mpsc::channel(1);
-
-    // Ideally, we do not want to wait when sending our output to either layer, and we fail fast if we can't forward an incoming
-    // query to the app layer. Hence the higher-capacity queue below.
-    let (incoming_queries_sink, incoming_queries_source) = mpsc::channel(64);
+    let (outgoing_queries_sink, outgoing_queries_source) = local_sync::channel();
+    let (incoming_queries_sink, incoming_queries_source) = local_sync::channel();
 
     let actor = Runner {
         queries: details::QueryManager::new(outgoing_msgs_sink, incoming_queries_sink),
@@ -238,7 +233,7 @@ impl<Q, R> Drop for IncomingGenericQuery<Q, R> {
 
 // ------------------------------------------------------------------------------------------------
 
-type ResponseSender = oneshot::Sender<Result<ResponseMsg, Error>>;
+type ResponseSender = local_sync::oneshot::Sender<Result<ResponseMsg, Error>>;
 
 struct OutgoingQuery {
     query: QueryMsg,
@@ -255,7 +250,7 @@ mod details {
         next_tid: u16,
         outstanding_requests: BTreeMap<u16, (ResponseSender, Instant)>,
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-        incoming_queries_sink: mpsc::Sender<IncomingQuery>,
+        incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
     }
 
     pub(super) const QUERY_TIMEOUT: Duration = sec!(30);
@@ -263,7 +258,7 @@ mod details {
     impl QueryManager {
         pub(super) fn new(
             outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-            incoming_queries_sink: mpsc::Sender<IncomingQuery>,
+            incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
         ) -> Self {
             Self {
                 next_tid: 1,
@@ -320,14 +315,10 @@ mod details {
             (msg, src_addr): (Message, SocketAddr),
         ) -> Result<(), Error> {
             if let MessageData::Query(request) = msg.data {
-                // don't await a queue slot here, to prevent DoS
-                let queue_slot = self.incoming_queries_sink.try_reserve()?;
-
                 let response_sink = self.outgoing_msgs_sink.clone().reserve_owned().await?;
                 let incoming_query =
-                    convert_incoming_query(request, msg.transaction_id, response_sink, &src_addr);
-
-                queue_slot.send(incoming_query);
+                    make_incoming_query(request, msg.transaction_id, response_sink, &src_addr);
+                self.incoming_queries_sink.send(incoming_query);
             } else if let Some((handler, _)) = msg
                 .transaction_id
                 .last_chunk::<2>()
@@ -339,21 +330,21 @@ mod details {
                     MessageData::Query(_) => unreachable!(),
                 };
             } else {
-                log::error!(
-                    "Unhandled {} message",
-                    if matches!(msg.data, MessageData::Response(_)) {
-                        "response"
-                    } else {
-                        "error"
-                    }
+                log::warn!(
+                    "Received orphaned {} message from {}",
+                    match msg.data {
+                        MessageData::Response(_) => "response",
+                        MessageData::Error(_) => "error",
+                        MessageData::Query(_) => unreachable!(),
+                    },
+                    src_addr
                 );
             }
-
             Ok(())
         }
     }
 
-    fn convert_incoming_query(
+    fn make_incoming_query(
         incoming: QueryMsg,
         tid: Vec<u8>,
         sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
@@ -437,7 +428,9 @@ mod tests {
                 IP,
             ))
             .unwrap();
+        assert!(runner_fut.is_woken());
         assert_pending!(runner_fut.poll());
+        assert!(ping_fut.is_woken());
         let ping_result = assert_ready!(ping_fut.poll());
         let ping_response = ping_result.unwrap();
         assert_eq!(ping_response.id, [2u8; 20].into());
@@ -652,8 +645,6 @@ mod tests {
 
         // verify announce peer
         assert_pending!(announce_peer_fut.poll());
-        assert!(runner_fut.is_woken());
-        assert_pending!(runner_fut.poll());
         let (outgoing_announce_peer, _) = outgoing_msgs_source.try_recv().unwrap();
         assert_eq!(outgoing_announce_peer.transaction_id, vec![0u8, 2u8]);
         assert_eq!(outgoing_announce_peer.version, None);
@@ -682,6 +673,7 @@ mod tests {
                 IP,
             ))
             .unwrap();
+        assert!(runner_fut.is_woken());
         assert_pending!(runner_fut.poll());
         assert_pending!(ping_fut.poll());
         let announce_peer_result = assert_ready!(announce_peer_fut.poll());
@@ -704,6 +696,7 @@ mod tests {
                 IP,
             ))
             .unwrap();
+        assert!(runner_fut.is_woken());
         assert_pending!(runner_fut.poll());
         let ping_result = assert_ready!(ping_fut.poll());
         let ping_response = ping_result.unwrap();
@@ -712,60 +705,68 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_outgoing_queries_timeouts() {
-        SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
-        let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
-        let (_incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
-        let (client, _server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
+        task::LocalSet::new()
+            .run_until(async {
+                SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
+                let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
+                let (_incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
+                let (client, _server, runner) =
+                    setup_routing(outgoing_msgs_sink, incoming_msgs_source);
 
-        task::spawn(runner.run());
+                task::spawn_local(runner.run());
 
-        // start ping query
-        let mut ping_fut = spawn(client.ping(
-            IP,
-            PingArgs {
-                id: [1u8; 20].into(),
-            },
-        ));
-        assert_pending!(ping_fut.poll());
+                // start ping query
+                let mut ping_fut = spawn(client.ping(
+                    IP,
+                    PingArgs {
+                        id: [1u8; 20].into(),
+                    },
+                ));
+                assert_pending!(ping_fut.poll());
 
-        // verify ping sent out on the network
-        yield_now().await;
-        let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
-        assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
+                // verify ping sent out on the network
+                yield_now().await;
+                let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
+                assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+                assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
 
-        // start get peers 5s later
-        sleep(sec!(5)).await;
-        let mut get_peers_fut = spawn(client.get_peers(
-            IP,
-            GetPeersArgs {
-                id: [1u8; 20].into(),
-                info_hash: [2u8; 20].into(),
-            },
-        ));
-        assert_pending!(get_peers_fut.poll());
+                // start get peers 5s later
+                sleep(sec!(5)).await;
+                let mut get_peers_fut = spawn(client.get_peers(
+                    IP,
+                    GetPeersArgs {
+                        id: [1u8; 20].into(),
+                        info_hash: [2u8; 20].into(),
+                    },
+                ));
+                assert_pending!(get_peers_fut.poll());
 
-        // verify get peers sent out on the network
-        yield_now().await;
-        let (outgoing_get_peers, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_get_peers.transaction_id, vec![0u8, 2u8]);
-        assert!(matches!(outgoing_get_peers.data, MessageData::Query(QueryMsg::GetPeers(_))));
+                // verify get peers sent out on the network
+                yield_now().await;
+                let (outgoing_get_peers, _) = outgoing_msgs_source.try_recv().unwrap();
+                assert_eq!(outgoing_get_peers.transaction_id, vec![0u8, 2u8]);
+                assert!(matches!(
+                    outgoing_get_peers.data,
+                    MessageData::Query(QueryMsg::GetPeers(_))
+                ));
 
-        // ping times out first
-        assert_pending!(ping_fut.poll());
-        sleep(details::QUERY_TIMEOUT - sec!(5)).await;
-        yield_now().await;
-        let ping_result = assert_ready!(ping_fut.poll());
-        let ping_error = ping_result.unwrap_err();
-        assert!(matches!(ping_error, Error::Timeout));
-        assert_pending!(get_peers_fut.poll());
+                // ping times out first
+                assert_pending!(ping_fut.poll());
+                sleep(details::QUERY_TIMEOUT - sec!(5)).await;
+                yield_now().await;
+                let ping_result = assert_ready!(ping_fut.poll());
+                let ping_error = ping_result.unwrap_err();
+                assert!(matches!(ping_error, Error::Timeout));
+                assert_pending!(get_peers_fut.poll());
 
-        // get peers times out 5s later
-        sleep(sec!(5)).await;
-        yield_now().await;
-        let get_peers_result = assert_ready!(get_peers_fut.poll());
-        let get_peers_error = get_peers_result.unwrap_err();
-        assert!(matches!(get_peers_error, Error::Timeout));
+                // get peers times out 5s later
+                sleep(sec!(5)).await;
+                yield_now().await;
+                let get_peers_result = assert_ready!(get_peers_fut.poll());
+                let get_peers_error = get_peers_result.unwrap_err();
+                assert!(matches!(get_peers_error, Error::Timeout));
+            })
+            .await;
     }
 
     #[test]
