@@ -35,7 +35,7 @@ impl<T: Source> SharedState<T> {
 
     // This should NEVER be called concurrently from different futures/tasks,
     // because we store only 1 waker
-    pub(super) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<Option<T::Item>> {
+    pub(super) fn poll_wait(self: &mut Rc<Self>, cx: &mut Context<'_>) -> Poll<Option<T::Item>> {
         if let Some(item) = self.inner.extract_item() {
             Poll::Ready(Some(item))
         } else if self.inner.closed() {
