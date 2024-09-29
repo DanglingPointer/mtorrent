@@ -3,34 +3,39 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-pub trait Source {
+pub(super) trait Source {
     type Item;
     fn closed(&self) -> bool;
     fn extract_item(&self) -> Option<Self::Item>;
 }
 
-pub struct SharedState<T> {
+pub(super) struct SharedState<T> {
     waker: Cell<Option<Waker>>,
     inner: T,
 }
 
 impl<T: Source> SharedState<T> {
-    pub fn new(inner: T) -> Rc<Self> {
+    pub(super) fn new(inner: T) -> Rc<Self> {
         Rc::new(Self {
             waker: Cell::new(None),
             inner,
         })
     }
 
-    pub fn notify(&self) {
+    pub(super) fn notify(&self) {
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
 
+    pub(super) fn receiver_dropped(&self) {
+        // remove waker so that we don't unnecessarily wake anyone when Sender is dropped
+        self.waker.take();
+    }
+
     // This should NEVER be called concurrently from different futures/tasks,
     // because we store only 1 waker
-    pub fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<Option<T::Item>> {
+    pub(super) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<Option<T::Item>> {
         if let Some(item) = self.inner.extract_item() {
             Poll::Ready(Some(item))
         } else if self.inner.closed() {

@@ -96,9 +96,10 @@ impl<T> futures::Stream for Receiver<T> {
     }
 }
 
-#[cfg(debug_assertions)]
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
+        self.0.receiver_dropped();
+        #[cfg(debug_assertions)]
         self.0.has_receiver.set(false);
     }
 }

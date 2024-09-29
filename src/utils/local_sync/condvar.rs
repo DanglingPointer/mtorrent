@@ -66,9 +66,10 @@ impl Receiver {
     }
 }
 
-#[cfg(debug_assertions)]
 impl Drop for Receiver {
     fn drop(&mut self) {
+        self.0.receiver_dropped();
+        #[cfg(debug_assertions)]
         self.0.has_receiver.set(false);
     }
 }
