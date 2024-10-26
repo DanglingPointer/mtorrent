@@ -776,3 +776,134 @@ async fn test_clear_pending_requests_when_peer_chokes() {
     let error = peer_result.unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
 }
+
+#[tokio::test(start_paused = true)]
+async fn test_keep_reqq_requests_in_flight_when_rx_is_faster_than_tx() {
+    setup(true);
+    let metainfo_filepath = "tests/assets/pcap.torrent"; // piece size > 16K
+    let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
+    let peer_reqq = 2;
+
+    // using duplex as socket because of timeouts
+    let (mut sock, farend_sock) = io::duplex(17 * 1024);
+    let (_, peer_future) = PeerBuilder::new()
+        .with_socket(farend_sock)
+        .with_local_ip(local_ip)
+        .with_remote_ip(remote_ip)
+        .with_metainfo_file(metainfo_filepath)
+        .with_extensions()
+        .build_main();
+
+    let _ = join!(peer_future, async move {
+        let mut buf = vec![0u8; 17 * 1024];
+
+        sock.write_all(&msgs![
+            pwp::ExtendedMessage::Handshake(Box::new(pwp::ExtendedHandshake {
+                extensions: super::ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect(),
+                request_limit: Some(peer_reqq),
+                ..Default::default()
+            })),
+            pwp::UploaderMessage::Have { piece_index: 3 }
+        ])
+        .await
+        .unwrap();
+
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(
+            &buf[..bytes_read],
+            &msgs![pwp::ExtendedMessage::Handshake(Box::new(
+                pwp::ExtendedHandshake {
+                    extensions: super::ALL_SUPPORTED_EXTENSIONS
+                        .iter()
+                        .map(|e| (*e, e.local_id()))
+                        .collect(),
+                    listen_port: Some(local_ip.port()),
+                    client_type: Some(super::CLIENT_NAME.to_string()),
+                    yourip: Some(remote_ip.ip()),
+                    metadata_size: Some(7947),
+                    request_limit: Some(super::LOCAL_REQQ),
+                    ..Default::default()
+                }
+            ))]
+        );
+
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Interested]);
+
+        sock.write_all(&msgs![pwp::UploaderMessage::Unchoke]).await.unwrap();
+
+        // request 1
+        let request_1 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: 0,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_1.clone())]);
+
+        // when: request 1 is served
+        sock.write_all(&msgs![pwp::UploaderMessage::Block(
+            request_1,
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .await
+        .unwrap();
+
+        // then: request 2 and 3
+        let request_2 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: pwp::MAX_BLOCK_SIZE,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_2.clone())]);
+
+        let request_3 = BlockInfo {
+            piece_index: 3,
+            in_piece_offset: pwp::MAX_BLOCK_SIZE * 2,
+            block_length: pwp::MAX_BLOCK_SIZE,
+        };
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert_eq!(&buf[..bytes_read], &msgs![pwp::DownloaderMessage::Request(request_3.clone())]);
+
+        // when: request 2 and 3 not served within timeout
+        time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
+
+        // then: retransmit request 2 and 3
+        let mut expected_retransmissions: HashSet<_> = [
+            msgs![pwp::DownloaderMessage::Request(request_2)],
+            msgs![pwp::DownloaderMessage::Request(request_3)],
+        ]
+        .into_iter()
+        .collect();
+        let bytes_read = time::timeout(sec!(2), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert!(expected_retransmissions.remove(&buf[..bytes_read]));
+        let bytes_read = time::timeout(sec!(1), sock.read(&mut buf))
+            .await
+            .expect("timeout")
+            .expect("io error");
+        assert!(expected_retransmissions.remove(&buf[..bytes_read]));
+
+        time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
+    });
+}

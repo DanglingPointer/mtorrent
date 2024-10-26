@@ -313,6 +313,7 @@ async fn request_pieces(
     {
         debug_assert!(requests_in_flight.len() <= peer_reqq);
         while requests_in_flight.len() == peer_reqq {
+            // `while` instead of `if` because the first block may be received (and signalled) before `reqq` requests have been sent out
             let reqq_notifier_alive = wait_with_retries(
                 &mut block_received_signal,
                 tx,
