@@ -15,11 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: actions-rs/toolchain@v1
+    - uses: dtolnay/rust-toolchain@1.80.0
       with:
-        toolchain: 1.80.0
-        profile: minimal
-        override: true
         components: rustfmt
     - run: cargo fmt --check --verbose
 
@@ -32,11 +29,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - uses: actions-rs/toolchain@v1
+    - uses: dtolnay/rust-toolchain@1.80.0
       with:
-        toolchain: 1.80.0
-        profile: minimal
-        override: true
         components: clippy
     - run: cargo clippy --all-targets --all-features -- -D warnings
     - run: cargo clippy --release --all-targets --all-features -- -D warnings
@@ -50,11 +44,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: 1.80.0
-        profile: minimal
-        override: true
+    - uses: dtolnay/rust-toolchain@1.80.0
     - run: cargo build --release --all-targets --verbose
 
   test:
@@ -66,11 +56,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: 1.80.0
-        profile: minimal
-        override: true
+    - uses: dtolnay/rust-toolchain@1.80.0
     - uses: cargo-bins/cargo-binstall@main
     - run: cargo binstall cargo-nextest --secure -y
     - run: cargo nextest run --no-run
