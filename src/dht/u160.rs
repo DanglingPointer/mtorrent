@@ -4,7 +4,7 @@ use bitvec::prelude::*;
 use std::{fmt, iter, ops};
 
 /// 160-bit unsigned integer in big endian that can be XOR'ed, compared and bit-shifted.
-#[derive(PartialEq, PartialOrd, Eq, Ord, Clone)]
+#[derive(PartialEq, PartialOrd, Eq, Ord, Clone, Hash)]
 pub struct U160([u8; 20]);
 
 impl U160 {

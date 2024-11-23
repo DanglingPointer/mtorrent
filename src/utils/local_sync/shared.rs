@@ -44,7 +44,7 @@ impl<T> Shared<T> for SharedHandle<T> {
     }
 }
 
-pub struct ProjectingHandle<T, F> {
+struct ProjectingHandle<T, F> {
     inner: Rc<RefCell<T>>,
     proj: F,
 }
@@ -87,7 +87,10 @@ impl<T> Clone for SharedHandle<T> {
     }
 }
 
-impl<T, F: Clone> Clone for ProjectingHandle<T, F> {
+impl<T, F> Clone for ProjectingHandle<T, F>
+where
+    F: Clone,
+{
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),

@@ -35,6 +35,12 @@ impl Drop for Stopwatch {
     }
 }
 
+impl fmt::Debug for Stopwatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stopwatch").finish()
+    }
+}
+
 #[macro_export]
 macro_rules! trace_stopwatch {
     ($($arg:tt)+) => {

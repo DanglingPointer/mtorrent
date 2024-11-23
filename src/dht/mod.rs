@@ -1,5 +1,9 @@
+mod cmds;
 mod error;
 mod msgs;
+mod nodes;
+mod peers;
+mod processor;
 mod queries;
 mod u160;
 mod udp;

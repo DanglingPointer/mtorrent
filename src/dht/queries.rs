@@ -2,8 +2,10 @@
 
 use super::error::Error;
 use super::msgs::*;
-use crate::sec;
+use super::u160::U160;
 use crate::utils::local_sync;
+use crate::utils::stopwatch::Stopwatch;
+use crate::{sec, trace_stopwatch};
 use derive_more::derive::From;
 use futures::{Stream, StreamExt};
 use std::collections::BTreeMap;
@@ -29,6 +31,7 @@ impl Client {
         destination: SocketAddr,
         query: PingArgs,
     ) -> Result<PingResponse, Error> {
+        let _sw = trace_stopwatch!("Ping query to {destination}");
         self.do_query(destination, query).await
     }
 
@@ -37,6 +40,7 @@ impl Client {
         destination: SocketAddr,
         query: FindNodeArgs,
     ) -> Result<FindNodeResponse, Error> {
+        let _sw = trace_stopwatch!("FindNode query to {destination}");
         self.do_query(destination, query).await
     }
 
@@ -45,6 +49,7 @@ impl Client {
         destination: SocketAddr,
         query: GetPeersArgs,
     ) -> Result<GetPeersResponse, Error> {
+        let _sw = trace_stopwatch!("GetPeers query to {destination}");
         self.do_query(destination, query).await
     }
 
@@ -53,6 +58,7 @@ impl Client {
         destination: SocketAddr,
         query: AnnouncePeerArgs,
     ) -> Result<AnnouncePeerResponse, Error> {
+        let _sw = trace_stopwatch!("AnnouncePeer query to {destination}");
         self.do_query(destination, query).await
     }
 
@@ -62,7 +68,7 @@ impl Client {
         R: TryFrom<ResponseMsg, Error = Error> + Debug,
     {
         let (tx, rx) = local_sync::oneshot();
-        log::trace!("[{dst_addr}] <= {args:?}");
+        log::debug!("[{dst_addr}] <= {args:?}");
         self.0.send(OutgoingQuery {
             query: args.into(),
             destination_addr: dst_addr,
@@ -70,7 +76,7 @@ impl Client {
         });
         let result = rx.await.ok_or(Error::ChannelClosed)?.and_then(R::try_from);
         match &result {
-            Ok(response) => log::trace!("[{dst_addr}] => {response:?}"),
+            Ok(response) => log::debug!("[{dst_addr}] => {response:?}"),
             Err(Error::ErrorResponse(msg)) => log::error!("[{dst_addr}] => {msg:?}"),
             Err(e) => log::error!("Query to {dst_addr} failed: {e:?}"),
         }
@@ -166,6 +172,7 @@ pub struct IncomingGenericQuery<Q, R> {
     query: Q,
     response_sink: Option<mpsc::OwnedPermit<(Message, SocketAddr)>>,
     source_addr: SocketAddr,
+    _stopwatch: Stopwatch,
     _response_type: PhantomData<R>,
 }
 
@@ -174,26 +181,54 @@ pub type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResp
 pub type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
 pub type IncomingAnnouncePeerQuery = IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
 
-impl<Q, R> IncomingGenericQuery<Q, R> {
+impl IncomingQuery {
     fn new(
-        query: Q,
-        transaction_id: Vec<u8>,
-        response_sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
-        source_addr: SocketAddr,
-    ) -> Self
-    where
-        Q: Debug,
-    {
-        log::trace!("[{source_addr}] => {query:?}");
-        Self {
-            transaction_id,
-            query,
-            response_sink: Some(response_sink),
-            source_addr,
-            _response_type: PhantomData,
+        incoming: QueryMsg,
+        tid: Vec<u8>,
+        sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
+        remote_addr: SocketAddr,
+    ) -> IncomingQuery {
+        macro_rules! convert {
+            ($query_args:expr, $name:literal) => {{
+                log::debug!("[{}] => {:?}", remote_addr, $query_args);
+                IncomingQuery::from(IncomingGenericQuery {
+                    transaction_id: tid,
+                    query: $query_args,
+                    response_sink: Some(sink),
+                    source_addr: remote_addr,
+                    _stopwatch: trace_stopwatch!("{} query from {}", $name, remote_addr),
+                    _response_type: PhantomData,
+                })
+            }};
+        }
+        match incoming {
+            QueryMsg::Ping(args) => convert!(args, "Ping"),
+            QueryMsg::FindNode(args) => convert!(args, "FindNode"),
+            QueryMsg::GetPeers(args) => convert!(args, "GetPeers"),
+            QueryMsg::AnnouncePeer(args) => convert!(args, "AnnouncePeer"),
         }
     }
 
+    pub fn node_id(&self) -> &U160 {
+        match self {
+            IncomingQuery::Ping(q) => &q.args().id,
+            IncomingQuery::FindNode(q) => &q.args().id,
+            IncomingQuery::GetPeers(q) => &q.args().id,
+            IncomingQuery::AnnouncePeer(q) => &q.args().id,
+        }
+    }
+
+    pub fn source_addr(&self) -> &SocketAddr {
+        match self {
+            IncomingQuery::Ping(q) => q.source_addr(),
+            IncomingQuery::FindNode(q) => q.source_addr(),
+            IncomingQuery::GetPeers(q) => q.source_addr(),
+            IncomingQuery::AnnouncePeer(q) => q.source_addr(),
+        }
+    }
+}
+
+impl<Q, R> IncomingGenericQuery<Q, R> {
     pub fn args(&self) -> &Q {
         &self.query
     }
@@ -206,7 +241,7 @@ impl<Q, R> IncomingGenericQuery<Q, R> {
     where
         R: Into<ResponseMsg> + Debug,
     {
-        log::trace!("[{}] <= {:?}", self.source_addr, response);
+        log::debug!("[{}] <= {:?}", self.source_addr, response);
         let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
             Message {
                 transaction_id: mem::take(&mut self.transaction_id),
@@ -223,7 +258,7 @@ impl<Q, R> IncomingGenericQuery<Q, R> {
     }
 
     pub fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
-        log::trace!("[{}] <= {:?}", self.source_addr, error);
+        log::debug!("[{}] <= {:?}", self.source_addr, error);
         let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
             Message {
                 transaction_id: mem::take(&mut self.transaction_id),
@@ -247,7 +282,7 @@ impl<Q, R> Drop for IncomingGenericQuery<Q, R> {
                 error_code: ErrorCode::Server,
                 error_msg: "Unable to handle query".to_string(),
             };
-            log::trace!("[{}] <= {:?}", self.source_addr, error_msg);
+            log::debug!("[{}] <= {:?}", self.source_addr, error_msg);
             sink.send((
                 Message {
                     transaction_id: mem::take(&mut self.transaction_id),
@@ -346,7 +381,7 @@ mod details {
             if let MessageData::Query(request) = msg.data {
                 let response_sink = self.outgoing_msgs_sink.clone().reserve_owned().await?;
                 let incoming_query =
-                    make_incoming_query(request, msg.transaction_id, response_sink, &src_addr);
+                    IncomingQuery::new(request, msg.transaction_id, response_sink, src_addr);
                 self.incoming_queries_sink.send(incoming_query);
             } else if let Some((handler, _)) = msg
                 .transaction_id
@@ -370,25 +405,6 @@ mod details {
                 );
             }
             Ok(())
-        }
-    }
-
-    fn make_incoming_query(
-        incoming: QueryMsg,
-        tid: Vec<u8>,
-        sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
-        remote_addr: &SocketAddr,
-    ) -> IncomingQuery {
-        macro_rules! convert {
-            ($query_args:expr) => {
-                IncomingQuery::from(IncomingGenericQuery::new($query_args, tid, sink, *remote_addr))
-            };
-        }
-        match incoming {
-            QueryMsg::Ping(args) => convert!(args),
-            QueryMsg::FindNode(args) => convert!(args),
-            QueryMsg::GetPeers(args) => convert!(args),
-            QueryMsg::AnnouncePeer(args) => convert!(args),
         }
     }
 }
