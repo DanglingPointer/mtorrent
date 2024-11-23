@@ -1,5 +1,6 @@
 use super::super::ctx;
 use super::CLIENT_NAME;
+use crate::utils::shared::Shared;
 use crate::{pwp, sec};
 use std::{cmp, io};
 use tokio::time::Instant;
@@ -15,7 +16,7 @@ struct Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| {
+        self.handle.with(|ctx| {
             ctx.connected_peers.remove(self.rx.remote_ip());
         });
     }

@@ -8,6 +8,7 @@ pub(crate) mod local_sync;
 pub mod metainfo;
 pub mod peer_id;
 pub(crate) mod sealed;
+pub(crate) mod shared;
 pub mod startup;
 pub mod stopwatch;
 pub mod time;

@@ -1,5 +1,6 @@
 use crate::data;
 use crate::utils::peer_id::PeerId;
+use crate::utils::shared::Shared;
 use crate::utils::{local_sync, magnet, startup};
 use crate::{ops::ctx, pwp};
 use futures::future::LocalBoxFuture;
@@ -176,7 +177,7 @@ impl PeerBuilder {
         )
         .unwrap();
         if self.has_all_pieces {
-            ctx_handle.with_ctx(|ctx| {
+            ctx_handle.with(|ctx| {
                 let piece_count = ctx.pieces.piece_count();
                 for piece_index in 0..piece_count {
                     assert!(ctx.accountant.submit_piece(piece_index));

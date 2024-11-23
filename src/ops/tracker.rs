@@ -8,6 +8,7 @@ mod tests;
 use super::ctx;
 use crate::sec;
 use crate::utils::peer_id::PeerId;
+use crate::utils::shared::Shared;
 use crate::utils::{config, local_sync};
 use futures::{future, Future, FutureExt, TryFutureExt};
 use std::collections::HashSet;
@@ -239,7 +240,7 @@ trait AnnounceHandler {
 
 impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
     fn generate_request(&mut self) -> AnnounceData {
-        self.with_ctx(|ctx| AnnounceData {
+        self.with(|ctx| AnnounceData {
             info_hash: *ctx.metainfo.info_hash(),
             downloaded: ctx.accountant.accounted_bytes(),
             left: ctx.accountant.missing_bytes(),
@@ -262,15 +263,13 @@ impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
     }
 
     fn process_response(&mut self, response: &mut ResponseData) {
-        self.with_ctx(|ctx| {
-            response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none())
-        });
+        self.with(|ctx| response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none()));
     }
 }
 
 impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     fn generate_request(&mut self) -> AnnounceData {
-        self.with_ctx(|ctx| AnnounceData {
+        self.with(|ctx| AnnounceData {
             info_hash: *ctx.magnet.info_hash(),
             downloaded: 0,
             left: 0,
@@ -283,7 +282,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     }
 
     fn process_response(&mut self, response: &mut ResponseData) {
-        self.with_ctx(|ctx| response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip)));
+        self.with(|ctx| response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip)));
     }
 }
 

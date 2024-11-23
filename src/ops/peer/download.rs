@@ -1,4 +1,5 @@
 use crate::ops::{ctrl, ctx};
+use crate::utils::shared::Shared;
 use crate::utils::{bandwidth, local_sync, sealed};
 use crate::{data, debug_stopwatch, min, pwp, sec, trace_stopwatch};
 use futures::prelude::*;
@@ -24,7 +25,7 @@ struct Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| {
+        self.handle.with(|ctx| {
             ctx.piece_tracker.forget_peer(self.rx.remote_ip());
             ctx.peer_states.remove_peer(self.rx.remote_ip());
             ctx.pending_requests.clear_requests_to(self.rx.remote_ip());
@@ -76,7 +77,7 @@ macro_rules! update_ctx {
     ($inner:expr) => {
         $inner
             .handle
-            .with_ctx(|ctx| ctx.peer_states.update_download($inner.rx.remote_ip(), &$inner.state));
+            .with(|ctx| ctx.peer_states.update_download($inner.rx.remote_ip(), &$inner.state));
     };
 }
 
@@ -456,7 +457,7 @@ fn update_state_with_msg(
         }
         pwp::UploaderMessage::Have { piece_index } => {
             log::trace!("Received Have({piece_index}) from {ip}");
-            handle.with_ctx(|ctx| ctx.piece_tracker.add_single_record(ip, *piece_index));
+            handle.with(|ctx| ctx.piece_tracker.add_single_record(ip, *piece_index));
             true
         }
         pwp::UploaderMessage::Bitfield(bitfield) => {
@@ -464,7 +465,7 @@ fn update_state_with_msg(
                 let remote_piece_count = bitfield.count_ones();
                 log::trace!("Received bitfield from {ip}: peer has {remote_piece_count} pieces");
             }
-            handle.with_ctx(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
+            handle.with(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
             true
         }
         pwp::UploaderMessage::Choke => {

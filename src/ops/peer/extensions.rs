@@ -1,6 +1,7 @@
 use super::super::ctx;
 use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, LOCAL_REQQ};
 use crate::utils::local_sync;
+use crate::utils::shared::Shared;
 use crate::{data, pwp, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -30,7 +31,7 @@ pub async fn new_peer(
     initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
     peer_discovered_channel: local_sync::channel::Sender<SocketAddr>,
 ) -> io::Result<Peer> {
-    let metadata_len = handle.with_ctx(|ctx| ctx.metainfo.size());
+    let metadata_len = handle.with(|ctx| ctx.metainfo.size());
     let inner = Box::new(Data {
         handle,
         rx,
