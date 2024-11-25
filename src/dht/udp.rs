@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::error::Error as DhtError;
 use super::msgs::Message;
 use crate::utils::benc;

@@ -59,7 +59,7 @@ impl Processor {
                     Some(cmd) => self.handle_command(cmd),
                     None => return,
                 },
-                query = queries.next() => match query {
+                query = queries.0.next() => match query {
                     Some(query) => self.handle_query(query),
                     None => return,
                 },
@@ -204,6 +204,7 @@ async fn periodic_ping(
     client: queries::Client,
     addr: SocketAddr,
 ) -> io::Result<()> {
+    const PING_INTERVAL: Duration = min!(1);
     define!(with_rt, rt);
 
     let local_id = with_rt!(|rt| rt.local_id().clone());
@@ -223,8 +224,6 @@ async fn periodic_ping(
             }
         }};
     }
-
-    const PING_INTERVAL: Duration = min!(1);
 
     let mut id = ping_with_retry!()?.id;
     debug_assert!(!with_rt!(|rt| rt.submit_response_from_known_node(&id, &addr)));

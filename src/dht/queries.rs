@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::error::Error;
 use super::msgs::*;
 use super::u160::U160;
@@ -7,15 +5,13 @@ use crate::utils::local_sync;
 use crate::utils::stopwatch::Stopwatch;
 use crate::{sec, trace_stopwatch};
 use derive_more::derive::From;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::pending;
 use std::marker::PhantomData;
 use std::mem;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -25,8 +21,9 @@ use tokio::time::{sleep_until, Instant};
 #[derive(Clone)]
 pub struct Client(local_sync::channel::Sender<OutgoingQuery>);
 
+#[allow(dead_code)]
 impl Client {
-    pub async fn ping(
+    pub(super) async fn ping(
         &self,
         destination: SocketAddr,
         query: PingArgs,
@@ -35,7 +32,7 @@ impl Client {
         self.do_query(destination, query).await
     }
 
-    pub async fn find_node(
+    pub(super) async fn find_node(
         &self,
         destination: SocketAddr,
         query: FindNodeArgs,
@@ -44,7 +41,7 @@ impl Client {
         self.do_query(destination, query).await
     }
 
-    pub async fn get_peers(
+    pub(super) async fn get_peers(
         &self,
         destination: SocketAddr,
         query: GetPeersArgs,
@@ -53,7 +50,7 @@ impl Client {
         self.do_query(destination, query).await
     }
 
-    pub async fn announce_peer(
+    pub(super) async fn announce_peer(
         &self,
         destination: SocketAddr,
         query: AnnouncePeerArgs,
@@ -85,15 +82,7 @@ impl Client {
 }
 
 /// Server for receiving incoming queries from different nodes.
-pub struct Server(local_sync::channel::Receiver<IncomingQuery>);
-
-impl Stream for Server {
-    type Item = IncomingQuery;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.0.poll_next_unpin(cx)
-    }
-}
+pub struct Server(pub(super) local_sync::channel::Receiver<IncomingQuery>);
 
 /// Actor that routes queries between app layer and network layer.
 pub struct Runner {
@@ -159,7 +148,7 @@ pub fn setup_routing(
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(From)]
-pub enum IncomingQuery {
+pub(super) enum IncomingQuery {
     Ping(IncomingPingQuery),
     FindNode(IncomingFindNodeQuery),
     GetPeers(IncomingGetPeersQuery),
@@ -167,7 +156,7 @@ pub enum IncomingQuery {
 }
 
 #[cfg_attr(test, derive(Debug))]
-pub struct IncomingGenericQuery<Q, R> {
+pub(super) struct IncomingGenericQuery<Q, R> {
     transaction_id: Vec<u8>,
     query: Q,
     response_sink: Option<mpsc::OwnedPermit<(Message, SocketAddr)>>,
@@ -176,10 +165,11 @@ pub struct IncomingGenericQuery<Q, R> {
     _response_type: PhantomData<R>,
 }
 
-pub type IncomingPingQuery = IncomingGenericQuery<PingArgs, PingResponse>;
-pub type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResponse>;
-pub type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
-pub type IncomingAnnouncePeerQuery = IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
+pub(super) type IncomingPingQuery = IncomingGenericQuery<PingArgs, PingResponse>;
+pub(super) type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResponse>;
+pub(super) type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
+pub(super) type IncomingAnnouncePeerQuery =
+    IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
 
 impl IncomingQuery {
     fn new(
@@ -209,7 +199,7 @@ impl IncomingQuery {
         }
     }
 
-    pub fn node_id(&self) -> &U160 {
+    pub(super) fn node_id(&self) -> &U160 {
         match self {
             IncomingQuery::Ping(q) => &q.args().id,
             IncomingQuery::FindNode(q) => &q.args().id,
@@ -218,7 +208,7 @@ impl IncomingQuery {
         }
     }
 
-    pub fn source_addr(&self) -> &SocketAddr {
+    pub(super) fn source_addr(&self) -> &SocketAddr {
         match self {
             IncomingQuery::Ping(q) => q.source_addr(),
             IncomingQuery::FindNode(q) => q.source_addr(),
@@ -229,15 +219,15 @@ impl IncomingQuery {
 }
 
 impl<Q, R> IncomingGenericQuery<Q, R> {
-    pub fn args(&self) -> &Q {
+    pub(super) fn args(&self) -> &Q {
         &self.query
     }
 
-    pub fn source_addr(&self) -> &SocketAddr {
+    pub(super) fn source_addr(&self) -> &SocketAddr {
         &self.source_addr
     }
 
-    pub fn respond(mut self, response: R) -> Result<(), Error>
+    pub(super) fn respond(mut self, response: R) -> Result<(), Error>
     where
         R: Into<ResponseMsg> + Debug,
     {
@@ -257,7 +247,7 @@ impl<Q, R> IncomingGenericQuery<Q, R> {
         }
     }
 
-    pub fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
+    pub(super) fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
         log::debug!("[{}] <= {:?}", self.source_addr, error);
         let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
             Message {
@@ -887,7 +877,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -939,7 +929,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -997,7 +987,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1062,7 +1052,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1119,7 +1109,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1217,7 +1207,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1270,7 +1260,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1318,7 +1308,7 @@ mod tests {
         let (_client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
         let mut runner_fut = spawn(runner.run());
 
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
         assert_pending!(incoming_query_fut.poll_next());
         assert_pending!(runner_fut.poll());
 
@@ -1364,7 +1354,7 @@ mod tests {
         let (client, server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
 
         let mut runner_fut = spawn(runner.run());
-        let mut incoming_query_fut = spawn(server);
+        let mut incoming_query_fut = spawn(server.0);
 
         // enqueue incoming ping
         incoming_msgs_sink

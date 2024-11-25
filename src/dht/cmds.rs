@@ -1,12 +1,10 @@
+use super::u160::U160;
 use futures::Stream;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 
-use super::u160::U160;
-
-#[allow(dead_code)]
 pub enum Command {
     AddNode {
         addr: SocketAddr,
@@ -25,4 +23,9 @@ impl Stream for Server {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.0.poll_recv(cx)
     }
+}
+
+pub fn setup_cmds() -> (mpsc::Sender<Command>, Server) {
+    let (sender, receiver) = mpsc::channel(512);
+    (sender, Server(receiver))
 }

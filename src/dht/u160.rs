@@ -160,7 +160,7 @@ impl ops::Sub for &U160 {
 impl fmt::Debug for U160 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.0 {
-            write!(f, "\\x{byte:X?}")?;
+            write!(f, "{byte:x?}")?;
         }
         Ok(())
     }

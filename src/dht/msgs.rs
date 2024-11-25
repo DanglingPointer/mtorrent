@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-pub(super) struct Message {
-    pub transaction_id: Vec<u8>,
-    pub version: Option<String>,
-    pub data: MessageData,
+pub struct Message {
+    pub(super) transaction_id: Vec<u8>,
+    pub(super) version: Option<String>,
+    pub(super) data: MessageData,
 }
 
 pub(super) enum MessageData {
@@ -156,7 +156,7 @@ impl TryFrom<benc::Element> for Message {
 // ------------------------------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ErrorCode {
+pub(super) enum ErrorCode {
     Generic = 201,
     Server = 202,
     Protocol = 203,
@@ -182,8 +182,8 @@ impl TryFrom<benc::Element> for ErrorCode {
 
 #[derive(Debug)]
 pub struct ErrorMsg {
-    pub error_code: ErrorCode,
-    pub error_msg: String,
+    pub(super) error_code: ErrorCode,
+    pub(super) error_msg: String,
 }
 
 impl From<ErrorMsg> for benc::Element {
@@ -229,8 +229,8 @@ pub(super) enum QueryMsg {
 }
 
 #[derive(Debug)]
-pub struct PingArgs {
-    pub id: U160,
+pub(super) struct PingArgs {
+    pub(super) id: U160,
 }
 
 impl From<PingArgs> for benc::Element {
@@ -251,9 +251,9 @@ impl TryFrom<benc::Element> for PingArgs {
 }
 
 #[derive(Debug)]
-pub struct FindNodeArgs {
-    pub id: U160,
-    pub target: U160,
+pub(super) struct FindNodeArgs {
+    pub(super) id: U160,
+    pub(super) target: U160,
 }
 
 impl From<FindNodeArgs> for benc::Element {
@@ -281,9 +281,9 @@ impl TryFrom<benc::Element> for FindNodeArgs {
 }
 
 #[derive(Debug)]
-pub struct GetPeersArgs {
-    pub id: U160,
-    pub info_hash: U160,
+pub(super) struct GetPeersArgs {
+    pub(super) id: U160,
+    pub(super) info_hash: U160,
 }
 
 impl From<GetPeersArgs> for benc::Element {
@@ -314,11 +314,11 @@ impl TryFrom<benc::Element> for GetPeersArgs {
 }
 
 #[derive(Debug)]
-pub struct AnnouncePeerArgs {
-    pub id: U160,
-    pub info_hash: U160,
-    pub port: Option<u16>,
-    pub token: Vec<u8>,
+pub(super) struct AnnouncePeerArgs {
+    pub(super) id: U160,
+    pub(super) info_hash: U160,
+    pub(super) port: Option<u16>,
+    pub(super) token: Vec<u8>,
 }
 
 impl From<AnnouncePeerArgs> for benc::Element {
@@ -400,8 +400,8 @@ impl TryFrom<benc::Element> for ResponseMsg {
 }
 
 #[derive(Debug)]
-pub struct PingResponse {
-    pub id: U160,
+pub(super) struct PingResponse {
+    pub(super) id: U160,
 }
 
 impl From<PingResponse> for ResponseMsg {
@@ -424,9 +424,9 @@ impl TryFrom<ResponseMsg> for PingResponse {
 }
 
 #[derive(Debug)]
-pub struct FindNodeResponse {
-    pub id: U160,
-    pub nodes: Vec<(U160, SocketAddrV4)>,
+pub(super) struct FindNodeResponse {
+    pub(super) id: U160,
+    pub(super) nodes: Vec<(U160, SocketAddrV4)>,
 }
 
 impl From<FindNodeResponse> for ResponseMsg {
@@ -461,14 +461,14 @@ impl TryFrom<ResponseMsg> for FindNodeResponse {
 }
 
 #[derive(Debug)]
-pub struct GetPeersResponse {
-    pub id: U160,
-    pub token: Vec<u8>,
-    pub data: GetPeersResponseData,
+pub(super) struct GetPeersResponse {
+    pub(super) id: U160,
+    pub(super) token: Vec<u8>,
+    pub(super) data: GetPeersResponseData,
 }
 
 #[derive(Debug)]
-pub enum GetPeersResponseData {
+pub(super) enum GetPeersResponseData {
     Nodes(Vec<(U160, SocketAddrV4)>),
     Peers(Vec<SocketAddrV4>),
 }
@@ -546,8 +546,8 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
 }
 
 #[derive(Debug)]
-pub struct AnnouncePeerResponse {
-    pub id: U160,
+pub(super) struct AnnouncePeerResponse {
+    pub(super) id: U160,
 }
 
 impl From<AnnouncePeerResponse> for ResponseMsg {
