@@ -25,7 +25,7 @@ pub type MessageChannelSender = mpsc::Sender<(Message, SocketAddr)>;
 pub type MessageChannelReceiver = mpsc::Receiver<(Message, SocketAddr)>;
 
 pub async fn create_ipv4_socket(port: u16) -> io::Result<UdpSocket> {
-    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await
+    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
 }
 
 pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelReceiver, Runner) {
@@ -75,7 +75,7 @@ impl<'s> Future for Ingress<'s> {
         fn parse_msg(buffer: &[u8]) -> Result<Message, DhtError> {
             let (bencode, len) = benc::Element::from_bytes_with_len(buffer)?;
             if len < buffer.len() {
-                log::warn!("UDP packet is longer than expected ({} > {})", buffer.len(), len);
+                log::warn!("Incoming UDP packet contains more than one message, ignoring the rest");
             }
             let message = Message::try_from(bencode)?;
             Ok(message)
@@ -89,7 +89,8 @@ impl<'s> Future for Ingress<'s> {
         let mut buffer = ReadBuf::uninit(buffer);
         loop {
             buffer.clear();
-            let src_addr = ready!(socket.poll_recv_from(cx, &mut buffer))?;
+            let src_addr = ready!(socket.poll_recv_from(cx, &mut buffer))
+                .inspect_err(|e| log::error!("Failed to receive UDP packet: {e}"))?;
             let message = match parse_msg(buffer.filled()) {
                 Err(e) => {
                     log::error!("Failed to parse message from {src_addr}: {e:?}");
@@ -139,7 +140,10 @@ impl<'s> Future for Egress<'s> {
                     }
                 },
                 Some((data, dest_addr)) => {
-                    let bytes_sent = ready!(socket.poll_send_to(cx, data, *dest_addr))?;
+                    let bytes_sent = ready!(socket.poll_send_to(cx, data, *dest_addr))
+                        .inspect_err(|e| {
+                            log::error!("Failed to send UDP packet to {dest_addr}: {e}")
+                        })?;
                     if bytes_sent != data.len() {
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
