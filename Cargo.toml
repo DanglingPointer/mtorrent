@@ -10,19 +10,18 @@ license = "Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.12.5", features = ["gzip"] }
-url = "2.5.2"
+reqwest = { version = "0.12.9", features = ["gzip"] }
+url = "2.5.4"
 form_urlencoded = "1.2.1"
-# urlencoding = "2.1.2"                                  # temp
-futures = "0.3.30"
+futures = "0.3.31"
 rand = "0.8.5"
 bitvec = "1.0.1"
 igd-next = { version = "0.15.1", features = ["aio_tokio"] }
 log = "0.4.22"
 simple_logger = { version = "5.0.0", features = ["threads"] }
 sha1_smol = "1.0.1"
-bytes = "1.7.1"
-tokio = { version = "1.39.2", features = [
+bytes = "1.8.0"
+tokio = { version = "1.41.1", features = [
     "rt",
     "net",
     "time",
@@ -37,7 +36,6 @@ ipconfig = "0.3.2"
 [dev-dependencies]
 tokio = { version = "1.39.2", features = ["test-util"] }
 static_assertions = "1.1.0"
-# ntest = "0.9.0"
 tokio-test = "0.4.4"
 
 [profile.dev]
