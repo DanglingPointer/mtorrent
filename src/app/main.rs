@@ -31,20 +31,20 @@ pub async fn single_torrent(
     // get public ip to send correct listening port to trackers and peers later
     let public_pwp_ip = if use_upnp {
         match upnp::PortOpener::new(
-            SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()),
-            igd::PortMappingProtocol::TCP,
+            SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into(),
+            igd_next::PortMappingProtocol::TCP,
         )
         .await
         {
             Ok(port_opener) => {
-                let public_ipv4 = port_opener.external_ip();
-                log::info!("UPnP succeeded, public ip: {}", public_ipv4);
+                let public_ip = port_opener.external_ip();
+                log::info!("UPnP succeeded, public ip: {}", public_ip);
                 pwp_runtime.spawn(async move {
                     if let Err(e) = port_opener.do_continuous_renewal().await {
                         log::error!("UPnP port renewal failed: {e}");
                     }
                 });
-                SocketAddr::V4(public_ipv4)
+                public_ip
             }
             Err(e) => {
                 log::error!("UPnP failed: {e}");

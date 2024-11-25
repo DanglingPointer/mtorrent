@@ -1,10 +1,12 @@
 use crate::sec;
-use igd::{aio, Error, Gateway, PortMappingProtocol, SearchOptions};
+use igd_next::{aio, Error, Gateway, PortMappingProtocol, SearchOptions};
 use std::io;
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use tokio::time::Instant;
 
-fn to_blocking_gateway(gw: aio::Gateway) -> Gateway {
+type AsyncGateway = aio::Gateway<aio::tokio::Tokio>;
+
+fn to_blocking_gateway(gw: AsyncGateway) -> Gateway {
     Gateway {
         addr: gw.addr,
         root_url: gw.root_url,
@@ -15,9 +17,9 @@ fn to_blocking_gateway(gw: aio::Gateway) -> Gateway {
 }
 
 pub struct PortOpener {
-    gateway: Option<aio::Gateway>,
-    internal_ip: SocketAddrV4,
-    external_ip: SocketAddrV4,
+    gateway: Option<AsyncGateway>,
+    internal_ip: SocketAddr,
+    external_ip: SocketAddr,
     proto: PortMappingProtocol,
     autoclose_at: Instant,
 }
@@ -25,8 +27,8 @@ pub struct PortOpener {
 impl PortOpener {
     const LEASE_DURATION: std::time::Duration = sec!(300);
 
-    pub async fn new(internal_ip: SocketAddrV4, proto: PortMappingProtocol) -> Result<Self, Error> {
-        let gateway = aio::search_gateway(SearchOptions {
+    pub async fn new(internal_ip: SocketAddr, proto: PortMappingProtocol) -> Result<Self, Error> {
+        let gateway = aio::tokio::search_gateway(SearchOptions {
             timeout: Some(sec!(5)),
             ..Default::default()
         })
@@ -44,7 +46,7 @@ impl PortOpener {
         })
     }
 
-    pub fn external_ip(&self) -> SocketAddrV4 {
+    pub fn external_ip(&self) -> SocketAddr {
         self.external_ip
     }
 
@@ -98,6 +100,7 @@ mod tests {
     use super::*;
     use crate::utils::ip;
     use log::Level;
+    use std::net::SocketAddrV4;
     use tokio::time;
 
     #[ignore]
@@ -107,8 +110,9 @@ mod tests {
 
         let local_ip = ip::get_local_addr().unwrap();
         let local_internal_ip = SocketAddrV4::new(local_ip, 23015);
-        let port_opener =
-            PortOpener::new(local_internal_ip, igd::PortMappingProtocol::TCP).await.unwrap();
+        let port_opener = PortOpener::new(local_internal_ip.into(), PortMappingProtocol::TCP)
+            .await
+            .unwrap();
         log::info!("port opener created, external ip: {}", port_opener.external_ip());
         time::sleep(sec!(1)).await;
         drop(port_opener);
