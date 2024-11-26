@@ -157,7 +157,7 @@ async fn preliminary_stage(
     });
 
     let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        if let Some(permit) = incoming_ctrl.issue_permit() {
+        if let Some(permit) = incoming_ctrl.issue_permit(peer_ip) {
             task::spawn_local(async move {
                 ops::incoming_preliminary_connection(stream, peer_ip, permit)
                     .await
@@ -254,7 +254,7 @@ async fn main_stage(
     });
 
     let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        if let Some(permit) = incoming_ctrl.issue_permit() {
+        if let Some(permit) = incoming_ctrl.issue_permit(peer_ip) {
             task::spawn_local(async move {
                 ops::incoming_pwp_connection(stream, peer_ip, permit).await.unwrap_or_else(|e| {
                     log!(e, "Incoming peer connection from {peer_ip} failed: {e}")

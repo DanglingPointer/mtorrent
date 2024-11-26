@@ -156,7 +156,8 @@ async fn run_listening_seeder(
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, peer_ip) = listener.accept().await.unwrap();
-    super::incoming_pwp_connection(stream, peer_ip, incoming_ctrl.issue_permit().unwrap()).await?;
+    super::incoming_pwp_connection(stream, peer_ip, incoming_ctrl.issue_permit(peer_ip).unwrap())
+        .await?;
 
     Ok(())
 }

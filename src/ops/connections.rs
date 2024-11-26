@@ -33,7 +33,7 @@ struct State<D> {
 
 pub(super) struct ConnectionPermit<D> {
     state: Rc<State<D>>,
-    addr: Option<SocketAddr>,
+    addr: SocketAddr,
 }
 
 #[cfg(test)]
@@ -54,9 +54,7 @@ impl<D> Deref for ConnectionPermit<D> {
 impl<D> Drop for ConnectionPermit<D> {
     fn drop(&mut self) {
         self.state.budget.set(self.state.budget.get() + 1);
-        if let Some(addr) = self.addr {
-            self.state.used_addrs.remove(&addr);
-        }
+        self.state.used_addrs.remove(&self.addr);
         if let Some(waker) = self.state.waker.take() {
             waker.wake();
         }
@@ -91,7 +89,7 @@ impl<D> OutgoingConnectionControl<D> {
                 self.state.budget.set(self.state.budget.get() - 1);
                 Poll::Ready(Some(OutgoingConnectionPermit(ConnectionPermit {
                     state: self.state.clone(),
-                    addr: Some(addr),
+                    addr,
                 })))
             }
         })
@@ -105,14 +103,16 @@ pub struct IncomingConnectionControl<D> {
 
 impl<D> IncomingConnectionControl<D> {
     /// Issue immediate permit if a connection slot is available
-    pub fn issue_permit(&mut self) -> Option<IncomingConnectionPermit<D>> {
+    pub fn issue_permit(&mut self, addr: SocketAddr) -> Option<IncomingConnectionPermit<D>> {
+        debug_assert!(!self.state.used_addrs.contains(&addr));
         if self.state.budget.get() == 0 {
             None
         } else {
+            self.state.used_addrs.insert(addr);
             self.state.budget.set(self.state.budget.get() - 1);
             Some(IncomingConnectionPermit(ConnectionPermit {
                 state: self.state.clone(),
-                addr: None,
+                addr,
             }))
         }
     }
@@ -135,20 +135,20 @@ mod tests {
         let (_out_ctrl, mut in_ctrl) = connection_control(2, ());
 
         // when
-        let permit1 = in_ctrl.issue_permit();
+        let permit1 = in_ctrl.issue_permit(addr!("1.2.3.4:1111"));
         assert!(permit1.is_some());
-        let permit2 = in_ctrl.issue_permit();
+        let permit2 = in_ctrl.issue_permit(addr!("1.2.3.4:1112"));
         assert!(permit2.is_some());
 
         // then
-        let permit3 = in_ctrl.issue_permit();
+        let permit3 = in_ctrl.issue_permit(addr!("1.2.3.4:1113"));
         assert!(permit3.is_none());
 
         // when
         drop(permit2);
 
         // then
-        let permit3 = in_ctrl.issue_permit();
+        let permit3 = in_ctrl.issue_permit(addr!("1.2.3.4:1113"));
         assert!(permit3.is_some());
     }
 
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_notify_when_incoming_connection_drops() {
         let (mut out_ctrl, mut in_ctrl) = connection_control(1, ());
-        let permit1 = in_ctrl.issue_permit();
+        let permit1 = in_ctrl.issue_permit(addr!("1.2.3.4:1112"));
         assert!(permit1.is_some());
 
         let mut fut2 = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:1111")));
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_outgoing_control_respects_uniqueness() {
-        let (mut out_ctrl, _in_ctrl) = connection_control(2, ());
+        let (mut out_ctrl, mut in_ctrl) = connection_control(10, ());
 
         // when
         let permit1 = {
@@ -217,5 +217,16 @@ mod tests {
             assert_ready!(fut2_dup.poll())
         };
         assert!(permit2_dup.is_none());
+
+        // when
+        let permit3 = in_ctrl.issue_permit(addr!("1.2.3.4:3333"));
+        assert!(permit3.is_some());
+
+        // then
+        let permit3_dup = {
+            let mut fut3_dup = spawn(out_ctrl.issue_permit(addr!("1.2.3.4:3333")));
+            assert_ready!(fut3_dup.poll())
+        };
+        assert!(permit3_dup.is_none());
     }
 }
