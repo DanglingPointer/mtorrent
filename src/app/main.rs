@@ -128,8 +128,6 @@ async fn preliminary_stage(
         .as_ref()
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
 
-    let local_task = task::LocalSet::new();
-
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
@@ -141,7 +139,7 @@ async fn preliminary_stage(
             pwp_worker_handle: pwp_runtime,
         },
     );
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         while let Some(peer_addr) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -169,7 +167,7 @@ async fn preliminary_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -182,14 +180,12 @@ async fn preliminary_stage(
 
     let tracker_ctx = ctx.clone();
     let config_dir = config_dir.as_ref().to_owned();
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         ops::make_preliminary_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
     });
 
     let metainfo_filepath_copy = metainfo_filepath.clone();
-    let peers = local_task
-        .run_until(async move { ops::periodic_metadata_check(ctx, metainfo_filepath_copy).await })
-        .await?;
+    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath_copy).await?;
     Ok((metainfo_filepath, peers))
 }
 
@@ -222,8 +218,6 @@ async fn main_stage(
         metainfo_storage_server.run().await;
     });
 
-    let local_task = task::LocalSet::new();
-
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
@@ -239,7 +233,7 @@ async fn main_stage(
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
         },
     );
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         while let Some(peer_addr) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -264,7 +258,7 @@ async fn main_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -277,14 +271,10 @@ async fn main_stage(
 
     let tracker_ctx = ctx.clone();
     let config_dir = output_dir.as_ref().to_owned();
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         ops::make_periodic_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
     });
 
-    local_task
-        .run_until(async move {
-            ops::periodic_state_dump(ctx, content_dir).await;
-        })
-        .await;
+    ops::periodic_state_dump(ctx, content_dir).await;
     Ok(())
 }

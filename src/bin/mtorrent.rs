@@ -68,16 +68,17 @@ fn main() -> io::Result<()> {
 
     let peer_id = PeerId::generate_new();
 
-    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(
-        app::main::single_torrent(
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build_local(&Default::default())?
+        .block_on(app::main::single_torrent(
             peer_id,
             &cli.metainfo_uri,
             output_dir,
             pwp_worker.runtime_handle(),
             storage_worker.runtime_handle(),
             !cli.no_upnp,
-        ),
-    )?;
+        ))?;
 
     Ok(())
 }
