@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "bitvec",
  "bytes",
