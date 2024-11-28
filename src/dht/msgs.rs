@@ -3,8 +3,8 @@ use super::u160::U160;
 use crate::utils::benc;
 use derive_more::derive::From;
 use std::collections::BTreeMap;
-use std::iter;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::{fmt, iter};
 
 pub struct Message {
     pub(super) transaction_id: Vec<u8>,
@@ -155,7 +155,7 @@ impl TryFrom<benc::Element> for Message {
 
 // ------------------------------------------------------------------------------------------------
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum ErrorCode {
     Generic = 201,
     Server = 202,
@@ -220,7 +220,7 @@ impl TryFrom<benc::Element> for ErrorMsg {
 
 // ------------------------------------------------------------------------------------------------
 
-#[derive(From)]
+#[derive(From, Clone)]
 pub(super) enum QueryMsg {
     Ping(PingArgs),
     FindNode(FindNodeArgs),
@@ -228,7 +228,18 @@ pub(super) enum QueryMsg {
     AnnouncePeer(AnnouncePeerArgs),
 }
 
-#[derive(Debug)]
+impl fmt::Debug for QueryMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ping(_) => f.debug_tuple("Ping").finish(),
+            Self::FindNode(_) => f.debug_tuple("FindNode").finish(),
+            Self::GetPeers(_) => f.debug_tuple("GetPeers").finish(),
+            Self::AnnouncePeer(_) => f.debug_tuple("AnnouncePeer").finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct PingArgs {
     pub(super) id: U160,
 }
@@ -250,7 +261,7 @@ impl TryFrom<benc::Element> for PingArgs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct FindNodeArgs {
     pub(super) id: U160,
     pub(super) target: U160,
@@ -280,7 +291,7 @@ impl TryFrom<benc::Element> for FindNodeArgs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct GetPeersArgs {
     pub(super) id: U160,
     pub(super) info_hash: U160,
@@ -313,7 +324,7 @@ impl TryFrom<benc::Element> for GetPeersArgs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct AnnouncePeerArgs {
     pub(super) id: U160,
     pub(super) info_hash: U160,

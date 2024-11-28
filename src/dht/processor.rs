@@ -1,5 +1,4 @@
 use super::cmds::{self, Command};
-use super::error::Error;
 use super::msgs::*;
 use super::nodes::{Node, RoutingTable};
 use super::peers::TokenManager;
@@ -207,25 +206,17 @@ async fn periodic_ping(
     const PING_INTERVAL: Duration = min!(1);
     define!(with_rt, rt);
 
-    let local_id = with_rt!(|rt| rt.local_id().clone());
-
-    macro_rules! ping_with_retry {
-        () => {{
-            let mut attempts_left = 2;
-            loop {
-                attempts_left -= 1;
-                let query = PingArgs {
-                    id: local_id.clone(),
-                };
-                let result = client.ping(addr, query).await;
-                if !matches!(result, Err(Error::Timeout)) || attempts_left == 0 {
-                    break result;
-                }
-            }
-        }};
+    macro_rules! send_ping {
+        () => {
+            client.ping(
+                addr,
+                PingArgs {
+                    id: with_rt!(|rt| rt.local_id().clone()),
+                },
+            )
+        };
     }
-
-    let mut id = ping_with_retry!()?.id;
+    let mut id = send_ping!().await?.id;
     debug_assert!(!with_rt!(|rt| rt.submit_response_from_known_node(&id, &addr)));
 
     if with_rt!(|rt| rt.add_responding_node(&id, &addr)) {
@@ -238,7 +229,7 @@ async fn periodic_ping(
 
             if time_since_last_activity >= PING_INTERVAL {
                 let response =
-                    ping_with_retry!().inspect_err(|_e| with_rt!(|rt| rt.remove_node(&id)))?;
+                    send_ping!().await.inspect_err(|_e| with_rt!(|rt| rt.remove_node(&id)))?;
 
                 let submitted = with_rt!(|rt| if response.id != id {
                     log::warn!("Node id of {} changed: {:?} -> {:?}", addr, id, response.id);

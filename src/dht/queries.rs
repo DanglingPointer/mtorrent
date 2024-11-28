@@ -6,7 +6,8 @@ use crate::utils::stopwatch::Stopwatch;
 use crate::{sec, trace_stopwatch};
 use derive_more::derive::From;
 use futures::StreamExt;
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::fmt::Debug;
 use std::future::pending;
 use std::marker::PhantomData;
@@ -106,7 +107,7 @@ impl Runner {
                     self.queries.handle_one_incoming(msg).await?;
                 }
                 _ = Self::sleep_until(next_timeout), if next_timeout.is_some() => {
-                    self.queries.handle_timeouts();
+                    self.queries.handle_timeouts().await?;
                 }
             }
         }
@@ -300,43 +301,100 @@ struct OutgoingQuery {
 mod details {
     use super::*;
 
+    struct PendingTimeout {
+        timeout_at: Instant,
+        tid: u16,
+        retries_left: usize,
+    }
+
+    impl PartialEq for PendingTimeout {
+        fn eq(&self, other: &Self) -> bool {
+            self.timeout_at == other.timeout_at
+        }
+    }
+
+    impl Eq for PendingTimeout {}
+
+    impl PartialOrd for PendingTimeout {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for PendingTimeout {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // reverse order for min-BinaryHeap
+            other.timeout_at.cmp(&self.timeout_at)
+        }
+    }
+
     pub(super) struct QueryManager {
         next_tid: u16,
-        outstanding_requests: BTreeMap<u16, (ResponseSender, Instant)>,
+        outstanding_queries: HashMap<u16, OutgoingQuery>,
+        pending_timeouts: BinaryHeap<PendingTimeout>,
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
         incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
     }
 
-    pub(super) const QUERY_TIMEOUT: Duration = sec!(30);
-
     impl QueryManager {
+        const RETRANSMIT_INTERVAL: Duration = sec!(1);
+        const MAX_RETRANSMITS: usize = 4;
+
         pub(super) fn new(
             outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
             incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
         ) -> Self {
             Self {
                 next_tid: 1,
-                outstanding_requests: BTreeMap::new(),
+                outstanding_queries: Default::default(),
+                pending_timeouts: Default::default(),
                 outgoing_msgs_sink,
                 incoming_queries_sink,
             }
         }
 
         pub(super) fn next_timeout(&self) -> Option<Instant> {
-            self.outstanding_requests.values().next().map(|&(_, timeout)| timeout)
+            self.pending_timeouts.peek().map(|pt| pt.timeout_at)
         }
 
-        pub(super) fn handle_timeouts(&mut self) {
-            let now = Instant::now();
-            while let Some(entry) = self.outstanding_requests.first_entry() {
-                // We rely here on transaction ids monotonically increasing.
-                // When next_tid wraps around, this will be messed up.
-                if entry.get().1 > now {
+        pub(super) async fn handle_timeouts(&mut self) -> Result<(), Error> {
+            use std::collections::hash_map::Entry;
+
+            while let Some(pending) = self.pending_timeouts.peek() {
+                if pending.timeout_at > Instant::now() {
+                    // the query hasn't timed out yet
                     break;
                 }
-                let (callback, _) = entry.remove();
-                let _ = callback.send(Err(Error::Timeout));
+                let mut pending = self.pending_timeouts.pop().unwrap();
+                let mut outstanding = match self.outstanding_queries.entry(pending.tid) {
+                    Entry::Occupied(occupied_entry) => occupied_entry,
+                    Entry::Vacant(_) => panic!("no query for pending timeout"),
+                };
+                if pending.retries_left == 0 {
+                    // erase entry and invoke callback with error
+                    outstanding.remove().response_sink.send(Err(Error::Timeout));
+                } else {
+                    let tid = *outstanding.key();
+                    let outstanding = outstanding.get_mut();
+                    // retransmit query
+                    let msg = Message {
+                        transaction_id: tid.to_be_bytes().into(),
+                        version: None,
+                        data: MessageData::Query(outstanding.query.clone()),
+                    };
+                    self.outgoing_msgs_sink.send((msg, outstanding.destination_addr)).await?;
+                    log::trace!(
+                        "(RETRY) [{}] <= {:?}",
+                        outstanding.destination_addr,
+                        outstanding.query
+                    );
+                    // schedule next timeout
+                    pending.timeout_at = Instant::now() + Self::RETRANSMIT_INTERVAL;
+                    pending.retries_left -= 1;
+                    self.pending_timeouts.push(pending);
+                }
             }
+            Ok(())
         }
 
         pub(super) async fn handle_one_outgoing(
@@ -345,16 +403,20 @@ mod details {
         ) -> Result<(), Error> {
             let tid = self.next_tid;
             self.next_tid = tid.wrapping_add(1);
+
             let msg = Message {
                 transaction_id: tid.to_be_bytes().into(),
                 version: None,
-                data: MessageData::Query(query.query),
+                data: MessageData::Query(query.query.clone()),
             };
-
             match self.outgoing_msgs_sink.send((msg, query.destination_addr)).await {
                 Ok(_) => {
-                    let timeout_at = Instant::now() + QUERY_TIMEOUT;
-                    self.outstanding_requests.insert(tid, (query.response_sink, timeout_at));
+                    self.outstanding_queries.insert(tid, query);
+                    self.pending_timeouts.push(PendingTimeout {
+                        timeout_at: Instant::now() + Self::RETRANSMIT_INTERVAL,
+                        tid,
+                        retries_left: Self::MAX_RETRANSMITS,
+                    });
                     Ok(())
                 }
                 Err(e) => {
@@ -373,16 +435,20 @@ mod details {
                 let incoming_query =
                     IncomingQuery::new(request, msg.transaction_id, response_sink, src_addr);
                 self.incoming_queries_sink.send(incoming_query);
-            } else if let Some((handler, _)) = msg
-                .transaction_id
-                .last_chunk::<2>()
-                .and_then(|&tid| self.outstanding_requests.remove(&u16::from_be_bytes(tid)))
+            } else if let Some((tid, outstanding)) =
+                msg.transaction_id.last_chunk::<2>().and_then(|&tid| {
+                    let tid = u16::from_be_bytes(tid);
+                    self.outstanding_queries.remove(&tid).map(|handler| (tid, handler))
+                })
             {
+                // invoke callback with the received response
                 let _ = match msg.data {
-                    MessageData::Response(response) => handler.send(Ok(response)),
-                    MessageData::Error(error) => handler.send(Err(error.into())),
+                    MessageData::Response(response) => outstanding.response_sink.send(Ok(response)),
+                    MessageData::Error(error) => outstanding.response_sink.send(Err(error.into())),
                     MessageData::Query(_) => unreachable!(),
                 };
+                // erase the corresponding timeout
+                self.pending_timeouts.retain(|pt| pt.tid != tid);
             } else {
                 log::warn!(
                     "Received orphaned {} message from {}",
@@ -402,7 +468,9 @@ mod details {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::millisec;
     use std::cell::Cell;
+    use std::iter;
     use std::net::{Ipv4Addr, SocketAddrV4};
     use tokio::task::{self, yield_now};
     use tokio::time::sleep;
@@ -733,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_outgoing_queries_timeouts() {
+    async fn test_outgoing_query_retransmissions() {
         task::LocalSet::new()
             .run_until(async {
                 SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
@@ -759,8 +827,174 @@ mod tests {
                 assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
                 assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
 
-                // start get peers 5s later
-                sleep(sec!(5)).await;
+                for _ in 0..4 {
+                    sleep(sec!(1)).await;
+                    yield_now().await;
+                    let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
+                    assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+                    assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
+                    assert_pending!(ping_fut.poll());
+                }
+
+                sleep(sec!(1)).await;
+                yield_now().await;
+                assert!(outgoing_msgs_source.try_recv().is_err());
+                let ping_result = assert_ready!(ping_fut.poll());
+                let ping_error = ping_result.unwrap_err();
+                assert!(matches!(ping_error, Error::Timeout));
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_outgoing_concurrent_retransmissions() {
+        // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+        task::LocalSet::new()
+            .run_until(async {
+                SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
+                let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
+                let (_incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
+                let (client, _server, runner) =
+                    setup_routing(outgoing_msgs_sink, incoming_msgs_source);
+
+                macro_rules! verify_msg_count {
+                    ($ping_count:expr, $get_peers_count:expr) => {{
+                        yield_now().await;
+                        let msgs: Vec<Message> = iter::from_fn(|| {
+                            outgoing_msgs_source.try_recv().map(|(msg, _addr)| msg).ok()
+                        })
+                        .collect();
+                        assert_eq!(msgs.len(), $ping_count + $get_peers_count);
+                        assert_eq!(
+                            msgs.iter()
+                                .filter(|msg| matches!(
+                                    msg.data,
+                                    MessageData::Query(QueryMsg::Ping(_))
+                                ) && msg.transaction_id == vec![0u8, 1u8])
+                                .count(),
+                            $ping_count
+                        );
+                        assert_eq!(
+                            msgs.iter()
+                                .filter(|msg| matches!(
+                                    msg.data,
+                                    MessageData::Query(QueryMsg::GetPeers(_))
+                                ) && msg.transaction_id == vec![0u8, 2u8])
+                                .count(),
+                            $get_peers_count
+                        );
+                    }};
+                }
+
+                task::spawn_local(runner.run());
+
+                // start ping query
+                let mut ping_fut = spawn(client.ping(
+                    IP,
+                    PingArgs {
+                        id: [1u8; 20].into(),
+                    },
+                ));
+                assert_pending!(ping_fut.poll());
+
+                // verify ping sent out on the network
+                verify_msg_count!(1, 0);
+
+                // start get peers 3s later
+                sleep(sec!(3)).await;
+                let mut get_peers_fut = spawn(client.get_peers(
+                    IP,
+                    GetPeersArgs {
+                        id: [1u8; 20].into(),
+                        info_hash: [2u8; 20].into(),
+                    },
+                ));
+                assert_pending!(get_peers_fut.poll());
+
+                // verify get peers sent out on the network + 3 ping retransmissions
+                verify_msg_count!(3, 1);
+
+                // ping times out first
+                assert_pending!(ping_fut.poll());
+                sleep(sec!(2)).await;
+                yield_now().await;
+                let ping_result = assert_ready!(ping_fut.poll());
+                let ping_error = ping_result.unwrap_err();
+                assert!(matches!(ping_error, Error::Timeout));
+                assert_pending!(get_peers_fut.poll());
+
+                // get peers times out 3s later
+                sleep(sec!(3)).await;
+                yield_now().await;
+                let get_peers_result = assert_ready!(get_peers_fut.poll());
+                let get_peers_error = get_peers_result.unwrap_err();
+                assert!(matches!(get_peers_error, Error::Timeout));
+
+                // verify 1 ping retransmit + 4 get peers retransmits
+                sleep(sec!(1)).await;
+                verify_msg_count!(1, 4);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_outgoing_queries_timer_cleanup() {
+        // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+        task::LocalSet::new()
+            .run_until(async {
+                SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
+                let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
+                let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
+                let (client, _server, runner) =
+                    setup_routing(outgoing_msgs_sink, incoming_msgs_source);
+
+                macro_rules! verify_msg_count {
+                    ($ping_count:expr, $get_peers_count:expr) => {{
+                        yield_now().await;
+                        let msgs: Vec<Message> = iter::from_fn(|| {
+                            outgoing_msgs_source.try_recv().map(|(msg, _addr)| msg).ok()
+                        })
+                        .collect();
+                        assert_eq!(msgs.len(), $ping_count + $get_peers_count);
+                        assert_eq!(
+                            msgs.iter()
+                                .filter(|msg| matches!(
+                                    msg.data,
+                                    MessageData::Query(QueryMsg::Ping(_))
+                                ) && msg.transaction_id == vec![0u8, 1u8])
+                                .count(),
+                            $ping_count
+                        );
+                        assert_eq!(
+                            msgs.iter()
+                                .filter(|msg| matches!(
+                                    msg.data,
+                                    MessageData::Query(QueryMsg::GetPeers(_))
+                                ) && msg.transaction_id == vec![0u8, 2u8])
+                                .count(),
+                            $get_peers_count
+                        );
+                    }};
+                }
+
+                task::spawn_local(runner.run());
+
+                // start ping query
+                let mut ping_fut = spawn(client.ping(
+                    IP,
+                    PingArgs {
+                        id: [1u8; 20].into(),
+                    },
+                ));
+                assert_pending!(ping_fut.poll());
+
+                // verify ping sent out on the network
+                yield_now().await;
+                let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
+                assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
+
+                // start get peers 500ms later
+                sleep(millisec!(500)).await;
                 let mut get_peers_fut = spawn(client.get_peers(
                     IP,
                     GetPeersArgs {
@@ -773,27 +1007,50 @@ mod tests {
                 // verify get peers sent out on the network
                 yield_now().await;
                 let (outgoing_get_peers, _) = outgoing_msgs_source.try_recv().unwrap();
-                assert_eq!(outgoing_get_peers.transaction_id, vec![0u8, 2u8]);
                 assert!(matches!(
                     outgoing_get_peers.data,
                     MessageData::Query(QueryMsg::GetPeers(_))
                 ));
 
-                // ping times out first
+                // 1 retransmission of each
+                sleep(millisec!(1500)).await;
+                verify_msg_count!(2, 1);
+
+                // respond to get peers
+                incoming_msgs_sink
+                    .try_send((
+                        Message {
+                            transaction_id: outgoing_get_peers.transaction_id,
+                            version: None,
+                            data: MessageData::Response(
+                                GetPeersResponse {
+                                    id: [69u8; 20].into(),
+                                    token: vec![3u8; 2],
+                                    data: GetPeersResponseData::Peers(vec![]),
+                                }
+                                .into(),
+                            ),
+                        },
+                        IP,
+                    ))
+                    .unwrap();
+                yield_now().await;
+                let get_peers_result = assert_ready!(get_peers_fut.poll());
+                let get_peers_response = get_peers_result.unwrap();
+                assert_eq!(get_peers_response.id, [69u8; 20].into());
+
+                for _ in 0..2 {
+                    sleep(sec!(1)).await;
+                    verify_msg_count!(1, 0);
+                }
+
+                // ping times out
+                sleep(millisec!(1000)).await;
                 assert_pending!(ping_fut.poll());
-                sleep(details::QUERY_TIMEOUT - sec!(5)).await;
                 yield_now().await;
                 let ping_result = assert_ready!(ping_fut.poll());
                 let ping_error = ping_result.unwrap_err();
                 assert!(matches!(ping_error, Error::Timeout));
-                assert_pending!(get_peers_fut.poll());
-
-                // get peers times out 5s later
-                sleep(sec!(5)).await;
-                yield_now().await;
-                let get_peers_result = assert_ready!(get_peers_fut.poll());
-                let get_peers_error = get_peers_result.unwrap_err();
-                assert!(matches!(get_peers_error, Error::Timeout));
             })
             .await;
     }
