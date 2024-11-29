@@ -303,7 +303,7 @@ mod details {
 
     struct PendingTimeout {
         timeout_at: Instant,
-        tid: u16,
+        tid: u32,
         retries_left: usize,
     }
 
@@ -329,8 +329,8 @@ mod details {
     }
 
     pub(super) struct QueryManager {
-        next_tid: u16,
-        outstanding_queries: HashMap<u16, OutgoingQuery>,
+        next_tid: u32,
+        outstanding_queries: HashMap<u32, OutgoingQuery>,
         pending_timeouts: BinaryHeap<PendingTimeout>,
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
         incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
@@ -401,8 +401,13 @@ mod details {
             &mut self,
             query: OutgoingQuery,
         ) -> Result<(), Error> {
-            let tid = self.next_tid;
-            self.next_tid = tid.wrapping_add(1);
+            let tid = loop {
+                let tid = self.next_tid;
+                self.next_tid = tid.wrapping_add(1);
+                if !self.outstanding_queries.contains_key(&tid) {
+                    break tid;
+                }
+            };
 
             let msg = Message {
                 transaction_id: tid.to_be_bytes().into(),
@@ -436,8 +441,8 @@ mod details {
                     IncomingQuery::new(request, msg.transaction_id, response_sink, src_addr);
                 self.incoming_queries_sink.send(incoming_query);
             } else if let Some((tid, outstanding)) =
-                msg.transaction_id.last_chunk::<2>().and_then(|&tid| {
-                    let tid = u16::from_be_bytes(tid);
+                msg.transaction_id.last_chunk::<4>().and_then(|&tid| {
+                    let tid = u32::from_be_bytes(tid);
                     self.outstanding_queries.remove(&tid).map(|handler| (tid, handler))
                 })
             {
@@ -485,6 +490,10 @@ mod tests {
 
     const IP: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345));
 
+    fn tid(num: u8) -> Vec<u8> {
+        vec![0u8, 0u8, 0u8, num]
+    }
+
     #[test]
     fn test_outgoing_ping_success() {
         let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
@@ -502,7 +511,7 @@ mod tests {
 
         assert_pending!(runner_fut.poll());
         let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_ping.transaction_id, tid(1));
         assert_eq!(outgoing_ping.version, None);
         if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -551,7 +560,7 @@ mod tests {
 
         assert_pending!(runner_fut.poll());
         let (outgoing_find_node, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_find_node.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_find_node.transaction_id, tid(1));
         assert_eq!(outgoing_find_node.version, None);
         if let MessageData::Query(QueryMsg::FindNode(args)) = outgoing_find_node.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -607,7 +616,7 @@ mod tests {
 
         assert_pending!(runner_fut.poll());
         let (outgoing_get_peers, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_get_peers.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_get_peers.transaction_id, tid(1));
         assert_eq!(outgoing_get_peers.version, None);
         if let MessageData::Query(QueryMsg::GetPeers(args)) = outgoing_get_peers.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -669,7 +678,7 @@ mod tests {
 
         assert_pending!(runner_fut.poll());
         let (outgoing_announce_peer, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_announce_peer.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_announce_peer.transaction_id, tid(1));
         assert_eq!(outgoing_announce_peer.version, None);
         if let MessageData::Query(QueryMsg::AnnouncePeer(args)) = outgoing_announce_peer.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -732,7 +741,7 @@ mod tests {
         // verify ping query
         assert_pending!(runner_fut.poll());
         let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_ping.transaction_id, tid(1));
         assert_eq!(outgoing_ping.version, None);
         if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -743,7 +752,7 @@ mod tests {
         // verify announce peer
         assert_pending!(announce_peer_fut.poll());
         let (outgoing_announce_peer, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_announce_peer.transaction_id, vec![0u8, 2u8]);
+        assert_eq!(outgoing_announce_peer.transaction_id, tid(2));
         assert_eq!(outgoing_announce_peer.version, None);
         if let MessageData::Query(QueryMsg::AnnouncePeer(args)) = outgoing_announce_peer.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -824,15 +833,18 @@ mod tests {
                 // verify ping sent out on the network
                 yield_now().await;
                 let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-                assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+                assert_eq!(outgoing_ping.transaction_id, tid(1));
                 assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
 
                 for _ in 0..4 {
                     sleep(sec!(1)).await;
                     yield_now().await;
-                    let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-                    assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
-                    assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
+                    let (retransmitted_ping, _) = outgoing_msgs_source.try_recv().unwrap();
+                    assert_eq!(retransmitted_ping.transaction_id, outgoing_ping.transaction_id);
+                    assert!(matches!(
+                        retransmitted_ping.data,
+                        MessageData::Query(QueryMsg::Ping(_))
+                    ));
                     assert_pending!(ping_fut.poll());
                 }
 
@@ -870,7 +882,7 @@ mod tests {
                                 .filter(|msg| matches!(
                                     msg.data,
                                     MessageData::Query(QueryMsg::Ping(_))
-                                ) && msg.transaction_id == vec![0u8, 1u8])
+                                ) && msg.transaction_id == tid(1))
                                 .count(),
                             $ping_count
                         );
@@ -879,7 +891,7 @@ mod tests {
                                 .filter(|msg| matches!(
                                     msg.data,
                                     MessageData::Query(QueryMsg::GetPeers(_))
-                                ) && msg.transaction_id == vec![0u8, 2u8])
+                                ) && msg.transaction_id == tid(2))
                                 .count(),
                             $get_peers_count
                         );
@@ -961,7 +973,7 @@ mod tests {
                                 .filter(|msg| matches!(
                                     msg.data,
                                     MessageData::Query(QueryMsg::Ping(_))
-                                ) && msg.transaction_id == vec![0u8, 1u8])
+                                ) && msg.transaction_id == tid(1))
                                 .count(),
                             $ping_count
                         );
@@ -970,7 +982,7 @@ mod tests {
                                 .filter(|msg| matches!(
                                     msg.data,
                                     MessageData::Query(QueryMsg::GetPeers(_))
-                                ) && msg.transaction_id == vec![0u8, 2u8])
+                                ) && msg.transaction_id == tid(2))
                                 .count(),
                             $get_peers_count
                         );
@@ -1072,7 +1084,7 @@ mod tests {
 
         assert_pending!(runner_fut.poll());
         let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_ping.transaction_id, tid(1));
         assert_eq!(outgoing_ping.version, None);
         if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
             assert_eq!(args.id, [1u8; 20].into());
@@ -1645,7 +1657,7 @@ mod tests {
 
         // verify outgoing ping and no incoming ping
         let (outgoing_ping, _) = outgoing_msgs_source.try_recv().unwrap();
-        assert_eq!(outgoing_ping.transaction_id, vec![0u8, 1u8]);
+        assert_eq!(outgoing_ping.transaction_id, tid(1));
         assert_eq!(outgoing_ping.version, None);
         if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
             assert_eq!(args.id, [1u8; 20].into());
