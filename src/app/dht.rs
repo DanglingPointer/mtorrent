@@ -1,5 +1,4 @@
 use crate::{dht, info_stopwatch, utils::worker};
-use std::io;
 use tokio::{join, runtime, sync::mpsc};
 
 pub fn launch_node_runtime(
@@ -20,9 +19,10 @@ pub fn launch_node_runtime(
                 .block_on(async move {
                     let _sw = info_stopwatch!("DHT");
 
-                    let socket = dht::create_ipv4_socket(local_port).await.inspect_err(|e| {
-                        log::error!("Failed to create a UDP socket for DHT: {e}")
-                    })?;
+                    let socket = match dht::create_ipv4_socket(local_port).await {
+                        Err(e) => return log::error!("Failed to create a UDP socket for DHT: {e}"),
+                        Ok(socket) => socket,
+                    };
 
                     let local_id = dht::U160::from(rand::random::<[u8; 20]>()); // TODO: read from config file
 
@@ -45,9 +45,7 @@ pub fn launch_node_runtime(
                     if let Err(e) = queries_result {
                         log::warn!("Queries exited with error: {e:?}");
                     }
-                    io::Result::Ok(())
-                })
-                .expect("Failed to start DHT runtime");
+                });
         },
     );
 

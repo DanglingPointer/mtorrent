@@ -8,7 +8,7 @@ macro_rules! sec {
 #[macro_export]
 macro_rules! millisec {
     ($arg:expr) => {{
-        std::time::Duration::from_micros($arg * 1000)
+        std::time::Duration::from_millis($arg)
     }};
 }
 
