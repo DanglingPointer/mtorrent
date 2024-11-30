@@ -15,7 +15,7 @@ url = "2.5.4"
 form_urlencoded = "1.2.1"
 futures = "0.3.31"
 rand = "0.8.5"
-bitvec = "1.0.1"
+bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
 igd-next = { version = "0.15.1", features = ["aio_tokio"] }
 log = "0.4.22"
 simple_logger = { version = "5.0.0", features = ["threads"] }
