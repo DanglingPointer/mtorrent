@@ -474,7 +474,7 @@ impl TryFrom<ResponseMsg> for FindNodeResponse {
 #[derive(Debug)]
 pub(super) struct GetPeersResponse {
     pub(super) id: U160,
-    pub(super) token: Vec<u8>,
+    pub(super) token: Option<Vec<u8>>,
     pub(super) data: GetPeersResponseData,
 }
 
@@ -493,23 +493,23 @@ impl From<GetPeersResponse> for ResponseMsg {
             port.copy_from_slice(&ip.port().to_be_bytes());
             benc::Element::ByteString(buffer)
         }
-        Self {
-            data: [
-                ("id".into(), response.id.into()),
-                ("token".into(), benc::Element::ByteString(response.token)),
-                match response.data {
-                    GetPeersResponseData::Nodes(nodes) => (
-                        "nodes".into(),
-                        benc::Element::ByteString(serialize_nodes(nodes.into_iter())),
-                    ),
-                    GetPeersResponseData::Peers(peers) => (
-                        "values".into(),
-                        benc::Element::List(peers.into_iter().map(serialize_ipv4).collect()),
-                    ),
-                },
-            ]
-            .into(),
+        let mut data: BTreeMap<String, benc::Element> = [
+            ("id".into(), response.id.into()),
+            match response.data {
+                GetPeersResponseData::Nodes(nodes) => {
+                    ("nodes".into(), benc::Element::ByteString(serialize_nodes(nodes.into_iter())))
+                }
+                GetPeersResponseData::Peers(peers) => (
+                    "values".into(),
+                    benc::Element::List(peers.into_iter().map(serialize_ipv4).collect()),
+                ),
+            },
+        ]
+        .into();
+        if let Some(token) = response.token {
+            data.insert("token".into(), benc::Element::ByteString(token));
         }
+        Self { data }
     }
 }
 
@@ -519,14 +519,10 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
     fn try_from(mut msg: ResponseMsg) -> Result<Self, Self::Error> {
         let id: U160 = msg.data.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?;
 
-        let token = msg
-            .data
-            .remove("token")
-            .and_then(|token| match token {
-                benc::Element::ByteString(bytes) => Some(bytes),
-                _ => None,
-            })
-            .ok_or(Error::ParseError("no token"))?;
+        let token = msg.data.remove("token").and_then(|token| match token {
+            benc::Element::ByteString(bytes) => Some(bytes),
+            _ => None,
+        });
 
         let data = if let Some(nodes) = msg.data.remove("nodes") {
             GetPeersResponseData::Nodes(match nodes {
@@ -831,7 +827,7 @@ mod tests {
             data: MessageData::Response(
                 GetPeersResponse {
                     id: U160::from(b"abcdefghij0123456789"),
-                    token: Vec::from(b"aoeusnth"),
+                    token: Some(Vec::from(b"aoeusnth")),
                     data: GetPeersResponseData::Peers(
                         [
                             SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
@@ -855,7 +851,7 @@ mod tests {
             data: MessageData::Response(
                 GetPeersResponse {
                     id: U160::from(b"abcdefghij0123456789"),
-                    token: Vec::from(b"aoeusnth"),
+                    token: None,
                     data: GetPeersResponseData::Nodes(
                         [
                             (
@@ -876,7 +872,7 @@ mod tests {
         let bencoded = benc::Element::from(msg);
         assert_eq!(
             bencoded.to_bytes(),
-            b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x615:token8:aoeusnthe1:t2:aa1:y1:re"
+            b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x61e1:t2:aa1:y1:re"
         );
     }
 
@@ -889,7 +885,7 @@ mod tests {
         if let MessageData::Response(msg) = msg.data {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
             assert_eq!(get_peers_response.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(get_peers_response.token, Vec::from(b"aoeusnth"));
+            assert_eq!(get_peers_response.token, Some(Vec::from(b"aoeusnth")));
             if let GetPeersResponseData::Peers(peers) = get_peers_response.data {
                 assert_eq!(
                     peers,
@@ -905,14 +901,14 @@ mod tests {
             panic!("unexpected message type");
         }
 
-        let bencoded = benc::Element::from_bytes(b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x615:token8:aoeusnthe1:t2:aa1:y1:re").unwrap();
+        let bencoded = benc::Element::from_bytes(b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x61e1:t2:aa1:y1:re").unwrap();
         let msg = Message::try_from(bencoded).unwrap();
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
             assert_eq!(get_peers_response.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(get_peers_response.token, Vec::from(b"aoeusnth"));
+            assert_eq!(get_peers_response.token, None);
             if let GetPeersResponseData::Nodes(nodes) = get_peers_response.data {
                 assert_eq!(
                     nodes,

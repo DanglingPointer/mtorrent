@@ -169,7 +169,7 @@ fn respond_to_incoming_query(
             };
             get_peers.respond(GetPeersResponse {
                 id: rt.local_id().clone(),
-                token,
+                token: Some(token),
                 data: response_data,
             })
         }

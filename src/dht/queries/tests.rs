@@ -159,7 +159,7 @@ fn test_outgoing_get_peers_success() {
                 data: MessageData::Response(
                     GetPeersResponse {
                         id: [3u8; 20].into(),
-                        token: vec![4u8; 2],
+                        token: Some(vec![4u8; 2]),
                         data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(
                             Ipv4Addr::LOCALHOST,
                             1234,
@@ -175,7 +175,7 @@ fn test_outgoing_get_peers_success() {
     let get_peers_result = assert_ready!(get_peers_fut.poll());
     let get_peers_response = get_peers_result.unwrap();
     assert_eq!(get_peers_response.id, [3u8; 20].into());
-    assert_eq!(get_peers_response.token, vec![4u8; 2]);
+    assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
     assert!(
         matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
             Ipv4Addr::LOCALHOST,
@@ -811,7 +811,7 @@ fn test_incoming_get_peers_success() {
     incoming_get_peers
         .respond(GetPeersResponse {
             id: [3u8; 20].into(),
-            token: vec![4u8; 2],
+            token: Some(vec![4u8; 2]),
             data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)]),
         })
         .unwrap();
@@ -824,7 +824,7 @@ fn test_incoming_get_peers_success() {
         _ => panic!("outgoing message is not a response"),
     };
     assert_eq!(get_peers_response.id, [3u8; 20].into());
-    assert_eq!(get_peers_response.token, vec![4u8; 2]);
+    assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
     assert!(
         matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
             Ipv4Addr::LOCALHOST,
