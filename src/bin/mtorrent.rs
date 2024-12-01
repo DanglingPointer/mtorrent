@@ -5,8 +5,7 @@ use mtorrent::{app, info_stopwatch};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Fast and robust BitTorrent client in Rust
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     /// Magnet link or path to a .torrent file

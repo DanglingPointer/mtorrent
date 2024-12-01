@@ -1,10 +1,23 @@
+use clap::Parser;
 use mtorrent::{app, dht};
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::time::Duration;
+
+#[derive(Parser)]
+#[command(version, about = "Standalone DHT node")]
+struct Args {
+    /// Addresses of initial nodes used for bootstrapping
+    nodes: Vec<String>,
+
+    /// Shut down after the specified period of time
+    #[arg(short, long, value_name = "SECONDS")]
+    duration: Option<u64>,
+}
 
 /// Example usage:
 /// ```
-/// ./target/release/dht_node "router.bittorrent.com:6881" "dht.transmissionbt.com:6881"
+/// ./target/release/dht_node "router.bittorrent.com:6881" "dht.transmissionbt.com:6881" --duration=72
 /// ```
 fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -15,7 +28,11 @@ fn main() -> io::Result<()> {
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
 
-    let nodes: Vec<SocketAddr> = std::env::args()
+    let args = Args::parse();
+
+    let nodes: Vec<SocketAddr> = args
+        .nodes
+        .into_iter()
         .filter_map(|arg| arg.to_socket_addrs().ok())
         .flatten()
         .filter(SocketAddr::is_ipv4)
@@ -25,6 +42,11 @@ fn main() -> io::Result<()> {
 
     for node in nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
+    }
+
+    if let Some(timeout) = args.duration {
+        std::thread::sleep(Duration::from_secs(timeout));
+        drop(cmds);
     }
 
     Ok(())
