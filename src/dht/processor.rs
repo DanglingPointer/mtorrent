@@ -5,14 +5,16 @@ use super::peers::TokenManager;
 use super::queries::{self, IncomingQuery};
 use super::u160::U160;
 use crate::dht::peers::PeerTable;
-use crate::min;
 use crate::utils::local_sync::SharedHandle;
 use crate::utils::shared::Shared;
+use crate::{debug_stopwatch, min};
 use futures::StreamExt;
 use std::io;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::time::Duration;
-use tokio::{select, task};
+use tokio::sync::Notify;
+use tokio::{select, task, time};
 
 macro_rules! define {
     ($name:ident, $handle:expr) => {
@@ -36,6 +38,7 @@ pub struct Processor {
     ctx: SharedHandle<SharedCtx>,
     token_mgr: TokenManager,
     client: queries::Client,
+    shutdown_notify: Rc<Notify>,
 }
 
 impl Processor {
@@ -47,6 +50,7 @@ impl Processor {
             }),
             token_mgr: TokenManager::new(),
             client,
+            shutdown_notify: Rc::new(Notify::const_new()),
         }
     }
 
@@ -56,14 +60,16 @@ impl Processor {
                 biased;
                 cmd = commands.next() => match cmd {
                     Some(cmd) => self.handle_command(cmd),
-                    None => return,
+                    None => break,
                 },
                 query = queries.0.next() => match query {
                     Some(query) => self.handle_query(query),
-                    None => return,
+                    None => break,
                 },
             }
         }
+        self.shutdown_notify.notify_waiters();
+        log::debug!("Processor shutting down");
     }
 
     fn handle_query(&mut self, query: IncomingQuery) {
@@ -73,11 +79,7 @@ impl Processor {
             .nodes
             .submit_query_from_known_node(query.node_id(), query.source_addr()));
         if !existing_node {
-            task::spawn_local(periodic_ping(
-                self.ctx.project(|ctx| &mut ctx.nodes),
-                self.client.clone(),
-                *query.source_addr(),
-            ));
+            self.spawn_periodic_ping(*query.source_addr());
         }
         with_ctx!(|ctx| respond_to_incoming_query(
             &ctx.nodes,
@@ -93,11 +95,7 @@ impl Processor {
         match cmd {
             Command::AddNode { addr } => {
                 if with_ctx!(|ctx| ctx.nodes.get_node_by_ip(&addr).is_none()) {
-                    task::spawn_local(periodic_ping(
-                        self.ctx.project(|ctx| &mut ctx.nodes),
-                        self.client.clone(),
-                        addr,
-                    ));
+                    self.spawn_periodic_ping(addr);
                 }
             }
             Command::FindPeers {
@@ -117,6 +115,19 @@ impl Processor {
                 }
             }
         }
+    }
+
+    fn spawn_periodic_ping(&self, node_addr: SocketAddr) {
+        let shutdown_signal = self.shutdown_notify.clone();
+        let ping_task =
+            periodic_ping(self.ctx.project(|ctx| &mut ctx.nodes), self.client.clone(), node_addr);
+        task::spawn_local(async move {
+            select! {
+                biased;
+                _ = ping_task => (),
+                _ = shutdown_signal.notified() => (),
+            }
+        });
     }
 }
 
@@ -220,7 +231,8 @@ async fn periodic_ping(
     debug_assert!(!with_rt!(|rt| rt.submit_response_from_known_node(&id, &addr)));
 
     if with_rt!(|rt| rt.add_responding_node(&id, &addr)) {
-        tokio::time::sleep(PING_INTERVAL).await;
+        log::debug!("Periodic ping of {addr} starting");
+        let _sw = debug_stopwatch!("Periodic ping of {addr}");
 
         while let Some(last_active) =
             with_rt!(|rt| rt.get_node_by_id(&id).and_then(Node::last_active_time))
@@ -244,7 +256,7 @@ async fn periodic_ping(
                     break;
                 }
             } else {
-                tokio::time::sleep(PING_INTERVAL - time_since_last_activity).await;
+                time::sleep(PING_INTERVAL - time_since_last_activity).await;
             }
         }
     }
