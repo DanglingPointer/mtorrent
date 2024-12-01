@@ -16,13 +16,17 @@ use std::future::pending;
 use std::marker::PhantomData;
 use std::mem;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use tokio::select;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::time::{sleep_until, Instant};
 
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
-pub struct Client(local_sync::channel::Sender<OutgoingQuery>);
+pub struct Client {
+    channel: local_sync::channel::Sender<OutgoingQuery>,
+    query_slots: Rc<Semaphore>,
+}
 
 #[allow(dead_code)]
 impl Client {
@@ -67,9 +71,10 @@ impl Client {
         Q: Into<QueryMsg> + Debug,
         R: TryFrom<ResponseMsg, Error = Error> + Debug,
     {
+        let _slot = self.query_slots.acquire().await;
         let (tx, rx) = local_sync::oneshot();
         log::debug!("[{dst_addr}] <= {args:?}");
-        self.0.send(OutgoingQuery {
+        self.channel.send(OutgoingQuery {
             query: args.into(),
             destination_addr: dst_addr,
             response_sink: tx,
@@ -135,16 +140,25 @@ impl Runner {
 pub fn setup_routing(
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
+    max_concurrent_queries: Option<usize>,
 ) -> (Client, Server, Runner) {
     let (outgoing_queries_sink, outgoing_queries_source) = local_sync::channel();
     let (incoming_queries_sink, incoming_queries_source) = local_sync::channel();
+    let max_in_flight = max_concurrent_queries.unwrap_or(0);
 
-    let actor = Runner {
+    let runner = Runner {
         queries: QueryManager::new(outgoing_msgs_sink, incoming_queries_sink),
         outgoing_queries_source,
         incoming_msgs_source,
     };
-    (Client(outgoing_queries_sink), Server(incoming_queries_source), actor)
+    let client = Client {
+        channel: outgoing_queries_sink,
+        query_slots: Rc::new(Semaphore::const_new(max_in_flight)),
+    };
+    if max_in_flight == 0 {
+        client.query_slots.close();
+    }
+    (client, Server(incoming_queries_source), runner)
 }
 
 // ------------------------------------------------------------------------------------------------

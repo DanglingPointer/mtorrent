@@ -38,7 +38,7 @@ fn main() -> io::Result<()> {
         .filter(SocketAddr::is_ipv4)
         .collect();
 
-    let (_worker, cmds) = app::dht::launch_node_runtime(6881);
+    let (_worker, cmds) = app::dht::launch_node_runtime(6881, Some(100));
 
     for node in nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();

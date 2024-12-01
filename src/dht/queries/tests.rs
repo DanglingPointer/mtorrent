@@ -20,6 +20,13 @@ fn tid(num: u8) -> Vec<u8> {
     vec![0u8, 0u8, 0u8, num]
 }
 
+fn setup_routing(
+    outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
+    incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
+) -> (Client, Server, Runner) {
+    super::setup_routing(outgoing_msgs_sink, incoming_msgs_source, None)
+}
+
 #[test]
 fn test_outgoing_ping_success() {
     let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
@@ -636,6 +643,69 @@ fn test_outgoing_ping_error_response() {
     } else {
         panic!("unexpected error type");
     }
+}
+
+#[test]
+fn test_outgoing_queries_limit_is_respected() {
+    let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
+    let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
+
+    // given: max 1 outstanding query
+    let (client, _server, runner) =
+        super::setup_routing(outgoing_msgs_sink, incoming_msgs_source, Some(1));
+    let mut runner_fut = spawn(runner.run());
+
+    // when: first outgoing ping sent out
+    let mut ping1_fut = spawn(client.ping(
+        IP,
+        PingArgs {
+            id: [1u8; 20].into(),
+        },
+    ));
+    assert_pending!(ping1_fut.poll());
+    assert_pending!(runner_fut.poll());
+    let (outgoing_ping1, _) = outgoing_msgs_source.try_recv().unwrap();
+    assert!(matches!(outgoing_ping1.data, MessageData::Query(QueryMsg::Ping(_))));
+
+    // then: second outgoing ping held back
+    let mut ping2_fut = spawn(client.ping(
+        IP,
+        PingArgs {
+            id: [1u8; 20].into(),
+        },
+    ));
+    assert_pending!(ping2_fut.poll());
+    assert_pending!(runner_fut.poll());
+    assert!(outgoing_msgs_source.try_recv().is_err());
+
+    // when: first ping response received
+    incoming_msgs_sink
+        .try_send((
+            Message {
+                transaction_id: outgoing_ping1.transaction_id,
+                version: None,
+                data: MessageData::Response(
+                    PingResponse {
+                        id: [2u8; 20].into(),
+                    }
+                    .into(),
+                ),
+            },
+            IP,
+        ))
+        .unwrap();
+    assert_pending!(runner_fut.poll());
+    let ping_result = assert_ready!(ping1_fut.poll());
+    let ping_response = ping_result.unwrap();
+    assert_eq!(ping_response.id, [2u8; 20].into());
+
+    // then: second ping sent out
+    assert!(ping2_fut.is_woken());
+    assert_pending!(ping2_fut.poll());
+    assert!(runner_fut.is_woken());
+    assert_pending!(runner_fut.poll());
+    let (outgoing_ping2, _) = outgoing_msgs_source.try_recv().unwrap();
+    assert!(matches!(outgoing_ping2.data, MessageData::Query(QueryMsg::Ping(_))));
 }
 
 #[test]

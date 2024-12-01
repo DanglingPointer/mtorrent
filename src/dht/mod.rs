@@ -8,6 +8,7 @@ mod queries;
 mod u160;
 mod udp;
 
+pub use cmds::Server as CmdServer;
 pub use cmds::{setup_cmds, Command};
 pub use msgs::Message;
 pub use processor::Processor;
