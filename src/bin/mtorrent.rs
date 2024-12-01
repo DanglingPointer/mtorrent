@@ -1,8 +1,25 @@
+use clap::Parser;
 use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::worker;
 use mtorrent::{app, info_stopwatch};
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// Fast and robust BitTorrent client in Rust
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Magnet link or path to a .torrent file
+    metainfo_uri: String,
+
+    /// Output folder
+    #[arg(short, long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
+    /// Disable UPnP
+    #[arg(short, long)]
+    no_upnp: bool,
+}
 
 fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -17,22 +34,22 @@ fn main() -> io::Result<()> {
 
     let _sw = info_stopwatch!("mtorrent");
 
-    let mut args = std::env::args();
+    let cli = Cli::parse();
 
-    let metainfo_uri = args
-        .nth(1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "metainfo uri not specified"))?;
-
-    let output_dir = if let Some(arg) = args.next() {
-        PathBuf::from(arg)
-    } else if Path::new(&metainfo_uri).is_file() {
-        if let Some(parent) = Path::new(&metainfo_uri).parent() {
-            parent.into()
+    let output_dir = if let Some(cli_arg) = cli.output {
+        cli_arg
+    } else {
+        let metainfo_filepath = Path::new(&cli.metainfo_uri);
+        let parent_folder = if metainfo_filepath.is_file() {
+            metainfo_filepath.parent()
+        } else {
+            None
+        };
+        if let Some(parent_folder) = parent_folder {
+            parent_folder.into()
         } else {
             std::env::current_dir()?
         }
-    } else {
-        std::env::current_dir()?
     };
 
     let storage_worker = worker::with_runtime(worker::rt::Config {
@@ -54,11 +71,11 @@ fn main() -> io::Result<()> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(
         app::main::single_torrent(
             peer_id,
-            &metainfo_uri,
+            &cli.metainfo_uri,
             output_dir,
             pwp_worker.runtime_handle(),
             storage_worker.runtime_handle(),
-            !args.next().is_some_and(|arg| arg == "--no-upnp"),
+            !cli.no_upnp,
         ),
     )?;
 

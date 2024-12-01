@@ -515,6 +515,7 @@ async fn test_download_and_upload_multifile_torrent() {
 
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
+            .arg("-o")
             .arg(output_dir)
             .arg("--no-upnp")
             .spawn()
@@ -547,6 +548,7 @@ async fn test_download_and_upload_multifile_torrent() {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
             process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
                 .arg(metainfo_file)
+                .arg("-o")
                 .arg(output_dir)
                 .arg("--no-upnp")
                 .spawn()
@@ -575,6 +577,7 @@ async fn test_download_and_upload_multifile_torrent() {
 
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
+            .arg("-o")
             .arg(data_dir)
             .arg("--no-upnp")
             .spawn()
@@ -607,6 +610,7 @@ async fn test_download_and_upload_monofile_torrent() {
 
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
+            .arg("-o")
             .arg(output_dir)
             .arg("--no-upnp")
             .spawn()
@@ -639,6 +643,7 @@ async fn test_download_and_upload_monofile_torrent() {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
             process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
                 .arg(metainfo_file)
+                .arg("-o")
                 .arg(output_dir)
                 .arg("--no-upnp")
                 .spawn()
@@ -667,6 +672,7 @@ async fn test_download_and_upload_monofile_torrent() {
 
         let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
             .arg(metainfo_file)
+            .arg("-o")
             .arg(data_dir)
             .arg("--no-upnp")
             .spawn()
