@@ -17,7 +17,7 @@ struct Cli {
     output: Option<PathBuf>,
 
     /// Disable UPnP
-    #[arg(short, long)]
+    #[arg(long)]
     no_upnp: bool,
 }
 
