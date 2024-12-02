@@ -1,7 +1,7 @@
 use super::ctrl;
 use crate::pwp::Bitfield;
 use crate::sec;
-use crate::utils::local_sync::SharedHandle;
+use crate::utils::local_sync::LocalShared;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{config, magnet, metainfo};
 use crate::{data, pwp};
@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::{fs, io, mem};
 use tokio::time;
 
-pub type Handle<C> = SharedHandle<C>;
+pub type Handle<C> = LocalShared<C>;
 
 macro_rules! define_with_ctx {
     ($handle:expr) => {

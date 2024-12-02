@@ -10,4 +10,4 @@ pub use condvar::condvar;
 pub use oneshot::oneshot;
 #[allow(unused_imports)]
 pub use semaphore::semaphore;
-pub use shared::SharedHandle;
+pub use shared::LocalShared;

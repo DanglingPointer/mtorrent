@@ -5,7 +5,7 @@ use super::peers::TokenManager;
 use super::queries::{self, IncomingQuery};
 use super::u160::U160;
 use crate::dht::peers::PeerTable;
-use crate::utils::local_sync::SharedHandle;
+use crate::utils::local_sync::LocalShared;
 use crate::utils::shared::Shared;
 use crate::{debug_stopwatch, min};
 use futures::StreamExt;
@@ -35,7 +35,7 @@ struct SharedCtx {
 }
 
 pub struct Processor {
-    ctx: SharedHandle<SharedCtx>,
+    ctx: LocalShared<SharedCtx>,
     token_mgr: TokenManager,
     client: queries::Client,
     shutdown_notify: Rc<Notify>,
@@ -44,7 +44,7 @@ pub struct Processor {
 impl Processor {
     pub fn new(local_id: U160, client: queries::Client) -> Self {
         Self {
-            ctx: SharedHandle::new(SharedCtx {
+            ctx: LocalShared::new(SharedCtx {
                 nodes: RoutingTable::new(local_id),
                 peers: PeerTable::new(),
             }),
@@ -210,7 +210,7 @@ fn respond_to_incoming_query(
 }
 
 async fn periodic_ping(
-    mut rt: impl Shared<RoutingTable>,
+    mut rt: impl Shared<Target = RoutingTable>,
     client: queries::Client,
     addr: SocketAddr,
 ) -> io::Result<()> {
