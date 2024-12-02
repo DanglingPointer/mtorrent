@@ -1,7 +1,8 @@
 use crate::ops;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{ip, local_sync, magnet, startup, upnp};
+use crate::utils::{ip, magnet, startup, upnp};
 use futures::StreamExt;
+use local_async_utils::local_sync;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;

@@ -1,6 +1,7 @@
 use futures::future;
+use local_async_utils::sec;
 use mtorrent::utils::{self, benc, startup};
-use mtorrent::{data, pwp, sec};
+use mtorrent::{data, pwp};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;

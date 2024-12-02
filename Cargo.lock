@@ -900,6 +900,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
+name = "local_async_utils"
+version = "0.1.0"
+source = "git+https://github.com/DanglingPointer/local_async_utils.git?tag=v0.1.0#6a054b262d5121e8f79894216075877c769f7bc5"
+dependencies = [
+ "futures",
+ "log",
+ "tokio",
+]
+
+[[package]]
 name = "log"
 version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -949,6 +959,7 @@ dependencies = [
  "futures",
  "igd-next",
  "ipconfig",
+ "local_async_utils",
  "log",
  "rand",
  "reqwest",

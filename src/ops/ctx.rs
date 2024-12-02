@@ -1,11 +1,11 @@
 use super::ctrl;
 use crate::pwp::Bitfield;
-use crate::sec;
-use crate::utils::local_sync::LocalShared;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{config, magnet, metainfo};
 use crate::{data, pwp};
 use core::fmt;
+use local_async_utils::local_sync::LocalShared;
+use local_async_utils::sec;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -19,7 +19,7 @@ macro_rules! define_with_ctx {
     ($handle:expr) => {
         macro_rules! with_ctx {
             ($f:expr) => {{
-                use crate::utils::shared::Shared;
+                use local_async_utils::shared::Shared;
                 $handle.with(
                     #[inline(always)]
                     $f,

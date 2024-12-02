@@ -1,8 +1,8 @@
 use super::super::ctx;
 use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, LOCAL_REQQ};
-use crate::utils::local_sync;
-use crate::utils::shared::Shared;
-use crate::{data, pwp, sec};
+use crate::{data, pwp};
+use local_async_utils::shared::Shared;
+use local_async_utils::{local_sync, sec};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::{cmp, io};

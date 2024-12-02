@@ -132,7 +132,7 @@ pub fn with_runtime(config: rt::Config) -> rt::Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sec;
+    use local_async_utils::sec;
     use std::time::Instant;
 
     #[test]

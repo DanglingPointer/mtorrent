@@ -1,5 +1,5 @@
 use super::u160::U160;
-use crate::min;
+use local_async_utils::min;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;

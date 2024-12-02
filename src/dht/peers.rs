@@ -1,5 +1,5 @@
 use super::u160::U160;
-use crate::min;
+use local_async_utils::min;
 use sha1_smol::Sha1;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
@@ -112,7 +112,7 @@ fn hashed_socketaddr(addr: &SocketAddr) -> [u8; 20] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sec;
+    use local_async_utils::sec;
     use std::net::Ipv4Addr;
     use tokio::time;
 

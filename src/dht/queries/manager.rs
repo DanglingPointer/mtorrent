@@ -1,8 +1,8 @@
 use super::IncomingQuery;
 use crate::dht::error::Error;
 use crate::dht::msgs::*;
-use crate::millisec;
-use crate::utils::local_sync;
+use local_async_utils::local_sync;
+use local_async_utils::millisec;
 use std::cmp::Ordering;
 use std::collections::binary_heap::PeekMut;
 use std::collections::hash_map::Entry;

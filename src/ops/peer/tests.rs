@@ -1,10 +1,9 @@
 use super::testutils::*;
 use crate::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use crate::utils::peer_id::PeerId;
-use crate::utils::shared::Shared;
-use crate::utils::{local_sync, startup};
-use crate::{millisec, min, msgs};
-use crate::{ops::ctx, pwp, sec};
+use crate::utils::startup;
+use crate::{msgs, ops::ctx, pwp};
+use local_async_utils::{local_sync, millisec, min, sec, shared::Shared};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;

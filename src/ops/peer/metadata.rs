@@ -1,7 +1,7 @@
 use super::super::ctx;
 use super::CLIENT_NAME;
-use crate::utils::shared::Shared;
-use crate::{pwp, sec};
+use crate::pwp;
+use local_async_utils::{sec, shared::Shared};
 use std::{cmp, io};
 use tokio::time::Instant;
 

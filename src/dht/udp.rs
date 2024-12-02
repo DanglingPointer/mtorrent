@@ -159,7 +159,7 @@ impl<'s> Future for Egress<'s> {
 mod tests {
     use super::*;
     use crate::dht::msgs::*;
-    use crate::sec;
+    use local_async_utils::sec;
     use std::iter;
     use tokio::{task, time::timeout};
 

@@ -1,9 +1,9 @@
 use crate::data;
 use crate::utils::peer_id::PeerId;
-use crate::utils::shared::Shared;
-use crate::utils::{local_sync, magnet, startup};
+use crate::utils::{magnet, startup};
 use crate::{ops::ctx, pwp};
 use futures::future::LocalBoxFuture;
+use local_async_utils::{local_sync, shared::Shared};
 use std::fmt::Debug;
 use std::io::Read;
 use std::net::SocketAddr;

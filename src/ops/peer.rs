@@ -13,8 +13,8 @@ pub use tcp::run_listener as run_pwp_listener;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
-use crate::utils::local_sync;
-use crate::{data, pwp, sec};
+use crate::{data, pwp};
+use local_async_utils::{local_sync, sec};
 use std::io;
 use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};

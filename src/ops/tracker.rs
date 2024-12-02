@@ -6,11 +6,11 @@ mod utils;
 mod tests;
 
 use super::ctx;
-use crate::sec;
+use crate::utils::config;
 use crate::utils::peer_id::PeerId;
-use crate::utils::shared::Shared;
-use crate::utils::{config, local_sync};
 use futures::{future, Future, FutureExt, TryFutureExt};
+use local_async_utils::sec;
+use local_async_utils::{local_sync, shared::Shared};
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;

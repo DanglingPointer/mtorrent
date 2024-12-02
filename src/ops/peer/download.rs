@@ -1,8 +1,8 @@
 use crate::ops::{ctrl, ctx};
-use crate::utils::shared::Shared;
-use crate::utils::{bandwidth, local_sync, sealed};
-use crate::{data, debug_stopwatch, min, pwp, sec, trace_stopwatch};
+use crate::utils::bandwidth;
+use crate::{data, debug_stopwatch, pwp, trace_stopwatch};
 use futures::prelude::*;
+use local_async_utils::{local_sync, min, sealed, sec, shared::Shared};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;

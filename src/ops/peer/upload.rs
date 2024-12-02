@@ -1,9 +1,9 @@
 use super::super::ctx;
 use super::LOCAL_REQQ;
-use crate::utils::shared::Shared;
-use crate::utils::{bandwidth, local_sync};
+use crate::utils::bandwidth;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
+use local_async_utils::{local_sync, shared::Shared};
 use std::io;
 use std::time::Duration;
 use tokio::sync::broadcast;

@@ -1,6 +1,6 @@
 use crate::pwp;
 use crate::utils::peer_id::PeerId;
-use crate::{min, sec};
+use local_async_utils::{min, sec};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{cmp, io};
 use tokio::net::{TcpSocket, TcpStream};

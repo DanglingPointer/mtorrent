@@ -1,6 +1,6 @@
 use super::utils;
-use crate::sec;
 use core::fmt;
+use local_async_utils::sec;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::{error, io, str};
