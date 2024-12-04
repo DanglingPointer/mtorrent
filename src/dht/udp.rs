@@ -138,15 +138,17 @@ impl<'s> Future for Egress<'s> {
                     }
                 },
                 Some((data, dest_addr)) => {
-                    let bytes_sent = ready!(socket.poll_send_to(cx, data, *dest_addr))
-                        .inspect_err(|e| {
-                            log::error!("Failed to send UDP packet to {dest_addr}: {e}")
-                        })?;
-                    if bytes_sent != data.len() {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            format!("Failed to send all bytes ({}/{})", bytes_sent, data.len()),
-                        )));
+                    let data_len = data.len();
+                    match ready!(socket.poll_send_to(cx, data, *dest_addr)) {
+                        Err(e) => {
+                            log::error!("Failed to send UDP packet to {dest_addr}: {e}");
+                        }
+                        Ok(bytes_sent) if bytes_sent != data_len => {
+                            log::error!(
+                                "Could only send {bytes_sent}/{data_len} bytes to {dest_addr}"
+                            );
+                        }
+                        Ok(_) => (),
                     }
                     *pending = None;
                 }
@@ -284,13 +286,13 @@ mod tests {
 
     #[tokio::test]
     async fn successful_send_after_failed_send() {
-        let non_existent_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7781);
+        let non_local_addr: SocketAddr = "212.129.33.59:6881".parse().unwrap();
         let sender_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7782);
         let receiver_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7783);
 
         let receiver_sock = UdpSocket::bind(receiver_addr).await.unwrap();
 
-        let socket = create_ipv4_socket(sender_addr.port()).await.unwrap();
+        let socket = UdpSocket::bind(sender_addr).await.unwrap();
         let (tx_channel, _rx_channel, runner) = setup_udp(socket);
         task::spawn(runner.run());
 
@@ -305,7 +307,7 @@ mod tests {
                         error_msg: "A Generic Error Ocurred".to_owned(),
                     }),
                 },
-                non_existent_addr.into(),
+                non_local_addr,
             ))
             .await
             .unwrap();
