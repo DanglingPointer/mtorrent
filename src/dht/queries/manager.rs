@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-pub struct OutgoingQuery {
+pub(super) struct OutgoingQuery {
     pub(super) query: QueryMsg,
     pub(super) destination_addr: SocketAddr,
     pub(super) response_sink: local_sync::oneshot::Sender<Result<ResponseMsg, Error>>,
