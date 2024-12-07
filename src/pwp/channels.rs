@@ -89,32 +89,6 @@ pub trait ConnectionRunner: Future<Output = io::Result<()>> + Send + 'static {}
 
 impl<T> ConnectionRunner for T where T: Future<Output = io::Result<()>> + Send + 'static {}
 
-async fn run_connection<I, E>(
-    mut receiver: IngressStream<I>,
-    mut sender: EgressStream<E>,
-) -> io::Result<()>
-where
-    I: AsyncReadExt + Unpin + Send,
-    E: AsyncWriteExt + Unpin + Send,
-{
-    let read_fut = async move {
-        loop {
-            if let Err(e) = receiver.read_one_message().await {
-                return io::Result::<()>::Err(e);
-            }
-        }
-    };
-    let write_fut = async move {
-        loop {
-            if let Err(e) = sender.write_one_message().await {
-                return io::Result::<()>::Err(e);
-            }
-        }
-    };
-    try_join!(read_fut, write_fut)?;
-    Ok(())
-}
-
 // ------
 
 const HANDSHAKE_TIMEOUT: Duration = sec!(10);
@@ -203,7 +177,6 @@ fn setup_channels<S>(
 where
     S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
-    let (ingress, egress) = tokio::io::split(stream);
     let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
     let info = Rc::new(PeerInfo {
@@ -245,6 +218,8 @@ where
             (None, None, None)
         };
 
+    let (ingress, egress) = tokio::io::split(stream);
+
     let receiver = IngressStream {
         source: BufReader::with_capacity(BUFFER_SIZE, ingress),
         remote_ip,
@@ -282,7 +257,7 @@ where
         DownloadChannels(download_tx, download_rx),
         UploadChannels(upload_tx, upload_rx),
         extended_channels,
-        run_connection(receiver, sender),
+        async move { try_join!(receiver.read_messages(), sender.write_messages()).map(|_| ()) },
     )
 }
 
@@ -297,46 +272,44 @@ struct IngressStream<S: AsyncReadExt + Unpin> {
 impl<S: AsyncReadExt + Unpin> IngressStream<S> {
     const RECV_TIMEOUT: Duration = sec!(120);
 
-    async fn read_one_message(&mut self) -> io::Result<()> {
-        macro_rules! forward_msg {
-            ($msg:expr, $sink:expr) => {{
-                log::trace!("{} => {}", self.remote_ip, $msg);
-                $sink
-                    .send($msg)
-                    .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))
-            }};
-        }
-
-        timeout(Self::RECV_TIMEOUT, self.source.fill_buf()).await??;
-        let received = PeerMessage::read_from(&mut self.source).await?;
-
-        let received = match UploaderMessage::try_from(received) {
-            Ok(msg) => {
-                return forward_msg!(msg, self.ul_msg_sink);
+    async fn read_messages(mut self) -> io::Result<()> {
+        loop {
+            macro_rules! forward_and_continue {
+                ($msg:expr, $sink:expr) => {{
+                    log::trace!("{} => {}", self.remote_ip, $msg);
+                    $sink
+                        .send($msg)
+                        .await
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
+                    continue;
+                }};
             }
-            Err(received) => received,
-        };
-        let received = match DownloaderMessage::try_from(received) {
-            Ok(msg) => {
-                return forward_msg!(msg, self.dl_msg_sink);
-            }
-            Err(received) => received,
-        };
-        let received = if let Some(ext_msg_sink) = &mut self.ext_msg_sink {
-            match ExtendedMessage::try_from(received) {
-                Ok(msg) => return forward_msg!(msg, ext_msg_sink),
+
+            timeout(Self::RECV_TIMEOUT, self.source.fill_buf()).await??;
+            let received = PeerMessage::read_from(&mut self.source).await?;
+
+            let received = match UploaderMessage::try_from(received) {
+                Ok(msg) => forward_and_continue!(msg, self.ul_msg_sink),
                 Err(received) => received,
+            };
+            let received = match DownloaderMessage::try_from(received) {
+                Ok(msg) => forward_and_continue!(msg, self.dl_msg_sink),
+                Err(received) => received,
+            };
+            let received = if let Some(ext_msg_sink) = &mut self.ext_msg_sink {
+                match ExtendedMessage::try_from(received) {
+                    Ok(msg) => forward_and_continue!(msg, ext_msg_sink),
+                    Err(received) => received,
+                }
+            } else {
+                received
+            };
+            if matches!(received, PeerMessage::KeepAlive) {
+                log::trace!("{} => {:?}", self.remote_ip, received);
+            } else {
+                log::error!("{} => unknown message: {:?}", self.remote_ip, received)
             }
-        } else {
-            received
-        };
-        if matches!(received, PeerMessage::KeepAlive) {
-            log::trace!("{} => {:?}", self.remote_ip, received);
-        } else {
-            log::error!("{} => unknown message: {:?}", self.remote_ip, received)
         }
-        Ok(())
     }
 }
 
@@ -351,7 +324,7 @@ struct EgressStream<S: AsyncWriteExt + Unpin> {
 impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
     const PING_INTERVAL: Duration = sec!(30);
 
-    async fn write_one_message(&mut self) -> io::Result<()> {
+    async fn write_messages(mut self) -> io::Result<()> {
         fn new_channel_closed_error() -> io::Error {
             io::Error::new(io::ErrorKind::Other, "Channel closed")
         }
@@ -367,35 +340,36 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
             };
         }
 
-        let next_ext_msg_fut = async {
-            if let Some(ext_src) = &mut self.ext_msg_source {
-                ext_src.next().await
-            } else {
-                future::pending().await
-            }
-        };
+        loop {
+            let next_ext_msg_fut = async {
+                if let Some(ext_src) = &mut self.ext_msg_source {
+                    ext_src.next().await
+                } else {
+                    future::pending().await
+                }
+            };
 
-        select! {
-            biased;
-            dl_msg = self.dl_msg_source.next() => {
-                let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, &mut self.dl_msg_source);
-            }
-            ext_msg = next_ext_msg_fut => {
-                let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
-            }
-            ul_msg = self.ul_msg_source.next() => {
-                let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
-                process_msg!(msg, &mut self.ul_msg_source);
-            }
-            _ = sleep(Self::PING_INTERVAL) => {
-                let ping_msg = PeerMessage::KeepAlive;
-                log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
-                ping_msg.write_to(&mut self.sink).await?;
-            }
-        };
-        Ok(())
+            select! {
+                biased;
+                dl_msg = self.dl_msg_source.next() => {
+                    let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
+                    process_msg!(msg, &mut self.dl_msg_source);
+                }
+                ext_msg = next_ext_msg_fut => {
+                    let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
+                    process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
+                }
+                ul_msg = self.ul_msg_source.next() => {
+                    let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
+                    process_msg!(msg, &mut self.ul_msg_source);
+                }
+                _ = sleep(Self::PING_INTERVAL) => {
+                    let ping_msg = PeerMessage::KeepAlive;
+                    log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
+                    ping_msg.write_to(&mut self.sink).await?;
+                }
+            };
+        }
     }
 }
 
