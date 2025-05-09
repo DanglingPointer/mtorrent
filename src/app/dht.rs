@@ -10,7 +10,7 @@ pub fn launch_node_runtime(
     let worker_handle = worker::without_runtime(
         worker::simple::Config {
             name: "dht".to_owned(),
-            ..Default::default()
+            stack_size: 512 * 1024,
         },
         move || {
             runtime::Builder::new_current_thread()

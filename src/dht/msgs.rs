@@ -582,7 +582,7 @@ fn serialize_nodes(nodes: impl ExactSizeIterator<Item = (U160, SocketAddrV4)>) -
     let mut buffer = vec![0u8; nodes.len() * 26];
     for ((id, addr), dst) in iter::zip(nodes, buffer.chunks_exact_mut(26)) {
         unsafe {
-            dst.get_unchecked_mut(0..20).copy_from_slice(id.as_ref());
+            dst.get_unchecked_mut(0..20).copy_from_slice(id.0.as_raw_slice());
             dst.get_unchecked_mut(20..24).copy_from_slice(&addr.ip().octets());
             dst.get_unchecked_mut(24..26).copy_from_slice(&addr.port().to_be_bytes());
         }
@@ -647,7 +647,7 @@ mod tests {
             transaction_id: Vec::from(b"aa"),
             version: None,
             data: MessageData::Query(QueryMsg::Ping(PingArgs {
-                id: U160::from(b"abcdefghij0123456789"),
+                id: U160::from(*b"abcdefghij0123456789"),
             })),
         };
         let bencoded = benc::Element::from(msg);
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Query(QueryMsg::Ping(ping)) = msg.data {
-            assert_eq!(ping.id, U160::from(b"abcdefghij0123456789"));
+            assert_eq!(ping.id, U160::from(*b"abcdefghij0123456789"));
         } else {
             panic!("unexpected message type");
         }
@@ -679,7 +679,7 @@ mod tests {
             version: None,
             data: MessageData::Response(
                 PingResponse {
-                    id: U160::from(b"mnopqrstuvwxyz123456"),
+                    id: U160::from(*b"mnopqrstuvwxyz123456"),
                 }
                 .into(),
             ),
@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let ping_response = PingResponse::try_from(msg).unwrap();
-            assert_eq!(ping_response.id, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(ping_response.id, U160::from(*b"mnopqrstuvwxyz123456"));
         } else {
             panic!("unexpected message type");
         }
@@ -709,8 +709,8 @@ mod tests {
             transaction_id: Vec::from(b"aa"),
             version: None,
             data: MessageData::Query(QueryMsg::FindNode(FindNodeArgs {
-                id: U160::from(b"abcdefghij0123456789"),
-                target: U160::from(b"mnopqrstuvwxyz123456"),
+                id: U160::from(*b"abcdefghij0123456789"),
+                target: U160::from(*b"mnopqrstuvwxyz123456"),
             })),
         };
         let bencoded = benc::Element::from(msg);
@@ -730,8 +730,8 @@ mod tests {
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Query(QueryMsg::FindNode(find_node)) = msg.data {
-            assert_eq!(find_node.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(find_node.target, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(find_node.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(find_node.target, U160::from(*b"mnopqrstuvwxyz123456"));
         } else {
             panic!("unexpected message type");
         }
@@ -744,9 +744,9 @@ mod tests {
             version: None,
             data: MessageData::Response(
                 FindNodeResponse {
-                    id: b"0123456789abcdefghij".into(),
+                    id: U160::from(*b"0123456789abcdefghij"),
                     nodes: [(
-                        U160::from(b"mnopqrstuvwxyz123456"),
+                        U160::from(*b"mnopqrstuvwxyz123456"),
                         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
                     )]
                     .into(),
@@ -772,11 +772,11 @@ mod tests {
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let find_node_response = FindNodeResponse::try_from(msg).unwrap();
-            assert_eq!(find_node_response.id, U160::from(b"0123456789abcdefghij"));
+            assert_eq!(find_node_response.id, U160::from(*b"0123456789abcdefghij"));
             assert_eq!(
                 find_node_response.nodes,
                 vec![(
-                    U160::from(b"mnopqrstuvwxyz123456"),
+                    U160::from(*b"mnopqrstuvwxyz123456"),
                     SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)
                 )]
             );
@@ -791,8 +791,8 @@ mod tests {
             transaction_id: Vec::from(b"aa"),
             version: None,
             data: MessageData::Query(QueryMsg::GetPeers(GetPeersArgs {
-                id: U160::from(b"abcdefghij0123456789"),
-                info_hash: U160::from(b"mnopqrstuvwxyz123456"),
+                id: U160::from(*b"abcdefghij0123456789"),
+                info_hash: U160::from(*b"mnopqrstuvwxyz123456"),
             })),
         };
         let bencoded = benc::Element::from(msg);
@@ -812,8 +812,8 @@ mod tests {
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Query(QueryMsg::GetPeers(get_peers)) = msg.data {
-            assert_eq!(get_peers.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(get_peers.info_hash, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(get_peers.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(get_peers.info_hash, U160::from(*b"mnopqrstuvwxyz123456"));
         } else {
             panic!("unexpected message type");
         }
@@ -826,7 +826,7 @@ mod tests {
             version: None,
             data: MessageData::Response(
                 GetPeersResponse {
-                    id: U160::from(b"abcdefghij0123456789"),
+                    id: U160::from(*b"abcdefghij0123456789"),
                     token: Some(Vec::from(b"aoeusnth")),
                     data: GetPeersResponseData::Peers(
                         [
@@ -850,16 +850,16 @@ mod tests {
             version: None,
             data: MessageData::Response(
                 GetPeersResponse {
-                    id: U160::from(b"abcdefghij0123456789"),
+                    id: U160::from(*b"abcdefghij0123456789"),
                     token: None,
                     data: GetPeersResponseData::Nodes(
                         [
                             (
-                                b"abcdefghij0123456789".into(),
+                                U160::from(*b"abcdefghij0123456789"),
                                 SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
                             ),
                             (
-                                b"mnopqrstuvwxyz123456".into(),
+                                U160::from(*b"mnopqrstuvwxyz123456"),
                                 SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
                             ),
                         ]
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
-            assert_eq!(get_peers_response.id, U160::from(b"abcdefghij0123456789"));
+            assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
             assert_eq!(get_peers_response.token, Some(Vec::from(b"aoeusnth")));
             if let GetPeersResponseData::Peers(peers) = get_peers_response.data {
                 assert_eq!(
@@ -907,18 +907,18 @@ mod tests {
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
-            assert_eq!(get_peers_response.id, U160::from(b"abcdefghij0123456789"));
+            assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
             assert_eq!(get_peers_response.token, None);
             if let GetPeersResponseData::Nodes(nodes) = get_peers_response.data {
                 assert_eq!(
                     nodes,
                     vec![
                         (
-                            U160::from(b"abcdefghij0123456789"),
+                            U160::from(*b"abcdefghij0123456789"),
                             SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)
                         ),
                         (
-                            U160::from(b"mnopqrstuvwxyz123456"),
+                            U160::from(*b"mnopqrstuvwxyz123456"),
                             SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
                         ),
                     ]
@@ -937,8 +937,8 @@ mod tests {
             transaction_id: Vec::from(b"aa"),
             version: None,
             data: MessageData::Query(QueryMsg::AnnouncePeer(AnnouncePeerArgs {
-                id: U160::from(b"abcdefghij0123456789"),
-                info_hash: U160::from(b"mnopqrstuvwxyz123456"),
+                id: U160::from(*b"abcdefghij0123456789"),
+                info_hash: U160::from(*b"mnopqrstuvwxyz123456"),
                 port: Some(6881),
                 token: Vec::from(b"aoeusnth"),
             })),
@@ -953,8 +953,8 @@ mod tests {
             transaction_id: Vec::from(b"aa"),
             version: None,
             data: MessageData::Query(QueryMsg::AnnouncePeer(AnnouncePeerArgs {
-                id: U160::from(b"abcdefghij0123456789"),
-                info_hash: U160::from(b"mnopqrstuvwxyz123456"),
+                id: U160::from(*b"abcdefghij0123456789"),
+                info_hash: U160::from(*b"mnopqrstuvwxyz123456"),
                 port: None,
                 token: Vec::from(b"aoeusnth"),
             })),
@@ -976,8 +976,8 @@ mod tests {
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Query(QueryMsg::AnnouncePeer(announce_peer)) = msg.data {
-            assert_eq!(announce_peer.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(announce_peer.info_hash, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(announce_peer.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(announce_peer.info_hash, U160::from(*b"mnopqrstuvwxyz123456"));
             assert_eq!(announce_peer.port, Some(6881));
             assert_eq!(announce_peer.token, Vec::from(b"aoeusnth"));
         } else {
@@ -992,8 +992,8 @@ mod tests {
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
         if let MessageData::Query(QueryMsg::AnnouncePeer(announce_peer)) = msg.data {
-            assert_eq!(announce_peer.id, U160::from(b"abcdefghij0123456789"));
-            assert_eq!(announce_peer.info_hash, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(announce_peer.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(announce_peer.info_hash, U160::from(*b"mnopqrstuvwxyz123456"));
             assert_eq!(announce_peer.port, None);
             assert_eq!(announce_peer.token, Vec::from(b"aoeusnth"));
         } else {
@@ -1008,7 +1008,7 @@ mod tests {
             version: None,
             data: MessageData::Response(
                 AnnouncePeerResponse {
-                    id: U160::from(b"mnopqrstuvwxyz123456"),
+                    id: U160::from(*b"mnopqrstuvwxyz123456"),
                 }
                 .into(),
             ),
@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(msg.version, None);
         if let MessageData::Response(msg) = msg.data {
             let announce_peer_response = AnnouncePeerResponse::try_from(msg).unwrap();
-            assert_eq!(announce_peer_response.id, U160::from(b"mnopqrstuvwxyz123456"));
+            assert_eq!(announce_peer_response.id, U160::from(*b"mnopqrstuvwxyz123456"));
         } else {
             panic!("unexpected message type");
         }

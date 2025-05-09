@@ -1,6 +1,6 @@
 use super::cmds::{self, Command};
+use super::kademlia;
 use super::msgs::*;
-use super::nodes::{Node, RoutingTable};
 use super::peers::TokenManager;
 use super::queries::{self, IncomingQuery};
 use super::u160::U160;
@@ -10,11 +10,13 @@ use futures::StreamExt;
 use local_async_utils::local_sync::LocalShared;
 use local_async_utils::min;
 use local_async_utils::shared::Shared;
+use std::collections::{hash_map, HashMap};
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::sync::Notify;
+use tokio::time::Instant;
 use tokio::{select, task, time};
 
 macro_rules! define {
@@ -30,9 +32,13 @@ macro_rules! define {
     };
 }
 
+type RoutingTable = kademlia::RoutingTable<8>;
+type ActivityTable = HashMap<SocketAddr, Instant>;
+
 struct SharedCtx {
     nodes: RoutingTable,
     peers: PeerTable,
+    last_rx_time: ActivityTable,
 }
 
 pub struct Processor {
@@ -48,6 +54,7 @@ impl Processor {
             ctx: LocalShared::new(SharedCtx {
                 nodes: RoutingTable::new(local_id),
                 peers: PeerTable::new(),
+                last_rx_time: Default::default(),
             }),
             token_mgr: TokenManager::new(),
             client,
@@ -75,19 +82,19 @@ impl Processor {
 
     fn handle_query(&mut self, query: IncomingQuery) {
         define!(with_ctx, self.ctx);
+        let addr = *query.source_addr();
 
-        let existing_node = with_ctx!(|ctx| ctx
-            .nodes
-            .submit_query_from_known_node(query.node_id(), query.source_addr()));
+        let existing_node = with_ctx!(|ctx| {
+            let last_rx_time_entry = ctx.last_rx_time.entry(addr).and_modify(|last_active| {
+                *last_active = Instant::now();
+            });
+            respond_to_incoming_query(&ctx.nodes, &mut ctx.peers, &mut self.token_mgr, query);
+            matches!(last_rx_time_entry, hash_map::Entry::Occupied(_))
+        });
+
         if !existing_node {
-            self.spawn_periodic_ping(*query.source_addr());
+            self.spawn_periodic_ping(addr);
         }
-        with_ctx!(|ctx| respond_to_incoming_query(
-            &ctx.nodes,
-            &mut ctx.peers,
-            &mut self.token_mgr,
-            query
-        ));
     }
 
     fn handle_command(&mut self, cmd: Command) {
@@ -95,7 +102,7 @@ impl Processor {
 
         match cmd {
             Command::AddNode { addr } => {
-                if with_ctx!(|ctx| ctx.nodes.get_node_by_ip(&addr).is_none()) {
+                if !with_ctx!(|ctx| ctx.last_rx_time.contains_key(&addr)) {
                     self.spawn_periodic_ping(addr);
                 }
             }
@@ -120,8 +127,12 @@ impl Processor {
 
     fn spawn_periodic_ping(&self, node_addr: SocketAddr) {
         let shutdown_signal = self.shutdown_notify.clone();
-        let ping_task =
-            periodic_ping(self.ctx.project(|ctx| &mut ctx.nodes), self.client.clone(), node_addr);
+        let ping_task = periodic_ping(
+            self.ctx.project(|ctx| &mut ctx.nodes),
+            self.ctx.project(|ctx| &mut ctx.last_rx_time),
+            self.client.clone(),
+            node_addr,
+        );
         task::spawn_local(async move {
             select! {
                 biased;
@@ -139,24 +150,21 @@ fn respond_to_incoming_query(
     query: IncomingQuery,
 ) {
     let result = match query {
-        IncomingQuery::Ping(ping) => ping.respond(PingResponse {
-            id: rt.local_id().clone(),
-        }),
+        IncomingQuery::Ping(ping) => ping.respond(PingResponse { id: *rt.local_id() }),
         IncomingQuery::FindNode(find_node) => {
             let mut nodes: Vec<_> = rt
-                .closest_nodes(&find_node.args().target)
-                .filter_map(|node| match node.addr() {
-                    SocketAddr::V4(socket_addr_v4) => Some((node.id().clone(), *socket_addr_v4)),
+                .closest_bucket(&find_node.args().target)
+                .filter_map(|node| match node.addr {
+                    SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
                     SocketAddr::V6(_) => None,
                 })
-                .take(8)
                 .collect();
             if nodes.first().is_some_and(|(id, _)| id == &find_node.args().target) {
                 // exact match
                 nodes.truncate(1);
             }
             find_node.respond(FindNodeResponse {
-                id: rt.local_id().clone(),
+                id: *rt.local_id(),
                 nodes,
             })
         }
@@ -168,19 +176,16 @@ fn respond_to_incoming_query(
                 GetPeersResponseData::Peers(peer_addrs)
             } else {
                 GetPeersResponseData::Nodes(
-                    rt.closest_nodes(&get_peers.args().info_hash)
-                        .filter_map(|node| match node.addr() {
-                            SocketAddr::V4(socket_addr_v4) => {
-                                Some((node.id().clone(), *socket_addr_v4))
-                            }
+                    rt.closest_bucket(&get_peers.args().info_hash)
+                        .filter_map(|node| match node.addr {
+                            SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
                             SocketAddr::V6(_) => None,
                         })
-                        .take(8)
                         .collect(),
                 )
             };
             get_peers.respond(GetPeersResponse {
-                id: rt.local_id().clone(),
+                id: *rt.local_id(),
                 token: Some(token),
                 data: response_data,
             })
@@ -199,9 +204,7 @@ fn respond_to_incoming_query(
                     peer_addr.set_port(port);
                 }
                 peers.add_record(&announce_peer.args().info_hash, peer_addr);
-                announce_peer.respond(AnnouncePeerResponse {
-                    id: rt.local_id().clone(),
-                })
+                announce_peer.respond(AnnouncePeerResponse { id: *rt.local_id() })
             }
         }
     };
@@ -212,11 +215,13 @@ fn respond_to_incoming_query(
 
 async fn periodic_ping(
     mut rt: impl Shared<Target = RoutingTable>,
+    mut at: impl Shared<Target = ActivityTable>,
     client: queries::Client,
     addr: SocketAddr,
 ) -> io::Result<()> {
     const PING_INTERVAL: Duration = min!(1);
     define!(with_rt, rt);
+    define!(with_at, at);
 
     macro_rules! send_ping {
         () => {
@@ -228,37 +233,49 @@ async fn periodic_ping(
             )
         };
     }
+
+    if with_at!(|last_rx| last_rx.contains_key(&addr)) {
+        // already pinginig this node
+        return Ok(());
+    }
+
+    // ping node and see if it replies
     let mut id = send_ping!().await?.id;
-    debug_assert!(!with_rt!(|rt| rt.submit_response_from_known_node(&id, &addr)));
 
-    if with_rt!(|rt| rt.add_responding_node(&id, &addr)) {
-        log::debug!("Periodic ping of {addr} starting");
-        let _sw = debug_stopwatch!("Periodic ping of {addr}");
+    if !with_rt!(|routing| routing.insert_node(&id, &addr)) {
+        // no capacity in the routing table
+        return Ok(());
+    }
 
-        while let Some(last_active) =
-            with_rt!(|rt| rt.get_node_by_id(&id).and_then(Node::last_active_time))
-        {
-            let time_since_last_activity = last_active.elapsed();
+    with_at!(|last_rx| last_rx.insert(addr, Instant::now()));
 
-            if time_since_last_activity >= PING_INTERVAL {
-                let response =
-                    send_ping!().await.inspect_err(|_e| with_rt!(|rt| rt.remove_node(&id)))?;
-
-                let submitted = with_rt!(|rt| if response.id != id {
-                    log::warn!("Node id of {} changed: {:?} -> {:?}", addr, id, response.id);
-                    rt.remove_node(&id);
-                    id = response.id;
-                    rt.add_responding_node(&id, &addr)
-                } else {
-                    rt.submit_response_from_known_node(&id, &addr)
+    log::debug!("Periodic ping of {addr} starting");
+    let _sw = debug_stopwatch!("Periodic ping of {addr}");
+    while let Some(last_active) = with_at!(|last_rx| last_rx.get(&addr).cloned()) {
+        let time_since_last_activity = last_active.elapsed();
+        if time_since_last_activity >= PING_INTERVAL {
+            // send periodic ping
+            let response = send_ping!().await.inspect_err(|_e| {
+                with_rt!(|routing| routing.remove_node(&id));
+                with_at!(|last_rx| last_rx.remove(&addr));
+            })?;
+            // handle change of id
+            if response.id != id {
+                let inserted_new_id = with_rt!(|routing| {
+                    routing.remove_node(&id);
+                    routing.insert_node(&response.id, &addr)
                 });
-
-                if !submitted {
+                if !inserted_new_id {
+                    with_at!(|last_rx| last_rx.remove(&addr));
                     break;
                 }
-            } else {
-                time::sleep(PING_INTERVAL - time_since_last_activity).await;
+                id = response.id;
             }
+            // update last rx time
+            with_at!(|last_rx| last_rx.insert(addr, Instant::now()));
+        } else {
+            // sleep until next ping time
+            time::sleep(PING_INTERVAL - time_since_last_activity).await;
         }
     }
     Ok(())

@@ -114,13 +114,13 @@ impl QueryManager {
     }
 
     pub async fn handle_one_outgoing(&mut self, query: OutgoingQuery) -> Result<(), Error> {
+        assert!((self.outstanding_queries.len() as u32) < u32::MAX, "infinite loop");
         let tid = loop {
             let tid = self.next_tid;
             self.next_tid = tid.wrapping_add(1);
             if !self.outstanding_queries.contains_key(&tid) {
                 break tid;
             }
-            assert!((self.outstanding_queries.len() as u32) < u32::MAX, "infinite loop");
         };
 
         let msg = Message {

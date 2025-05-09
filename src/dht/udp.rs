@@ -160,7 +160,7 @@ impl<'s> Future for Egress<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dht::msgs::*;
+    use crate::dht::{msgs::*, U160};
     use local_async_utils::sec;
     use std::iter;
     use tokio::{task, time::timeout};
@@ -200,7 +200,7 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [12u8; 20].into());
+        assert_eq!(ping.id, U160::from([12u8; 20]));
     }
 
     #[tokio::test]
@@ -248,7 +248,7 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [12u8; 20].into());
+        assert_eq!(ping.id, U160::from([12u8; 20]));
     }
 
     #[tokio::test]
@@ -370,7 +370,7 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [12u8; 20].into());
+        assert_eq!(ping.id, U160::from([12u8; 20]));
 
         let sent_msg = Message {
             transaction_id: vec![5, 6, 7, 8],
@@ -394,7 +394,7 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [13u8; 20].into());
+        assert_eq!(ping.id, U160::from([13u8; 20]));
     }
 
     #[tokio::test]
@@ -507,7 +507,7 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [12u8; 20].into());
+        assert_eq!(ping.id, U160::from([12u8; 20]));
 
         let last_msg = Message {
             transaction_id: vec![9, 0],
@@ -532,6 +532,6 @@ mod tests {
             MessageData::Query(QueryMsg::Ping(ping)) => ping,
             _ => panic!("Expected a ping query"),
         };
-        assert_eq!(ping.id, [14u8; 20].into());
+        assert_eq!(ping.id, U160::from([14u8; 20]));
     }
 }

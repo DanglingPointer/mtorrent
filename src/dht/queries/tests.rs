@@ -37,7 +37,7 @@ fn test_outgoing_ping_success() {
     let mut ping_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping_fut.poll());
@@ -47,7 +47,7 @@ fn test_outgoing_ping_success() {
     assert_eq!(outgoing_ping.transaction_id, tid(1));
     assert_eq!(outgoing_ping.version, None);
     if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
-        assert_eq!(args.id, [1u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -59,7 +59,7 @@ fn test_outgoing_ping_success() {
                 version: None,
                 data: MessageData::Response(
                     PingResponse {
-                        id: [2u8; 20].into(),
+                        id: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -72,7 +72,7 @@ fn test_outgoing_ping_success() {
     assert!(ping_fut.is_woken());
     let ping_result = assert_ready!(ping_fut.poll());
     let ping_response = ping_result.unwrap();
-    assert_eq!(ping_response.id, [2u8; 20].into());
+    assert_eq!(ping_response.id, U160::from([2u8; 20]));
 }
 
 #[test]
@@ -85,8 +85,8 @@ fn test_outgoing_find_node_success() {
     let mut find_node_fut = spawn(client.find_node(
         IP,
         FindNodeArgs {
-            id: [1u8; 20].into(),
-            target: [2u8; 20].into(),
+            id: U160::from([1u8; 20]),
+            target: U160::from([2u8; 20]),
         },
     ));
     assert_pending!(find_node_fut.poll());
@@ -96,8 +96,8 @@ fn test_outgoing_find_node_success() {
     assert_eq!(outgoing_find_node.transaction_id, tid(1));
     assert_eq!(outgoing_find_node.version, None);
     if let MessageData::Query(QueryMsg::FindNode(args)) = outgoing_find_node.data {
-        assert_eq!(args.id, [1u8; 20].into());
-        assert_eq!(args.target, [2u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
+        assert_eq!(args.target, U160::from([2u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -109,7 +109,7 @@ fn test_outgoing_find_node_success() {
                 version: None,
                 data: MessageData::Response(
                     FindNodeResponse {
-                        id: [3u8; 20].into(),
+                        id: U160::from([3u8; 20]),
                         nodes: vec![(
                             [4u8; 20].into(),
                             SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234),
@@ -124,7 +124,7 @@ fn test_outgoing_find_node_success() {
     assert_pending!(runner_fut.poll());
     let find_node_result = assert_ready!(find_node_fut.poll());
     let find_node_response = find_node_result.unwrap();
-    assert_eq!(find_node_response.id, [3u8; 20].into());
+    assert_eq!(find_node_response.id, U160::from([3u8; 20]));
     assert_eq!(
         find_node_response.nodes,
         vec![([4u8; 20].into(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234))]
@@ -141,8 +141,8 @@ fn test_outgoing_get_peers_success() {
     let mut get_peers_fut = spawn(client.get_peers(
         IP,
         GetPeersArgs {
-            id: [1u8; 20].into(),
-            info_hash: [2u8; 20].into(),
+            id: U160::from([1u8; 20]),
+            info_hash: U160::from([2u8; 20]),
         },
     ));
     assert_pending!(get_peers_fut.poll());
@@ -152,8 +152,8 @@ fn test_outgoing_get_peers_success() {
     assert_eq!(outgoing_get_peers.transaction_id, tid(1));
     assert_eq!(outgoing_get_peers.version, None);
     if let MessageData::Query(QueryMsg::GetPeers(args)) = outgoing_get_peers.data {
-        assert_eq!(args.id, [1u8; 20].into());
-        assert_eq!(args.info_hash, [2u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
+        assert_eq!(args.info_hash, U160::from([2u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -165,7 +165,7 @@ fn test_outgoing_get_peers_success() {
                 version: None,
                 data: MessageData::Response(
                     GetPeersResponse {
-                        id: [3u8; 20].into(),
+                        id: U160::from([3u8; 20]),
                         token: Some(vec![4u8; 2]),
                         data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(
                             Ipv4Addr::LOCALHOST,
@@ -181,7 +181,7 @@ fn test_outgoing_get_peers_success() {
     assert_pending!(runner_fut.poll());
     let get_peers_result = assert_ready!(get_peers_fut.poll());
     let get_peers_response = get_peers_result.unwrap();
-    assert_eq!(get_peers_response.id, [3u8; 20].into());
+    assert_eq!(get_peers_response.id, U160::from([3u8; 20]));
     assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
     assert!(
         matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
@@ -192,7 +192,7 @@ fn test_outgoing_get_peers_success() {
 }
 
 #[test]
-fn test_outgoing_annouce_peer_success() {
+fn test_outgoing_announce_peer_success() {
     let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
     let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
     let (client, _server, runner) = setup_routing(outgoing_msgs_sink, incoming_msgs_source);
@@ -201,8 +201,8 @@ fn test_outgoing_annouce_peer_success() {
     let mut announce_peer_fut = spawn(client.announce_peer(
         IP,
         AnnouncePeerArgs {
-            id: [1u8; 20].into(),
-            info_hash: [2u8; 20].into(),
+            id: U160::from([1u8; 20]),
+            info_hash: U160::from([2u8; 20]),
             port: Some(1234),
             token: vec![3u8; 2],
         },
@@ -214,8 +214,8 @@ fn test_outgoing_annouce_peer_success() {
     assert_eq!(outgoing_announce_peer.transaction_id, tid(1));
     assert_eq!(outgoing_announce_peer.version, None);
     if let MessageData::Query(QueryMsg::AnnouncePeer(args)) = outgoing_announce_peer.data {
-        assert_eq!(args.id, [1u8; 20].into());
-        assert_eq!(args.info_hash, [2u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
+        assert_eq!(args.info_hash, U160::from([2u8; 20]));
         assert_eq!(args.port, Some(1234));
         assert_eq!(args.token, vec![3u8; 2]);
     } else {
@@ -229,7 +229,7 @@ fn test_outgoing_annouce_peer_success() {
                 version: None,
                 data: MessageData::Response(
                     AnnouncePeerResponse {
-                        id: [3u8; 20].into(),
+                        id: U160::from([3u8; 20]),
                     }
                     .into(),
                 ),
@@ -240,7 +240,7 @@ fn test_outgoing_annouce_peer_success() {
     assert_pending!(runner_fut.poll());
     let announce_peer_result = assert_ready!(announce_peer_fut.poll());
     let announce_peer_response = announce_peer_result.unwrap();
-    assert_eq!(announce_peer_response.id, [3u8; 20].into());
+    assert_eq!(announce_peer_response.id, U160::from([3u8; 20]));
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     let mut ping_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping_fut.poll());
@@ -263,8 +263,8 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     let mut announce_peer_fut = spawn(client.announce_peer(
         IP,
         AnnouncePeerArgs {
-            id: [1u8; 20].into(),
-            info_hash: [2u8; 20].into(),
+            id: U160::from([1u8; 20]),
+            info_hash: U160::from([2u8; 20]),
             port: Some(1234),
             token: vec![3u8; 2],
         },
@@ -277,7 +277,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     assert_eq!(outgoing_ping.transaction_id, tid(1));
     assert_eq!(outgoing_ping.version, None);
     if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
-        assert_eq!(args.id, [1u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -288,8 +288,8 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     assert_eq!(outgoing_announce_peer.transaction_id, tid(2));
     assert_eq!(outgoing_announce_peer.version, None);
     if let MessageData::Query(QueryMsg::AnnouncePeer(args)) = outgoing_announce_peer.data {
-        assert_eq!(args.id, [1u8; 20].into());
-        assert_eq!(args.info_hash, [2u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
+        assert_eq!(args.info_hash, U160::from([2u8; 20]));
         assert_eq!(args.port, Some(1234));
         assert_eq!(args.token, vec![3u8; 2]);
     } else {
@@ -304,7 +304,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
                 version: None,
                 data: MessageData::Response(
                     AnnouncePeerResponse {
-                        id: [3u8; 20].into(),
+                        id: U160::from([3u8; 20]),
                     }
                     .into(),
                 ),
@@ -317,7 +317,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     assert_pending!(ping_fut.poll());
     let announce_peer_result = assert_ready!(announce_peer_fut.poll());
     let announce_peer_response = announce_peer_result.unwrap();
-    assert_eq!(announce_peer_response.id, [3u8; 20].into());
+    assert_eq!(announce_peer_response.id, U160::from([3u8; 20]));
 
     // respond to ping
     incoming_msgs_sink
@@ -327,7 +327,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
                 version: None,
                 data: MessageData::Response(
                     PingResponse {
-                        id: [2u8; 20].into(),
+                        id: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -339,7 +339,7 @@ fn test_concurrent_outgoing_queries_out_of_order() {
     assert_pending!(runner_fut.poll());
     let ping_result = assert_ready!(ping_fut.poll());
     let ping_response = ping_result.unwrap();
-    assert_eq!(ping_response.id, [2u8; 20].into());
+    assert_eq!(ping_response.id, U160::from([2u8; 20]));
 }
 
 #[tokio::test(start_paused = true)]
@@ -358,7 +358,7 @@ async fn test_outgoing_query_retransmissions() {
             let mut ping_fut = spawn(client.ping(
                 IP,
                 PingArgs {
-                    id: [1u8; 20].into(),
+                    id: U160::from([1u8; 20]),
                 },
             ));
             assert_pending!(ping_fut.poll());
@@ -447,7 +447,7 @@ async fn test_outgoing_simultaneous_retransmissions() {
             let mut ping_fut = spawn(client.ping(
                 IP,
                 PingArgs {
-                    id: [1u8; 20].into(),
+                    id: U160::from([1u8; 20]),
                 },
             ));
             assert_pending!(ping_fut.poll());
@@ -460,8 +460,8 @@ async fn test_outgoing_simultaneous_retransmissions() {
             let mut get_peers_fut = spawn(client.get_peers(
                 IP,
                 GetPeersArgs {
-                    id: [1u8; 20].into(),
-                    info_hash: [2u8; 20].into(),
+                    id: U160::from([1u8; 20]),
+                    info_hash: U160::from([2u8; 20]),
                 },
             ));
             assert_pending!(get_peers_fut.poll());
@@ -528,7 +528,7 @@ async fn test_outgoing_interleaved_retransmissions_and_timer_cleanup() {
             let mut ping_fut = spawn(client.ping(
                 IP,
                 PingArgs {
-                    id: [1u8; 20].into(),
+                    id: U160::from([1u8; 20]),
                 },
             ));
             assert_pending!(ping_fut.poll());
@@ -543,8 +543,8 @@ async fn test_outgoing_interleaved_retransmissions_and_timer_cleanup() {
             let mut get_peers_fut = spawn(client.get_peers(
                 IP,
                 GetPeersArgs {
-                    id: [1u8; 20].into(),
-                    info_hash: [2u8; 20].into(),
+                    id: U160::from([1u8; 20]),
+                    info_hash: U160::from([2u8; 20]),
                 },
             ));
             assert_pending!(get_peers_fut.poll());
@@ -577,7 +577,7 @@ async fn test_outgoing_interleaved_retransmissions_and_timer_cleanup() {
             yield_now().await;
             let ping_result = assert_ready!(ping_fut.poll());
             let ping_response = ping_result.unwrap();
-            assert_eq!(ping_response.id, [69u8; 20].into());
+            assert_eq!(ping_response.id, U160::from([69u8; 20]));
 
             // get_peers retransmission
             sleep(sec!(3)).await;
@@ -606,7 +606,7 @@ fn test_outgoing_ping_error_response() {
     let mut ping_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping_fut.poll());
@@ -616,7 +616,7 @@ fn test_outgoing_ping_error_response() {
     assert_eq!(outgoing_ping.transaction_id, tid(1));
     assert_eq!(outgoing_ping.version, None);
     if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
-        assert_eq!(args.id, [1u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -659,7 +659,7 @@ fn test_outgoing_queries_limit_is_respected() {
     let mut ping1_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping1_fut.poll());
@@ -671,7 +671,7 @@ fn test_outgoing_queries_limit_is_respected() {
     let mut ping2_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping2_fut.poll());
@@ -686,7 +686,7 @@ fn test_outgoing_queries_limit_is_respected() {
                 version: None,
                 data: MessageData::Response(
                     PingResponse {
-                        id: [2u8; 20].into(),
+                        id: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -697,7 +697,7 @@ fn test_outgoing_queries_limit_is_respected() {
     assert_pending!(runner_fut.poll());
     let ping_result = assert_ready!(ping1_fut.poll());
     let ping_response = ping_result.unwrap();
-    assert_eq!(ping_response.id, [2u8; 20].into());
+    assert_eq!(ping_response.id, U160::from([2u8; 20]));
 
     // then: second ping sent out
     assert!(ping2_fut.is_woken());
@@ -718,7 +718,7 @@ fn test_outgoing_ping_channel_error() {
     let mut ping_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping_fut.poll());
@@ -749,7 +749,7 @@ fn test_incoming_ping_success() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [1u8; 20].into(),
+                        id: U160::from([1u8; 20]),
                     }
                     .into(),
                 ),
@@ -764,12 +764,12 @@ fn test_incoming_ping_success() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [1u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([1u8; 20]));
     assert_eq!(incoming_ping.source_addr(), &IP);
 
     incoming_ping
         .respond(PingResponse {
-            id: [2u8; 20].into(),
+            id: U160::from([2u8; 20]),
         })
         .unwrap();
     assert_pending!(runner_fut.poll());
@@ -780,7 +780,7 @@ fn test_incoming_ping_success() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(ping_response.id, [2u8; 20].into());
+    assert_eq!(ping_response.id, U160::from([2u8; 20]));
 }
 
 #[test]
@@ -801,8 +801,8 @@ fn test_incoming_find_node_success() {
                 version: None,
                 data: MessageData::Query(
                     FindNodeArgs {
-                        id: [1u8; 20].into(),
-                        target: [2u8; 20].into(),
+                        id: U160::from([1u8; 20]),
+                        target: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -817,12 +817,12 @@ fn test_incoming_find_node_success() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_find_node.args().id, [1u8; 20].into());
-    assert_eq!(incoming_find_node.args().target, [2u8; 20].into());
+    assert_eq!(incoming_find_node.args().id, U160::from([1u8; 20]));
+    assert_eq!(incoming_find_node.args().target, U160::from([2u8; 20]));
 
     incoming_find_node
         .respond(FindNodeResponse {
-            id: [3u8; 20].into(),
+            id: U160::from([3u8; 20]),
             nodes: vec![([4u8; 20].into(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234))],
         })
         .unwrap();
@@ -834,7 +834,7 @@ fn test_incoming_find_node_success() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(find_node_response.id, [3u8; 20].into());
+    assert_eq!(find_node_response.id, U160::from([3u8; 20]));
     assert_eq!(
         find_node_response.nodes,
         vec![([4u8; 20].into(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234))]
@@ -859,8 +859,8 @@ fn test_incoming_get_peers_success() {
                 version: None,
                 data: MessageData::Query(
                     GetPeersArgs {
-                        id: [1u8; 20].into(),
-                        info_hash: [2u8; 20].into(),
+                        id: U160::from([1u8; 20]),
+                        info_hash: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -875,12 +875,12 @@ fn test_incoming_get_peers_success() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_get_peers.args().id, [1u8; 20].into());
-    assert_eq!(incoming_get_peers.args().info_hash, [2u8; 20].into());
+    assert_eq!(incoming_get_peers.args().id, U160::from([1u8; 20]));
+    assert_eq!(incoming_get_peers.args().info_hash, U160::from([2u8; 20]));
 
     incoming_get_peers
         .respond(GetPeersResponse {
-            id: [3u8; 20].into(),
+            id: U160::from([3u8; 20]),
             token: Some(vec![4u8; 2]),
             data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)]),
         })
@@ -893,7 +893,7 @@ fn test_incoming_get_peers_success() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(get_peers_response.id, [3u8; 20].into());
+    assert_eq!(get_peers_response.id, U160::from([3u8; 20]));
     assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
     assert!(
         matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
@@ -921,8 +921,8 @@ fn test_incoming_announce_peer_success() {
                 version: None,
                 data: MessageData::Query(
                     AnnouncePeerArgs {
-                        id: [1u8; 20].into(),
-                        info_hash: [2u8; 20].into(),
+                        id: U160::from([1u8; 20]),
+                        info_hash: U160::from([2u8; 20]),
                         port: Some(1234),
                         token: vec![3u8; 2],
                     }
@@ -939,8 +939,8 @@ fn test_incoming_announce_peer_success() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_announce_peer.args().id, [1u8; 20].into());
-    assert_eq!(incoming_announce_peer.args().info_hash, [2u8; 20].into());
+    assert_eq!(incoming_announce_peer.args().id, U160::from([1u8; 20]));
+    assert_eq!(incoming_announce_peer.args().info_hash, U160::from([2u8; 20]));
     assert_eq!(incoming_announce_peer.args().port, Some(1234));
     assert_eq!(incoming_announce_peer.args().token, vec![3u8; 2]);
 
@@ -957,7 +957,7 @@ fn test_incoming_announce_peer_success() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(announce_peer_response.id, [4u8; 20].into());
+    assert_eq!(announce_peer_response.id, U160::from([4u8; 20]));
 }
 
 #[test]
@@ -979,8 +979,8 @@ fn test_concurrent_incoming_queries_out_of_order() {
                 version: None,
                 data: MessageData::Query(
                     FindNodeArgs {
-                        id: [1u8; 20].into(),
-                        target: [2u8; 20].into(),
+                        id: U160::from([1u8; 20]),
+                        target: U160::from([2u8; 20]),
                     }
                     .into(),
                 ),
@@ -995,8 +995,8 @@ fn test_concurrent_incoming_queries_out_of_order() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_find_node.args().id, [1u8; 20].into());
-    assert_eq!(incoming_find_node.args().target, [2u8; 20].into());
+    assert_eq!(incoming_find_node.args().id, U160::from([1u8; 20]));
+    assert_eq!(incoming_find_node.args().target, U160::from([2u8; 20]));
 
     // incoming ping
     incoming_msgs_sink
@@ -1006,7 +1006,7 @@ fn test_concurrent_incoming_queries_out_of_order() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [3u8; 20].into(),
+                        id: U160::from([3u8; 20]),
                     }
                     .into(),
                 ),
@@ -1021,12 +1021,12 @@ fn test_concurrent_incoming_queries_out_of_order() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [3u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([3u8; 20]));
 
     // respond to ping
     incoming_ping
         .respond(PingResponse {
-            id: [2u8; 20].into(),
+            id: U160::from([2u8; 20]),
         })
         .unwrap();
     assert_pending!(runner_fut.poll());
@@ -1037,12 +1037,12 @@ fn test_concurrent_incoming_queries_out_of_order() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(ping_response.id, [2u8; 20].into());
+    assert_eq!(ping_response.id, U160::from([2u8; 20]));
 
     // respond to find node
     incoming_find_node
         .respond(FindNodeResponse {
-            id: [3u8; 20].into(),
+            id: U160::from([3u8; 20]),
             nodes: vec![],
         })
         .unwrap();
@@ -1054,7 +1054,7 @@ fn test_concurrent_incoming_queries_out_of_order() {
         MessageData::Response(response_msg) => response_msg.try_into().unwrap(),
         _ => panic!("outgoing message is not a response"),
     };
-    assert_eq!(find_node_response.id, [3u8; 20].into());
+    assert_eq!(find_node_response.id, U160::from([3u8; 20]));
     assert!(find_node_response.nodes.is_empty());
 }
 
@@ -1076,7 +1076,7 @@ fn test_incoming_ping_error_response() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [1u8; 20].into(),
+                        id: U160::from([1u8; 20]),
                     }
                     .into(),
                 ),
@@ -1091,7 +1091,7 @@ fn test_incoming_ping_error_response() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [1u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([1u8; 20]));
 
     incoming_ping
         .respond_error(ErrorMsg {
@@ -1129,7 +1129,7 @@ fn test_incoming_ping_error_response_when_dropped() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [1u8; 20].into(),
+                        id: U160::from([1u8; 20]),
                     }
                     .into(),
                 ),
@@ -1144,7 +1144,7 @@ fn test_incoming_ping_error_response_when_dropped() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [1u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([1u8; 20]));
 
     drop(incoming_ping);
     assert_pending!(runner_fut.poll());
@@ -1177,7 +1177,7 @@ fn test_incoming_ping_channel_error() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [1u8; 20].into(),
+                        id: U160::from([1u8; 20]),
                     }
                     .into(),
                 ),
@@ -1192,14 +1192,14 @@ fn test_incoming_ping_channel_error() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [1u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([1u8; 20]));
 
     drop(outgoing_msgs_source);
     drop(incoming_msgs_sink);
     assert_ready!(runner_fut.poll()).unwrap_err();
     let error = incoming_ping
         .respond(PingResponse {
-            id: [2u8; 20].into(),
+            id: U160::from([2u8; 20]),
         })
         .unwrap_err();
     assert!(matches!(error, Error::ChannelClosed));
@@ -1222,7 +1222,7 @@ fn test_router_prioritizes_outgoing_messages() {
                 version: None,
                 data: MessageData::Query(
                     PingArgs {
-                        id: [1u8; 20].into(),
+                        id: U160::from([1u8; 20]),
                     }
                     .into(),
                 ),
@@ -1236,7 +1236,7 @@ fn test_router_prioritizes_outgoing_messages() {
     let mut ping_fut = spawn(client.ping(
         IP,
         PingArgs {
-            id: [1u8; 20].into(),
+            id: U160::from([1u8; 20]),
         },
     ));
     assert_pending!(ping_fut.poll());
@@ -1249,7 +1249,7 @@ fn test_router_prioritizes_outgoing_messages() {
     assert_eq!(outgoing_ping.transaction_id, tid(1));
     assert_eq!(outgoing_ping.version, None);
     if let MessageData::Query(QueryMsg::Ping(args)) = outgoing_ping.data {
-        assert_eq!(args.id, [1u8; 20].into());
+        assert_eq!(args.id, U160::from([1u8; 20]));
     } else {
         panic!("outgoing message has incorrect type");
     }
@@ -1265,5 +1265,5 @@ fn test_router_prioritizes_outgoing_messages() {
         Some(_) => panic!("incoming message has wrong type"),
         None => panic!("channel closed"),
     };
-    assert_eq!(incoming_ping.args().id, [1u8; 20].into());
+    assert_eq!(incoming_ping.args().id, U160::from([1u8; 20]));
 }

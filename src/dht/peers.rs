@@ -19,7 +19,7 @@ impl PeerTable {
     }
 
     pub fn add_record(&mut self, info_hash: &U160, peer_addr: SocketAddr) {
-        self.info_hash_to_peers.entry(info_hash.clone()).or_default().insert(peer_addr);
+        self.info_hash_to_peers.entry(*info_hash).or_default().insert(peer_addr);
     }
 
     pub fn get_peers(&self, info_hash: &U160) -> Box<dyn Iterator<Item = &SocketAddr> + '_> {
