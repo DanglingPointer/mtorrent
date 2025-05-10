@@ -46,6 +46,10 @@ impl<const SIZE: usize> Bucket<SIZE> {
             .find(|slot| matches!(slot, Some(node) if &node.id == id))
             .and_then(|node| node.take())
     }
+
+    fn has_space(&self) -> bool {
+        self.nodes.iter().any(Option::is_none)
+    }
 }
 
 /// A fully pre-allocated Kademlia routing table as defined in https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf.
@@ -94,6 +98,15 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
             .and_then(|bucket_index| self.buckets[bucket_index].remove(id))
     }
 
+    pub fn can_insert(&self, id: &U160) -> bool {
+        let U160(distance) = *id ^ self.local_id;
+        if let Some(bucket_index) = distance.first_one() {
+            self.buckets[bucket_index].has_space()
+        } else {
+            false
+        }
+    }
+
     pub fn get_node(&self, id: &U160) -> Option<&Node> {
         let U160(distance) = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {
@@ -101,6 +114,10 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         } else {
             None
         }
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.buckets.iter().flat_map(Bucket::iter).count()
     }
 
     /// Return all nodes stored in the bucket closest to `target`, i.e. up to `BUCKET_SIZE` nodes.
@@ -129,7 +146,7 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    type RoutingTable = super::RoutingTable<8>;
+    type RoutingTable = super::RoutingTable<16>;
 
     #[test]
     fn test_dont_insert_same_id_twice() {
@@ -170,12 +187,14 @@ mod tests {
             assert!(rt.insert_node(&bucket_0_id(i as u8), &addr));
         }
         assert!(!rt.insert_node(&bucket_0_id(RoutingTable::BUCKET_SIZE as u8), &addr));
+        assert_eq!(rt.node_count(), RoutingTable::BUCKET_SIZE);
 
         // fill next furthest bucket
         for i in 0..RoutingTable::BUCKET_SIZE {
             assert!(rt.insert_node(&bucket_1_id(i as u8), &addr));
         }
         assert!(!rt.insert_node(&bucket_1_id(RoutingTable::BUCKET_SIZE as u8), &addr));
+        assert_eq!(rt.node_count(), RoutingTable::BUCKET_SIZE * 2);
 
         // verify all nodes are still there
         for i in 0..RoutingTable::BUCKET_SIZE {

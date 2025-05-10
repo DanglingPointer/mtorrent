@@ -24,11 +24,20 @@ struct Args {
 /// ./target/release/dht_node "router.bittorrent.com:6881" "dht.transmissionbt.com:6881" --duration=72
 /// ```
 fn main() -> io::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        let orig_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            orig_hook(panic_info);
+            std::process::exit(1);
+        }));
+    }
     simple_logger::SimpleLogger::new()
         .with_threads(false)
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::dht", log::LevelFilter::Trace)
-        .with_module_level("dht_node", log::LevelFilter::Trace)
+        .with_module_level("mtorrent::dht", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::app::dht", log::LevelFilter::Debug)
+        .with_module_level("dht_node", log::LevelFilter::Debug)
         .init()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
 

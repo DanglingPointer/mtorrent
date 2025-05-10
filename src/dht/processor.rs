@@ -32,7 +32,7 @@ macro_rules! define {
     };
 }
 
-type RoutingTable = kademlia::RoutingTable<8>;
+type RoutingTable = kademlia::RoutingTable<16>;
 type ActivityTable = HashMap<SocketAddr, Instant>;
 
 struct SharedCtx {
@@ -77,7 +77,10 @@ impl Processor {
             }
         }
         self.shutdown_notify.notify_waiters();
-        log::debug!("Processor shutting down");
+        log::debug!(
+            "Processor shutting down, node_count = {}",
+            self.ctx.with(|ctx| ctx.nodes.node_count())
+        );
     }
 
     fn handle_query(&mut self, query: IncomingQuery) {
@@ -93,7 +96,13 @@ impl Processor {
         });
 
         if !existing_node {
-            self.spawn_periodic_ping(addr);
+            spawn_periodic_ping(
+                self.ctx.project(|ctx| &mut ctx.nodes),
+                self.ctx.project(|ctx| &mut ctx.last_rx_time),
+                self.client.clone(),
+                addr,
+                self.shutdown_notify.clone(),
+            );
         }
     }
 
@@ -103,7 +112,13 @@ impl Processor {
         match cmd {
             Command::AddNode { addr } => {
                 if !with_ctx!(|ctx| ctx.last_rx_time.contains_key(&addr)) {
-                    self.spawn_periodic_ping(addr);
+                    spawn_periodic_ping(
+                        self.ctx.project(|ctx| &mut ctx.nodes),
+                        self.ctx.project(|ctx| &mut ctx.last_rx_time),
+                        self.client.clone(),
+                        addr,
+                        self.shutdown_notify.clone(),
+                    );
                 }
             }
             Command::FindPeers {
@@ -123,23 +138,6 @@ impl Processor {
                 }
             }
         }
-    }
-
-    fn spawn_periodic_ping(&self, node_addr: SocketAddr) {
-        let shutdown_signal = self.shutdown_notify.clone();
-        let ping_task = periodic_ping(
-            self.ctx.project(|ctx| &mut ctx.nodes),
-            self.ctx.project(|ctx| &mut ctx.last_rx_time),
-            self.client.clone(),
-            node_addr,
-        );
-        task::spawn_local(async move {
-            select! {
-                biased;
-                _ = ping_task => (),
-                _ = shutdown_signal.notified() => (),
-            }
-        });
     }
 }
 
@@ -213,35 +211,66 @@ fn respond_to_incoming_query(
     }
 }
 
+fn spawn_periodic_ping(
+    rt: impl Shared<Target = RoutingTable> + 'static,
+    at: impl Shared<Target = ActivityTable> + 'static,
+    client: queries::Client,
+    node_addr: SocketAddr,
+    shutdown_signal: Rc<Notify>,
+) {
+    let ping_task = periodic_ping(rt, at, client.clone(), node_addr, shutdown_signal.clone());
+    task::spawn_local(async move {
+        select! {
+            biased;
+            _ = ping_task => (),
+            _ = shutdown_signal.notified() => (),
+        }
+    });
+}
+
 async fn periodic_ping(
-    mut rt: impl Shared<Target = RoutingTable>,
-    mut at: impl Shared<Target = ActivityTable>,
+    mut rt: impl Shared<Target = RoutingTable> + 'static,
+    mut at: impl Shared<Target = ActivityTable> + 'static,
     client: queries::Client,
     addr: SocketAddr,
+    shutdown_signal: Rc<Notify>,
 ) -> io::Result<()> {
-    const PING_INTERVAL: Duration = min!(1);
+    const PING_INTERVAL: Duration = min!(5);
     define!(with_rt, rt);
     define!(with_at, at);
-
-    macro_rules! send_ping {
-        () => {
-            client.ping(
-                addr,
-                PingArgs {
-                    id: with_rt!(|rt| rt.local_id().clone()),
-                },
-            )
-        };
-    }
 
     if with_at!(|last_rx| last_rx.contains_key(&addr)) {
         // already pinginig this node
         return Ok(());
     }
 
-    // ping node and see if it replies
-    let mut id = send_ping!().await?.id;
+    let local_id = with_rt!(|rt| *rt.local_id());
 
+    // query nodes close to local ID
+    let mut response = client
+        .find_node(
+            addr,
+            FindNodeArgs {
+                id: local_id,
+                target: local_id,
+            },
+        )
+        .await?;
+
+    let mut id = response.id;
+
+    // process response
+    response.nodes.retain(|(node_id, addr)| {
+        *node_id != local_id
+            && *node_id != id
+            && with_at!(|last_rx| !last_rx.contains_key(&SocketAddr::V4(*addr)))
+            && with_rt!(|rt| rt.can_insert(node_id))
+    });
+    for addr in response.nodes.into_iter().map(|(_, addr)| SocketAddr::V4(addr)) {
+        spawn_periodic_ping(rt.clone(), at.clone(), client.clone(), addr, shutdown_signal.clone());
+    }
+
+    // check if we should ignore this node
     if !with_rt!(|routing| routing.insert_node(&id, &addr)) {
         // no capacity in the routing table
         return Ok(());
@@ -249,16 +278,21 @@ async fn periodic_ping(
 
     with_at!(|last_rx| last_rx.insert(addr, Instant::now()));
 
-    log::debug!("Periodic ping of {addr} starting");
+    log::info!(
+        "Periodic ping of {addr} starting; node_count = {}",
+        with_rt!(|routing| routing.node_count())
+    );
+
     let _sw = debug_stopwatch!("Periodic ping of {addr}");
     while let Some(last_active) = with_at!(|last_rx| last_rx.get(&addr).cloned()) {
         let time_since_last_activity = last_active.elapsed();
         if time_since_last_activity >= PING_INTERVAL {
             // send periodic ping
-            let response = send_ping!().await.inspect_err(|_e| {
-                with_rt!(|routing| routing.remove_node(&id));
-                with_at!(|last_rx| last_rx.remove(&addr));
-            })?;
+            let response =
+                client.ping(addr, PingArgs { id: local_id }).await.inspect_err(|_e| {
+                    with_rt!(|routing| routing.remove_node(&id));
+                    with_at!(|last_rx| last_rx.remove(&addr));
+                })?;
             // handle change of id
             if response.id != id {
                 let inserted_new_id = with_rt!(|routing| {
