@@ -13,6 +13,10 @@ struct Args {
     /// Shut down after the specified period of time
     #[arg(short, long, value_name = "SECONDS")]
     duration: Option<u64>,
+
+    /// Max simultaneous outstanding queries
+    #[arg(short, long)]
+    parallel_queries: Option<usize>,
 }
 
 /// Example usage:
@@ -38,7 +42,7 @@ fn main() -> io::Result<()> {
         .filter(SocketAddr::is_ipv4)
         .collect();
 
-    let (_worker, cmds) = app::dht::launch_node_runtime(6881, Some(100));
+    let (_worker, cmds) = app::dht::launch_node_runtime(6881, args.parallel_queries);
 
     for node in nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
