@@ -30,7 +30,7 @@ tokio = { version = "1.41.1", features = [
     "macros",
 ] }
 clap = { version = "4.5.21", features = ["derive"] }
-derive_more = { version = "1.0.0", features = ["from"] }
+derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
 local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.1.0", features = [
     "tokio-time",
 ] }

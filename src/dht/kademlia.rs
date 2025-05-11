@@ -1,14 +1,20 @@
 use super::U160;
 use bitvec::mem::bits_of;
+use derive_more::{Debug, Display};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::{array, cmp};
+use std::{array, cmp, fmt};
 
+#[derive(Display, Debug)]
+#[display("({id} {addr})")]
+#[debug("{self}")]
 pub struct Node {
     pub id: U160,
     pub addr: SocketAddr,
 }
 
+#[derive(Display)]
+#[display("{:?}", self.iter().collect::<Vec<_>>())]
 struct Bucket<const SIZE: usize> {
     nodes: [Option<Node>; SIZE],
 }
@@ -169,6 +175,24 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         }
 
         closest_nodes.into_iter()
+    }
+}
+
+impl<const BUCKET_SIZE: usize> fmt::Display for RoutingTable<BUCKET_SIZE> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "RoutingTable local_id={} node_count={}", self.local_id, self.node_count())?;
+        for (i, bucket) in self.buckets.iter().enumerate() {
+            writeln!(f, "bucket {i:>3}: {bucket}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<const BUCKET_SIZE: usize> Drop for RoutingTable<BUCKET_SIZE> {
+    fn drop(&mut self) {
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("{self}");
+        }
     }
 }
 

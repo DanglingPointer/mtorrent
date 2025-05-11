@@ -1,10 +1,12 @@
 use super::error::Error;
 use crate::utils::benc;
 use bitvec::prelude::*;
+use derive_more::Debug;
 use std::fmt;
 use std::ops::BitXor;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[debug("{self}")]
 pub struct U160(pub(super) BitArray<[u8; 20], Msb0>);
 
 impl From<[u8; 20]> for U160 {
@@ -13,7 +15,7 @@ impl From<[u8; 20]> for U160 {
     }
 }
 
-impl fmt::Debug for U160 {
+impl fmt::Display for U160 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.0.data {
             write!(f, "{byte:x?}")?;
