@@ -1,7 +1,7 @@
 use super::u160::U160;
 use local_async_utils::min;
 use sha1_smol::Sha1;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
@@ -38,33 +38,38 @@ impl PeerTable {
     }
 }
 
+struct Secret {
+    birthtime: Instant,
+    data: u32,
+}
+
 pub struct TokenManager {
-    secrets: BTreeMap<Instant, u32>,
+    usable_secret: Option<Secret>,
+    acceptable_secret: Option<Secret>,
 }
 
 impl TokenManager {
-    const SECRET_MAX_AGE: Duration = min!(5);
-    const SECRET_GOOD_AGE: Duration = min!(4);
+    const SECRET_MAX_USABLE_AGE: Duration = min!(5);
+    const SECRET_MAX_ACCEPTABLE_AGE: Duration = min!(10);
 
     pub fn new() -> Self {
         Self {
-            secrets: [(Instant::now(), rand::random())].into(),
+            usable_secret: None,
+            acceptable_secret: None,
         }
     }
 
     pub fn generate_token_for(&mut self, addr: &SocketAddr) -> Vec<u8> {
-        let secret = match self.secrets.last_entry() {
-            Some(entry) if entry.key().elapsed() <= Self::SECRET_GOOD_AGE => {
-                entry.get().to_be_bytes()
+        fn random_secret() -> Secret {
+            Secret {
+                birthtime: Instant::now(),
+                data: rand::random(),
             }
-            _ => {
-                self.remove_expired_secrets();
-                let new_secret: u32 = rand::random();
-                self.secrets.insert(Instant::now(), new_secret);
-                new_secret.to_be_bytes()
-            }
-        };
+        }
 
+        self.remove_expired_secrets();
+
+        let secret = self.usable_secret.get_or_insert_with(random_secret).data.to_be_bytes();
         let hashed_addr = hashed_socketaddr(addr);
 
         let mut token = Vec::with_capacity(size_of_val(&hashed_addr) + size_of_val(&secret));
@@ -74,6 +79,10 @@ impl TokenManager {
     }
 
     pub fn validate_token_from(&mut self, addr: &SocketAddr, token: &[u8]) -> bool {
+        fn secret_matches(known_secret: &Option<Secret>, secret: u32) -> bool {
+            known_secret.as_ref().is_some_and(|known| known.data == secret)
+        }
+
         // validate hash
         let secret = match token.split_last_chunk::<20>() {
             Some((secret, hashed_addr)) if hashed_addr == &hashed_socketaddr(addr) => secret,
@@ -83,18 +92,28 @@ impl TokenManager {
         // validate secret
         self.remove_expired_secrets();
         match secret.try_into().map(u32::from_be_bytes) {
-            Ok(secret) => self.secrets.values().any(|known_secret| known_secret == &secret),
+            Ok(secret) => {
+                secret_matches(&self.usable_secret, secret)
+                    || secret_matches(&self.acceptable_secret, secret)
+            }
             Err(_) => false,
         }
     }
 
     fn remove_expired_secrets(&mut self) {
-        while let Some(entry) = self.secrets.first_entry() {
-            if entry.key().elapsed() > Self::SECRET_MAX_AGE {
-                entry.remove();
-            } else {
-                break;
-            }
+        fn exceeded_age(secret: &Option<Secret>, max_age: Duration) -> bool {
+            secret.as_ref().is_some_and(|secret| secret.birthtime.elapsed() > max_age)
+        }
+
+        if exceeded_age(&self.usable_secret, Self::SECRET_MAX_USABLE_AGE) {
+            assert!(!self
+                .acceptable_secret
+                .as_ref()
+                .is_some_and(|s| s.birthtime.elapsed() <= Self::SECRET_MAX_ACCEPTABLE_AGE));
+            self.acceptable_secret = self.usable_secret.take();
+        }
+        if exceeded_age(&self.acceptable_secret, Self::SECRET_MAX_ACCEPTABLE_AGE) {
+            self.acceptable_secret = None;
         }
     }
 }
@@ -118,18 +137,30 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_token_validation() {
+        let start_time = Instant::now();
+
         let mut token_mgr = TokenManager::new();
         let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 12345);
 
         let token = token_mgr.generate_token_for(&addr);
         assert!(token_mgr.validate_token_from(&addr, &token));
+        assert!(token_mgr.usable_secret.is_some());
+        assert!(token_mgr.acceptable_secret.is_none());
 
-        time::sleep(TokenManager::SECRET_MAX_AGE).await;
+        time::sleep_until(start_time + TokenManager::SECRET_MAX_USABLE_AGE + sec!(1)).await;
         assert!(token_mgr.validate_token_from(&addr, &token));
+        assert!(token_mgr.usable_secret.is_none());
+        assert!(token_mgr.acceptable_secret.is_some());
+
+        time::sleep_until(start_time + TokenManager::SECRET_MAX_ACCEPTABLE_AGE).await;
+        assert!(token_mgr.validate_token_from(&addr, &token));
+        assert!(token_mgr.usable_secret.is_none());
+        assert!(token_mgr.acceptable_secret.is_some());
 
         time::sleep(sec!(1)).await;
         assert!(!token_mgr.validate_token_from(&addr, &token));
-        assert_eq!(token_mgr.secrets.len(), 0);
+        assert!(token_mgr.usable_secret.is_none());
+        assert!(token_mgr.acceptable_secret.is_none());
     }
 
     #[tokio::test(start_paused = true)]
@@ -146,15 +177,24 @@ mod tests {
             ]
         );
 
-        time::sleep(TokenManager::SECRET_MAX_AGE - min!(1)).await;
+        time::sleep(TokenManager::SECRET_MAX_USABLE_AGE).await;
         let new_token = token_mgr.generate_token_for(&addr);
         assert_eq!(token, new_token);
+        assert!(token_mgr.usable_secret.is_some());
+        assert!(token_mgr.acceptable_secret.is_none());
 
         time::sleep(sec!(1)).await;
         let new_token = token_mgr.generate_token_for(&addr);
         assert_ne!(token, new_token);
+        assert!(token_mgr.usable_secret.is_some());
+        assert!(token_mgr.acceptable_secret.is_some());
 
         assert!(token_mgr.validate_token_from(&addr, &token));
         assert!(token_mgr.validate_token_from(&addr, &new_token));
+    }
+
+    #[test]
+    fn test_valid_max_age_constants() {
+        assert!(TokenManager::SECRET_MAX_USABLE_AGE * 2 >= TokenManager::SECRET_MAX_ACCEPTABLE_AGE);
     }
 }
