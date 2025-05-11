@@ -1,9 +1,8 @@
 use super::U160;
 use bitvec::mem::bits_of;
-use std::array;
 use std::collections::BTreeMap;
-use std::iter;
 use std::net::SocketAddr;
+use std::{array, cmp};
 
 pub struct Node {
     pub id: U160,
@@ -120,31 +119,63 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         self.buckets.iter().flat_map(Bucket::iter).count()
     }
 
-    /// Return all nodes stored in the bucket closest to `target`, i.e. up to `BUCKET_SIZE` nodes.
-    pub fn closest_bucket(&self, target: &U160) -> Box<dyn Iterator<Item = &Node> + '_> {
-        let U160(distance) = *target ^ self.local_id;
-        if let Some(bucket_index) = distance.first_one() {
-            Box::new(self.buckets[bucket_index].iter())
-        } else {
-            Box::new(iter::empty())
-        }
-    }
-
     /// Return all nodes currently in the table sorted from the lowest to the highest distance to `target`.
-    pub fn all_closest_nodes(&self, target: &U160) -> impl Iterator<Item = SocketAddr> {
-        let mut nodes_by_dist_asc = BTreeMap::<_, SocketAddr>::new();
+    pub fn all_nodes_by_dist_asc(&self, target: &U160) -> impl Iterator<Item = &Node> {
+        let mut nodes_by_dist_asc = BTreeMap::<_, &Node>::new();
         for node in self.buckets.iter().flat_map(Bucket::iter) {
             let U160(distance) = node.id ^ *target;
-            nodes_by_dist_asc.insert(distance, node.addr);
+            nodes_by_dist_asc.insert(distance, node);
         }
         nodes_by_dist_asc.into_values()
+    }
+
+    /// Return N closest nodes to `target` where `0 <= N < max_count+2*BUCKET_SIZE`.
+    ///
+    /// Check `target` bucket first, then go through the adjacent buckets.
+    /// This means the result is semi-sorted: closest buckets go first, but the nodes within each bucket are not sorted.
+    pub fn get_closest_nodes(
+        &self,
+        target: &U160,
+        max_count_hint: usize,
+    ) -> impl Iterator<Item = &Node> {
+        let mut closest_nodes = Vec::with_capacity(
+            cmp::min(max_count_hint, self.buckets.len() / 2 * Self::BUCKET_SIZE)
+                + 2 * Self::BUCKET_SIZE
+                - 1,
+        );
+
+        let U160(distance) = *target ^ self.local_id;
+        if let Some(initial_index) = distance.first_one() {
+            assert!(initial_index < self.buckets.len());
+            closest_nodes.extend(self.buckets[initial_index].iter());
+
+            let mut delta = 1;
+            let mut progress_made = true;
+            while closest_nodes.len() < max_count_hint && progress_made {
+                progress_made = false;
+
+                if let Some(right_bucket) = self.buckets.get(initial_index + delta) {
+                    progress_made = true;
+                    closest_nodes.extend(right_bucket.iter());
+                }
+
+                if let Some(left_index) = initial_index.checked_sub(delta) {
+                    progress_made = true;
+                    closest_nodes.extend(self.buckets[left_index].iter());
+                }
+
+                delta += 1;
+            }
+        }
+
+        closest_nodes.into_iter()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::{collections::HashSet, net::Ipv4Addr};
 
     type RoutingTable = super::RoutingTable<16>;
 
@@ -203,5 +234,85 @@ mod tests {
         }
         assert!(rt.get_node(&bucket_0_id(RoutingTable::BUCKET_SIZE as u8)).is_none());
         assert!(rt.get_node(&bucket_1_id(RoutingTable::BUCKET_SIZE as u8)).is_none());
+    }
+
+    #[test]
+    fn test_get_closest_nodes_from_adjacent_buckets() {
+        let mut rt = RoutingTable::new(U160::from([0; 20]));
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 6666);
+
+        fn bucket_k_id(k: usize, i: u8) -> U160 {
+            let mut id: U160 = [0u8; 20].into();
+            id.0.get_mut(k).unwrap().set(true);
+            id.0.data[19] = i;
+            id
+        }
+
+        let target = bucket_k_id(100, 3);
+
+        for k in 98..=102 {
+            for i in 0..RoutingTable::BUCKET_SIZE {
+                assert!(rt.insert_node(&bucket_k_id(k, i as u8), &addr));
+            }
+        }
+
+        // from the same bucket
+        let closest_nodes: HashSet<U160> = rt
+            .get_closest_nodes(&target, RoutingTable::BUCKET_SIZE)
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(
+            closest_nodes,
+            (0..RoutingTable::BUCKET_SIZE).map(|i| bucket_k_id(100, i as u8)).collect()
+        );
+        let closest_nodes: HashSet<U160> =
+            rt.get_closest_nodes(&target, 1).map(|node| node.id).collect();
+        assert_eq!(
+            closest_nodes,
+            (0..RoutingTable::BUCKET_SIZE).map(|i| bucket_k_id(100, i as u8)).collect()
+        );
+
+        // from adjacent buckets on each side
+        let closest_nodes: HashSet<U160> = rt
+            .get_closest_nodes(&target, RoutingTable::BUCKET_SIZE * 3)
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(
+            closest_nodes,
+            (99..=101)
+                .flat_map(|k| (0..RoutingTable::BUCKET_SIZE).map(move |i| bucket_k_id(k, i as u8)))
+                .collect()
+        );
+        let closest_nodes: HashSet<U160> = rt
+            .get_closest_nodes(&target, RoutingTable::BUCKET_SIZE + 1)
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(
+            closest_nodes,
+            (99..=101)
+                .flat_map(|k| (0..RoutingTable::BUCKET_SIZE).map(move |i| bucket_k_id(k, i as u8)))
+                .collect()
+        );
+
+        // from one adjacent bucket
+        let target = bucket_k_id(98, 3);
+        let closest_nodes: HashSet<U160> = rt
+            .get_closest_nodes(&target, RoutingTable::BUCKET_SIZE + 1)
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(
+            closest_nodes,
+            (98..=99)
+                .flat_map(|k| (0..RoutingTable::BUCKET_SIZE).map(move |i| bucket_k_id(k, i as u8)))
+                .collect()
+        );
+
+        // from one non-full bucket
+        let target = bucket_k_id(42, 5);
+        assert!(rt.insert_node(&bucket_k_id(42, 3), &addr));
+        assert!(rt.insert_node(&bucket_k_id(42, 1), &addr));
+        let closest_nodes: Vec<U160> =
+            rt.get_closest_nodes(&target, 1).map(|node| node.id).collect();
+        assert_eq!(closest_nodes, Vec::from([bucket_k_id(42, 3), bucket_k_id(42, 1)]));
     }
 }

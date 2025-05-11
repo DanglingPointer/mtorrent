@@ -151,11 +151,12 @@ fn respond_to_incoming_query(
         IncomingQuery::Ping(ping) => ping.respond(PingResponse { id: *rt.local_id() }),
         IncomingQuery::FindNode(find_node) => {
             let mut nodes: Vec<_> = rt
-                .closest_bucket(&find_node.args().target)
+                .get_closest_nodes(&find_node.args().target, 8)
                 .filter_map(|node| match node.addr {
                     SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
                     SocketAddr::V6(_) => None,
                 })
+                .take(8)
                 .collect();
             if nodes.first().is_some_and(|(id, _)| id == &find_node.args().target) {
                 // exact match
@@ -174,11 +175,12 @@ fn respond_to_incoming_query(
                 GetPeersResponseData::Peers(peer_addrs)
             } else {
                 GetPeersResponseData::Nodes(
-                    rt.closest_bucket(&get_peers.args().info_hash)
+                    rt.get_closest_nodes(&get_peers.args().info_hash, 8)
                         .filter_map(|node| match node.addr {
                             SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
                             SocketAddr::V6(_) => None,
                         })
+                        .take(8)
                         .collect(),
                 )
             };
