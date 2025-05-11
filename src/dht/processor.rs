@@ -1,23 +1,19 @@
 use super::cmds::{self, Command};
+use super::health::{spawn_periodic_ping, Ctx};
 use super::kademlia;
 use super::msgs::*;
 use super::peers::TokenManager;
 use super::queries::{self, IncomingQuery};
 use super::u160::U160;
-use crate::debug_stopwatch;
 use crate::dht::peers::PeerTable;
+use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::local_sync::LocalShared;
-use local_async_utils::min;
 use local_async_utils::shared::Shared;
-use std::collections::{hash_map, HashMap};
-use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::Duration;
+use tokio::select;
 use tokio::sync::Notify;
-use tokio::time::Instant;
-use tokio::{select, task, time};
 
 macro_rules! define {
     ($name:ident, $handle:expr) => {
@@ -32,33 +28,33 @@ macro_rules! define {
     };
 }
 
-type RoutingTable = kademlia::RoutingTable<16>;
-type ActivityTable = HashMap<SocketAddr, Instant>;
-
-struct SharedCtx {
-    nodes: RoutingTable,
-    peers: PeerTable,
-    last_rx_time: ActivityTable,
-}
+pub(super) type RoutingTable = kademlia::RoutingTable<16>;
 
 pub struct Processor {
-    ctx: LocalShared<SharedCtx>,
+    nodes: LocalShared<RoutingTable>,
+    peers: PeerTable,
     token_mgr: TokenManager,
-    client: queries::Client,
-    shutdown_notify: Rc<Notify>,
+    _client: queries::Client,
+    shutdown_signal: Rc<Notify>,
+    cnt_ctrl: ConnectControl<Ctx>,
 }
 
 impl Processor {
     pub fn new(local_id: U160, client: queries::Client) -> Self {
+        let nodes = LocalShared::new(RoutingTable::new(local_id));
+        let shutdown_signal = Rc::new(Notify::const_new());
+        let ctx = Ctx {
+            nodes: nodes.clone(),
+            client: client.clone(),
+            shutdown_signal: shutdown_signal.clone(),
+        };
         Self {
-            ctx: LocalShared::new(SharedCtx {
-                nodes: RoutingTable::new(local_id),
-                peers: PeerTable::new(),
-                last_rx_time: Default::default(),
-            }),
+            nodes,
+            peers: PeerTable::new(),
             token_mgr: TokenManager::new(),
-            client,
-            shutdown_notify: Rc::new(Notify::const_new()),
+            _client: client,
+            shutdown_signal,
+            cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
         }
     }
 
@@ -76,66 +72,42 @@ impl Processor {
                 },
             }
         }
-        self.shutdown_notify.notify_waiters();
+        self.shutdown_signal.notify_waiters();
         log::debug!(
             "Processor shutting down, node_count = {}",
-            self.ctx.with(|ctx| ctx.nodes.node_count())
+            self.nodes.with(|rt| rt.node_count())
         );
     }
 
     fn handle_query(&mut self, query: IncomingQuery) {
-        define!(with_ctx, self.ctx);
+        define!(with_ctx, self.nodes);
+
         let addr = *query.source_addr();
+        with_ctx!(|rt| respond_to_incoming_query(rt, &mut self.peers, &mut self.token_mgr, query));
 
-        let existing_node = with_ctx!(|ctx| {
-            let last_rx_time_entry = ctx.last_rx_time.entry(addr).and_modify(|last_active| {
-                *last_active = Instant::now();
-            });
-            respond_to_incoming_query(&ctx.nodes, &mut ctx.peers, &mut self.token_mgr, query);
-            matches!(last_rx_time_entry, hash_map::Entry::Occupied(_))
-        });
-
-        if !existing_node {
-            spawn_periodic_ping(
-                self.ctx.project(|ctx| &mut ctx.nodes),
-                self.ctx.project(|ctx| &mut ctx.last_rx_time),
-                self.client.clone(),
-                addr,
-                self.shutdown_notify.clone(),
-            );
+        if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
+            spawn_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
         }
     }
 
     fn handle_command(&mut self, cmd: Command) {
-        define!(with_ctx, self.ctx);
-
         match cmd {
             Command::AddNode { addr } => {
-                if !with_ctx!(|ctx| ctx.last_rx_time.contains_key(&addr)) {
-                    spawn_periodic_ping(
-                        self.ctx.project(|ctx| &mut ctx.nodes),
-                        self.ctx.project(|ctx| &mut ctx.last_rx_time),
-                        self.client.clone(),
-                        addr,
-                        self.shutdown_notify.clone(),
-                    );
+                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
+                    spawn_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
                 }
             }
             Command::FindPeers {
                 info_hash,
                 callback,
             } => {
-                let peers: Vec<SocketAddr> =
-                    with_ctx!(|ctx| ctx.peers.get_peers(&info_hash).cloned().collect());
-                if !peers.is_empty() {
-                    for addr in peers {
-                        let _ = callback.try_send(addr).inspect_err(|e| {
-                            log::error!("Failed to respond to FindPeers cmd: {e}")
-                        });
-                    }
-                } else {
-                    todo!("spawn task finding peers")
+                for addr in self.peers.get_peers(&info_hash) {
+                    let _ = callback
+                        .try_send(*addr)
+                        .inspect_err(|e| log::error!("Failed to respond to FindPeers cmd: {e}"));
                 }
+
+                todo!("spawn task finding peers")
             }
         }
     }
@@ -211,108 +183,4 @@ fn respond_to_incoming_query(
     if let Err(e) = result {
         log::error!("Failed to respond to query: {e:?}");
     }
-}
-
-fn spawn_periodic_ping(
-    rt: impl Shared<Target = RoutingTable> + 'static,
-    at: impl Shared<Target = ActivityTable> + 'static,
-    client: queries::Client,
-    node_addr: SocketAddr,
-    shutdown_signal: Rc<Notify>,
-) {
-    let ping_task = periodic_ping(rt, at, client.clone(), node_addr, shutdown_signal.clone());
-    task::spawn_local(async move {
-        select! {
-            biased;
-            _ = ping_task => (),
-            _ = shutdown_signal.notified() => (),
-        }
-    });
-}
-
-async fn periodic_ping(
-    mut rt: impl Shared<Target = RoutingTable> + 'static,
-    mut at: impl Shared<Target = ActivityTable> + 'static,
-    client: queries::Client,
-    addr: SocketAddr,
-    shutdown_signal: Rc<Notify>,
-) -> io::Result<()> {
-    const PING_INTERVAL: Duration = min!(5);
-    define!(with_rt, rt);
-    define!(with_at, at);
-
-    if with_at!(|last_rx| last_rx.contains_key(&addr)) {
-        // already pinginig this node
-        return Ok(());
-    }
-
-    let local_id = with_rt!(|rt| *rt.local_id());
-
-    // query nodes close to local ID
-    let mut response = client
-        .find_node(
-            addr,
-            FindNodeArgs {
-                id: local_id,
-                target: local_id,
-            },
-        )
-        .await?;
-
-    let mut id = response.id;
-
-    // process response
-    response.nodes.retain(|(node_id, addr)| {
-        *node_id != local_id
-            && *node_id != id
-            && with_at!(|last_rx| !last_rx.contains_key(&SocketAddr::V4(*addr)))
-            && with_rt!(|rt| rt.can_insert(node_id))
-    });
-    for addr in response.nodes.into_iter().map(|(_, addr)| SocketAddr::V4(addr)) {
-        spawn_periodic_ping(rt.clone(), at.clone(), client.clone(), addr, shutdown_signal.clone());
-    }
-
-    // check if we should ignore this node
-    if !with_rt!(|routing| routing.insert_node(&id, &addr)) {
-        // no capacity in the routing table
-        return Ok(());
-    }
-
-    with_at!(|last_rx| last_rx.insert(addr, Instant::now()));
-
-    log::info!(
-        "Periodic ping of {addr} starting; node_count = {}",
-        with_rt!(|routing| routing.node_count())
-    );
-
-    let _sw = debug_stopwatch!("Periodic ping of {addr}");
-    while let Some(last_active) = with_at!(|last_rx| last_rx.get(&addr).cloned()) {
-        let time_since_last_activity = last_active.elapsed();
-        if time_since_last_activity >= PING_INTERVAL {
-            // send periodic ping
-            let response =
-                client.ping(addr, PingArgs { id: local_id }).await.inspect_err(|_e| {
-                    with_rt!(|routing| routing.remove_node(&id));
-                    with_at!(|last_rx| last_rx.remove(&addr));
-                })?;
-            // handle change of id
-            if response.id != id {
-                let inserted_new_id = with_rt!(|routing| {
-                    routing.remove_node(&id);
-                    routing.insert_node(&response.id, &addr)
-                });
-                if !inserted_new_id {
-                    with_at!(|last_rx| last_rx.remove(&addr));
-                    break;
-                }
-                id = response.id;
-            }
-            // update last rx time
-            with_at!(|last_rx| last_rx.insert(addr, Instant::now()));
-        } else {
-            // sleep until next ping time
-            time::sleep(PING_INTERVAL - time_since_last_activity).await;
-        }
-    }
-    Ok(())
 }

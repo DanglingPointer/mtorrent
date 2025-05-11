@@ -1,9 +1,11 @@
+#[macro_use]
+mod processor;
 mod cmds;
 mod error;
+mod health;
 mod kademlia;
 mod msgs;
 mod peers;
-mod processor;
 mod queries;
 mod u160;
 mod udp;
