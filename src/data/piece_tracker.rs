@@ -37,7 +37,7 @@ impl PieceTracker {
             .flat_map(|(_count, indices)| indices.iter().map(|i| i.0))
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn get_poorest_peers(&self) -> impl Iterator<Item = &SocketAddr> + Clone {
         self.piece_count_to_owners.iter().flat_map(|(_count, owners)| owners.iter())
     }

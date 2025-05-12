@@ -125,6 +125,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         self.buckets.iter().flat_map(Bucket::iter).count()
     }
 
+    #[expect(dead_code)]
     /// Return all nodes currently in the table sorted from the lowest to the highest distance to `target`.
     pub fn all_nodes_by_dist_asc(&self, target: &U160) -> impl Iterator<Item = &Node> {
         let mut nodes_by_dist_asc = BTreeMap::<_, &Node>::new();

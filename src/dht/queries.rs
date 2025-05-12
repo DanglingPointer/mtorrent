@@ -28,7 +28,6 @@ pub struct Client {
     query_slots: Rc<Semaphore>,
 }
 
-#[allow(dead_code)]
 impl Client {
     pub(super) async fn ping(
         &self,
@@ -48,6 +47,7 @@ impl Client {
         self.do_query(destination, query).await
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(super) async fn get_peers(
         &self,
         destination: SocketAddr,
@@ -57,6 +57,7 @@ impl Client {
         self.do_query(destination, query).await
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(super) async fn announce_peer(
         &self,
         destination: SocketAddr,
@@ -216,7 +217,7 @@ impl IncomingQuery {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(super) fn node_id(&self) -> &U160 {
         match self {
             IncomingQuery::Ping(q) => &q.args().id,

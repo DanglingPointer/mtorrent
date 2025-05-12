@@ -291,7 +291,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
 #[derive(Clone, Copy)]
 enum AnnounceEvent {
     Started,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     Stopped,
     Completed,
 }

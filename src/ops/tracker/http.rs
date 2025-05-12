@@ -90,6 +90,7 @@ impl Client {
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn scrape(
         &self,
         request_builder: TrackerRequestBuilder,

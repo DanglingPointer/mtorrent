@@ -84,7 +84,6 @@ pub struct PeerBuilder {
     has_all_pieces: bool,
 }
 
-#[allow(dead_code)]
 impl PeerBuilder {
     pub fn new() -> Self {
         Self::default()
@@ -109,10 +108,12 @@ impl PeerBuilder {
         self.local_ip = Some(ip);
         self
     }
+    #[expect(dead_code)]
     pub fn with_remote_peer_id(mut self, id: impl Into<PeerId>) -> Self {
         self.remote_peer_id = Some(id.into());
         self
     }
+    #[expect(dead_code)]
     pub fn with_local_peer_id(mut self, id: impl Into<PeerId>) -> Self {
         self.local_peer_id = Some(id.into());
         self

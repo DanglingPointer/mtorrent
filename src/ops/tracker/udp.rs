@@ -71,6 +71,7 @@ impl UdpTrackerConnection {
         .await?
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn do_scrape_request(
         &mut self,
         request_data: ScrapeRequest,
@@ -390,7 +391,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: u32,
@@ -423,7 +424,7 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
@@ -431,9 +432,9 @@ pub struct ScrapeResponseEntry {
     pub leechers: u32,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
-pub struct ScrapeResponse(Vec<ScrapeResponseEntry>);
+pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
 impl TryFrom<&[u8]> for ScrapeResponse {
     type Error = ParseError;
