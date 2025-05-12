@@ -1,7 +1,9 @@
 use super::U160;
 use bitvec::mem::bits_of;
 use derive_more::{Debug, Display};
+use pinned_init::*;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::{array, cmp, fmt};
 
@@ -57,6 +59,8 @@ impl<const SIZE: usize> Bucket<SIZE> {
     }
 }
 
+const BUCKET_COUNT: usize = bits_of::<U160>();
+
 /// A fully pre-allocated Kademlia routing table as defined in https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf.
 /// Shouldn't be put on stack due to its size. The table enforces uniqueness of node IDs, but not of their addresses.
 ///
@@ -64,18 +68,27 @@ impl<const SIZE: usize> Bucket<SIZE> {
 /// E.g. the bucket at index `0` contains nodes furthest away from `local_id`.
 /// Note that buckets closest to `local_id` still allocate `BUCKET_SIZE` slots even though they can never become full.
 pub struct RoutingTable<const BUCKET_SIZE: usize> {
-    buckets: [Bucket<BUCKET_SIZE>; bits_of::<U160>()],
+    buckets: [Bucket<BUCKET_SIZE>; BUCKET_COUNT],
     local_id: U160,
 }
 
 impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     pub const BUCKET_SIZE: usize = BUCKET_SIZE;
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn new(local_id: U160) -> Self {
         Self {
             buckets: array::from_fn(|_| Bucket::new()),
             local_id,
         }
+    }
+
+    pub fn new_boxed(local_id: U160) -> Box<Self> {
+        Box::init(init!(Self {
+            buckets <- init_array_from_fn::<_, BUCKET_COUNT, _, Infallible>(|_| Bucket::new()),
+            local_id,
+        }))
+        .expect("failed to allocate RoutingTable")
     }
 
     pub fn local_id(&self) -> &U160 {

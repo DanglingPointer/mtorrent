@@ -28,7 +28,7 @@ macro_rules! define {
     };
 }
 
-pub(super) type RoutingTable = kademlia::RoutingTable<16>;
+pub(super) type RoutingTable = Box<kademlia::RoutingTable<16>>;
 
 pub struct Processor {
     nodes: LocalShared<RoutingTable>,
@@ -41,7 +41,7 @@ pub struct Processor {
 
 impl Processor {
     pub fn new(local_id: U160, client: queries::Client) -> Self {
-        let nodes = LocalShared::new(RoutingTable::new(local_id));
+        let nodes = LocalShared::new(kademlia::RoutingTable::new_boxed(local_id));
         let shutdown_signal = Rc::new(Notify::const_new());
         let ctx = Ctx {
             nodes: nodes.clone(),

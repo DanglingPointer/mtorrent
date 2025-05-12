@@ -962,6 +962,7 @@ dependencies = [
  "ipconfig",
  "local_async_utils",
  "log",
+ "pinned-init",
  "rand",
  "reqwest",
  "sha1_smol",
@@ -1064,6 +1065,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1080,6 +1087,26 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pinned-init"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28139e842fd1f97cbff715492443ec6a49d31d72bb3948ff75a7a5047595b15"
+dependencies = [
+ "paste",
+ "pinned-init-macro",
+]
+
+[[package]]
+name = "pinned-init-macro"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "569a3fcf0e6334c6c46c1507f83a99ba30ae9cdc5761bdb2ca40f7eb55138bd4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "pkg-config"

@@ -34,6 +34,9 @@ derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
 local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.1.0", features = [
     "tokio-time",
 ] }
+pinned-init = { version = "0.0.9", default-features = false, features = [
+    "std",
+] }
 
 [target.'cfg(target_family = "windows")'.dependencies]
 ipconfig = "0.3.2"
