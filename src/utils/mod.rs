@@ -2,7 +2,7 @@ pub(crate) mod bandwidth;
 pub mod benc;
 pub(crate) mod config;
 pub mod ip;
-pub(crate) mod magnet;
+pub mod magnet;
 // pub mod matcher;
 pub(crate) mod connctrl;
 pub mod metainfo;

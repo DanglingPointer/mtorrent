@@ -1,8 +1,10 @@
 use clap::Parser;
+use mtorrent::utils::magnet::MagnetLink;
 use mtorrent::{app, dht};
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[derive(Parser)]
 #[command(version, about = "Standalone DHT node")]
@@ -17,6 +19,10 @@ struct Args {
     /// Max simultaneous outstanding queries
     #[arg(short, long)]
     parallel_queries: Option<usize>,
+
+    /// Magnet link to the torrent to search for
+    #[arg(short, long)]
+    target_magnet: Option<MagnetLink>,
 }
 
 /// Example usage:
@@ -35,7 +41,7 @@ fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(false)
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::dht", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::dht", log::LevelFilter::Info)
         .with_module_level("mtorrent::app::dht", log::LevelFilter::Debug)
         .with_module_level("dht_node", log::LevelFilter::Debug)
         .init()
@@ -57,9 +63,31 @@ fn main() -> io::Result<()> {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
     }
 
+    let search_results_channel = if let Some(magnet_link) = args.target_magnet {
+        std::thread::sleep(Duration::from_secs(10));
+        log::info!("Starting search for peers");
+
+        let (sender, receiver) = mpsc::channel(512);
+        cmds.try_send(dht::Command::FindPeers {
+            info_hash: (*magnet_link.info_hash()).into(),
+            callback: sender,
+            local_peer_port: 6881,
+        })
+        .unwrap();
+        Some(receiver)
+    } else {
+        None
+    };
+
     if let Some(timeout) = args.duration {
         std::thread::sleep(Duration::from_secs(timeout));
         drop(cmds);
+    }
+
+    if let Some(mut channel) = search_results_channel {
+        let discovered_peers: Vec<_> =
+            std::iter::from_fn(move || channel.try_recv().ok()).collect();
+        log::info!("Discovered peers: {discovered_peers:?}");
     }
 
     Ok(())

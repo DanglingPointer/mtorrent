@@ -1,14 +1,15 @@
 use super::cmds::{self, Command};
-use super::health::{spawn_periodic_ping, Ctx};
 use super::kademlia;
 use super::msgs::*;
 use super::peers::TokenManager;
 use super::queries::{self, IncomingQuery};
+use super::tasks::*;
 use super::u160::U160;
 use crate::dht::peers::PeerTable;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::local_sync::LocalShared;
+use local_async_utils::sealed::Set;
 use local_async_utils::shared::Shared;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -28,22 +29,23 @@ macro_rules! define {
     };
 }
 
-pub(super) type RoutingTable = Box<kademlia::RoutingTable<16>>;
+type RoutingTable = kademlia::RoutingTable<16>;
+pub(super) type BoxRoutingTable = Box<RoutingTable>;
 
 pub struct Processor {
-    nodes: LocalShared<RoutingTable>,
+    nodes: LocalShared<BoxRoutingTable>,
     peers: PeerTable,
     token_mgr: TokenManager,
     _client: queries::Client,
     shutdown_signal: Rc<Notify>,
-    cnt_ctrl: ConnectControl<Ctx>,
+    cnt_ctrl: ConnectControl<PingCtx>,
 }
 
 impl Processor {
     pub fn new(local_id: U160, client: queries::Client) -> Self {
-        let nodes = LocalShared::new(kademlia::RoutingTable::new_boxed(local_id));
+        let nodes = LocalShared::new(RoutingTable::new_boxed(local_id));
         let shutdown_signal = Rc::new(Notify::const_new());
-        let ctx = Ctx {
+        let ctx = PingCtx {
             nodes: nodes.clone(),
             client: client.clone(),
             shutdown_signal: shutdown_signal.clone(),
@@ -86,35 +88,52 @@ impl Processor {
         with_ctx!(|rt| respond_to_incoming_query(rt, &mut self.peers, &mut self.token_mgr, query));
 
         if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
-            spawn_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
+            launch_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
         }
     }
 
     fn handle_command(&mut self, cmd: Command) {
+        define!(with_rt, self.nodes);
         match cmd {
             Command::AddNode { addr } => {
                 if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
-                    spawn_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
+                    launch_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
                 }
             }
             Command::FindPeers {
                 info_hash,
                 callback,
+                local_peer_port,
             } => {
-                for addr in self.peers.get_peers(&info_hash) {
-                    let _ = callback
-                        .try_send(*addr)
-                        .inspect_err(|e| log::error!("Failed to respond to FindPeers cmd: {e}"));
+                if self
+                    .peers
+                    .get_peers(&info_hash)
+                    .try_for_each(|addr| callback.try_send(*addr))
+                    .is_ok()
+                {
+                    let ctx = Rc::new(SearchCtx {
+                        target: info_hash,
+                        local_peer_port,
+                        callback,
+                        cnt_ctrl: self.cnt_ctrl.split_off(),
+                        queried_nodes: Set::new(),
+                        discovered_peers: Set::new(),
+                    });
+                    let closest_nodes: Vec<_> = with_rt!(|rt| rt
+                        .get_closest_nodes(&info_hash, RoutingTable::BUCKET_SIZE * 3)
+                        .map(|node| node.addr)
+                        .collect());
+                    for node_addr in closest_nodes {
+                        launch_peer_search(ctx.clone(), node_addr);
+                    }
                 }
-
-                todo!("spawn task finding peers")
             }
         }
     }
 }
 
 fn respond_to_incoming_query(
-    rt: &RoutingTable,
+    rt: &BoxRoutingTable,
     peers: &mut PeerTable,
     token_mgr: &mut TokenManager,
     query: IncomingQuery,
@@ -181,6 +200,6 @@ fn respond_to_incoming_query(
         }
     };
     if let Err(e) = result {
-        log::error!("Failed to respond to query: {e:?}");
+        log::error!("Failed to respond to query: {e}");
     }
 }

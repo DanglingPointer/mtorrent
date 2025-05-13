@@ -12,6 +12,7 @@ pub enum Command {
     FindPeers {
         info_hash: U160,
         callback: mpsc::Sender<SocketAddr>,
+        local_peer_port: u16,
     },
 }
 

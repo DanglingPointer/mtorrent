@@ -1,16 +1,25 @@
 use super::msgs;
 use crate::utils::benc;
 use std::io;
+use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug)]
+#[expect(clippy::enum_variant_names)]
+#[derive(Debug, Error)]
 pub enum Error {
+    #[error("parsing failed ({0})")]
     ParseError(&'static str),
+    #[error(transparent)]
+    BencodeError(#[from] benc::ParseError),
+    #[error("error response ({0:?})")]
     ErrorResponse(msgs::ErrorMsg),
+    #[error("unexpected response type")]
     UnexpectedResponseType,
+    #[error("channel closed")]
     ChannelClosed,
+    #[error("channel full")]
     ChannelFull,
+    #[error("timeout")]
     Timeout,
 }
 
@@ -34,23 +43,15 @@ impl From<oneshot::error::RecvError> for Error {
 
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
-        match e {
-            Error::ParseError(msg) => io::Error::new(io::ErrorKind::InvalidData, msg),
-            Error::ErrorResponse(response) => {
-                io::Error::new(io::ErrorKind::Other, format!("{response:?}"))
+        let kind = match e {
+            Error::ErrorResponse(_) => io::ErrorKind::Other,
+            Error::ChannelClosed => io::ErrorKind::BrokenPipe,
+            Error::ChannelFull => io::ErrorKind::WouldBlock,
+            Error::Timeout => io::ErrorKind::TimedOut,
+            Error::BencodeError(_) | Error::ParseError(_) | Error::UnexpectedResponseType => {
+                io::ErrorKind::InvalidData
             }
-            Error::UnexpectedResponseType => {
-                io::Error::new(io::ErrorKind::InvalidData, "unexpected response type")
-            }
-            Error::ChannelClosed => io::Error::new(io::ErrorKind::BrokenPipe, "channel closed"),
-            Error::ChannelFull => io::Error::new(io::ErrorKind::WouldBlock, "channel full"),
-            Error::Timeout => io::Error::from(io::ErrorKind::TimedOut),
-        }
-    }
-}
-
-impl From<benc::ParseError> for Error {
-    fn from(_e: benc::ParseError) -> Self {
-        Error::ParseError("malformed bencode")
+        };
+        Self::new(kind, e)
     }
 }

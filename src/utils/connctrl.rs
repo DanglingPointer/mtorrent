@@ -56,6 +56,10 @@ impl<D> ConnectControl<D> {
         Self { state }
     }
 
+    pub fn data(&self) -> &D {
+        &self.state.data
+    }
+
     /// Wait for available connection slot or return None if already connected to 'addr'
     pub async fn acquire_permit(&mut self, addr: SocketAddr) -> Option<ConnectPermit<D>> {
         // must use `&mut self` because we store only 1 waker
@@ -105,6 +109,10 @@ impl<D> ConnectControl<D> {
 pub struct QuickConnectControl<D>(ConnectControl<D>);
 
 impl<D> QuickConnectControl<D> {
+    pub fn data(&self) -> &D {
+        self.0.data()
+    }
+
     pub fn try_acquire_permit(&self, addr: SocketAddr) -> Option<ConnectPermit<D>> {
         self.0.try_acquire_permit(addr)
     }

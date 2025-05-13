@@ -51,6 +51,6 @@ async fn dht_main(
         log::warn!("UDP exited with error: {e}");
     }
     if let Err(e) = queries_result {
-        log::warn!("Queries exited with error: {e:?}");
+        log::warn!("Queries exited with error: {e}");
     }
 }

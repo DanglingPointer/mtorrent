@@ -47,7 +47,6 @@ impl Client {
         self.do_query(destination, query).await
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(super) async fn get_peers(
         &self,
         destination: SocketAddr,
@@ -57,7 +56,6 @@ impl Client {
         self.do_query(destination, query).await
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(super) async fn announce_peer(
         &self,
         destination: SocketAddr,
@@ -84,7 +82,7 @@ impl Client {
         match &result {
             Ok(response) => log::debug!("[{dst_addr}] => {response:?}"),
             Err(Error::ErrorResponse(msg)) => log::error!("[{dst_addr}] => {msg:?}"),
-            Err(e) => log::error!("Query to {dst_addr} failed: {e:?}"),
+            Err(e) => log::error!("Query to {dst_addr} failed: {e}"),
         }
         result
     }

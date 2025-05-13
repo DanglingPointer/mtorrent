@@ -37,6 +37,7 @@ local_async_utils = { git = "https://github.com/DanglingPointer/local_async_util
 pinned-init = { version = "0.0.9", default-features = false, features = [
     "std",
 ] }
+thiserror = "2.0.12"
 
 [target.'cfg(target_family = "windows")'.dependencies]
 ipconfig = "0.3.2"

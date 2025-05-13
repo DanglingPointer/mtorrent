@@ -3,6 +3,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::{iter, net, str};
 
+#[derive(Clone)]
 pub struct MagnetLink {
     info_hash: [u8; 20],
     name: Option<String>,

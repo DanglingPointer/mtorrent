@@ -2,11 +2,11 @@
 mod processor;
 mod cmds;
 mod error;
-mod health;
 mod kademlia;
 mod msgs;
 mod peers;
 mod queries;
+mod tasks;
 mod u160;
 mod udp;
 
