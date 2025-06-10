@@ -5,6 +5,7 @@ use super::U160;
 use crate::debug_stopwatch;
 use crate::utils::connctrl::{ConnectPermit, QuickConnectControl};
 use futures::io;
+use local_async_utils::local_sync::channel as local_channel;
 use local_async_utils::local_sync::LocalShared;
 use local_async_utils::sealed::Set;
 use local_async_utils::shared::Shared;
@@ -112,14 +113,15 @@ async fn periodic_ping(
 pub(super) struct SearchCtx {
     pub(super) target: U160,
     pub(super) local_peer_port: u16,
-    pub(super) callback: mpsc::Sender<SocketAddr>,
+    pub(super) cmd_result_sender: mpsc::Sender<SocketAddr>,
+    pub(super) peer_sender: local_channel::Sender<(SocketAddr, U160)>,
     pub(super) cnt_ctrl: QuickConnectControl<PingCtx>,
     pub(super) queried_nodes: Set<SocketAddr>,
     pub(super) discovered_peers: Set<SocketAddr>,
 }
 
 pub(super) fn launch_peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) {
-    if ctx.queried_nodes.insert(addr) && !ctx.callback.is_closed() {
+    if ctx.queried_nodes.insert(addr) && !ctx.cmd_result_sender.is_closed() {
         let shutdown_signal = ctx.cnt_ctrl.data().shutdown_signal.clone();
         task::spawn_local(async move {
             select! {
@@ -138,7 +140,7 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
     let local_id = with_rt!(|rt| *rt.local_id());
     let client = &ctx.cnt_ctrl.data().client;
 
-    while !ctx.callback.is_closed() {
+    while !ctx.cmd_result_sender.is_closed() {
         let response = client
             .get_peers(
                 addr,
@@ -163,7 +165,8 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 // report the received peer addresses
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
                     if ctx.discovered_peers.insert(peer_addr) {
-                        let _ = ctx.callback.send(peer_addr).await;
+                        ctx.peer_sender.send((peer_addr, ctx.target));
+                        let _ = ctx.cmd_result_sender.send(peer_addr).await;
                     }
                 }
                 Some(Instant::now() + GET_PEERS_INTERVAL)

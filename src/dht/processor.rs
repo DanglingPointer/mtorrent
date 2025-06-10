@@ -8,6 +8,7 @@ use super::u160::U160;
 use crate::dht::peers::PeerTable;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
+use local_async_utils::local_sync::channel as local_channel;
 use local_async_utils::local_sync::LocalShared;
 use local_async_utils::sealed::Set;
 use local_async_utils::shared::Shared;
@@ -36,6 +37,8 @@ pub struct Processor {
     nodes: LocalShared<BoxRoutingTable>,
     peers: PeerTable,
     token_mgr: TokenManager,
+    peer_sender: local_channel::Sender<(SocketAddr, U160)>,
+    peer_receiver: local_channel::Receiver<(SocketAddr, U160)>,
     _client: queries::Client,
     shutdown_signal: Rc<Notify>,
     cnt_ctrl: ConnectControl<PingCtx>,
@@ -50,10 +53,13 @@ impl Processor {
             client: client.clone(),
             shutdown_signal: shutdown_signal.clone(),
         };
+        let (peer_sender, peer_receiver) = local_channel::channel();
         Self {
             nodes,
             peers: PeerTable::new(),
             token_mgr: TokenManager::new(),
+            peer_sender,
+            peer_receiver,
             _client: client,
             shutdown_signal,
             cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
@@ -72,6 +78,10 @@ impl Processor {
                     Some(query) => self.handle_query(query),
                     None => break,
                 },
+                peer_target = self.peer_receiver.next() => match peer_target {
+                    Some((peer, target)) => self.peers.add_record(&target, peer),
+                    None => unreachable!(),
+                }
             }
         }
         self.shutdown_signal.notify_waiters();
@@ -114,7 +124,8 @@ impl Processor {
                     let ctx = Rc::new(SearchCtx {
                         target: info_hash,
                         local_peer_port,
-                        callback,
+                        cmd_result_sender: callback,
+                        peer_sender: self.peer_sender.clone(),
                         cnt_ctrl: self.cnt_ctrl.split_off(),
                         queried_nodes: Set::new(),
                         discovered_peers: Set::new(),
