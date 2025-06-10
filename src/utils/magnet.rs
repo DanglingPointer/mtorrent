@@ -1,7 +1,7 @@
-use core::fmt;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::{iter, net, str};
+use thiserror::Error;
 
 #[derive(Clone)]
 pub struct MagnetLink {
@@ -11,48 +11,18 @@ pub struct MagnetLink {
     peers: Vec<SocketAddr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseError {
-    MalformedUri(url::ParseError),
+    #[error("malformed uri: {0}")]
+    MalformedUri(#[from] url::ParseError),
+    #[error("invalid scheme: {0}")]
     UnsupportedScheme(String),
+    #[error("no info hash")]
     NoInfoHash,
-    InvalidInfoHash(Box<dyn Error + Send + Sync>),
-    InvalidPeerAddr(net::AddrParseError),
-}
-
-impl From<url::ParseError> for ParseError {
-    fn from(e: url::ParseError) -> Self {
-        ParseError::MalformedUri(e)
-    }
-}
-
-impl From<net::AddrParseError> for ParseError {
-    fn from(e: net::AddrParseError) -> Self {
-        ParseError::InvalidPeerAddr(e)
-    }
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::MalformedUri(e) => write!(f, "malformed uri: {e}"),
-            ParseError::UnsupportedScheme(s) => write!(f, "invalid scheme: {s}"),
-            ParseError::NoInfoHash => write!(f, "no info hash"),
-            ParseError::InvalidInfoHash(e) => write!(f, "invalid info hash: {e}"),
-            ParseError::InvalidPeerAddr(e) => write!(f, "invalid peer addr: {e}"),
-        }
-    }
-}
-
-impl Error for ParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            ParseError::MalformedUri(e) => Some(e),
-            ParseError::InvalidInfoHash(e) => Some(e.as_ref()),
-            ParseError::InvalidPeerAddr(e) => Some(e),
-            _ => None,
-        }
-    }
+    #[error("invalid info hash: {0}")]
+    InvalidInfoHash(#[source] Box<dyn Error + Send + Sync>),
+    #[error("invalid peer addr: {0}")]
+    InvalidPeerAddr(#[from] net::AddrParseError),
 }
 
 impl str::FromStr for MagnetLink {
