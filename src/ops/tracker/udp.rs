@@ -1,9 +1,10 @@
 use super::utils;
-use core::fmt;
+use derive_more::Display;
 use local_async_utils::sec;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
-use std::{error, io, str};
+use std::{io, str};
+use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Instant};
 
@@ -181,21 +182,13 @@ impl UdpTrackerConnection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display, Error)]
 pub enum ParseError {
     InvalidAction,
     InvalidLength,
     InvalidTransaction,
     NonUtf8String,
 }
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl error::Error for ParseError {}
 
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
