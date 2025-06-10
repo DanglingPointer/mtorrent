@@ -158,7 +158,6 @@ pub async fn new_peer(
         // the bookkeeping below must be done _after_ the I/O operations above,
         // otherwise it will be never undone in case of send/recv error
         let peer_ip = rx.remote_ip();
-        ctx.known_peers.insert(*peer_ip);
         ctx.connected_peers.insert(*peer_ip);
     });
     let inner = Box::new(Data {

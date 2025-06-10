@@ -14,6 +14,7 @@ pub use tcp::run_listener as run_pwp_listener;
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
 use crate::{data, pwp};
+use local_async_utils::shared::Shared;
 use local_async_utils::{local_sync, sec};
 use std::io;
 use std::rc::Rc;
@@ -299,8 +300,10 @@ async fn run_metadata_download(
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
-    ctx_handle: PreliminaryHandle,
+    mut ctx_handle: PreliminaryHandle,
 ) -> io::Result<()> {
+    ctx_handle.with(|ctx| ctx.known_peers.insert(*download_chans.0.remote_ip()));
+
     let extended_chans = extended_chans.ok_or_else(|| {
         io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
     })?;
