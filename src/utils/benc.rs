@@ -1,9 +1,10 @@
-use core::fmt;
+use derive_more::Display;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::Write;
 use std::num::ParseIntError;
-use std::{io, str};
+use std::{fmt, io, str};
+use thiserror::Error;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
 pub enum Element {
@@ -92,7 +93,7 @@ impl fmt::Display for Element {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error, Display)]
 pub enum ParseError {
     EmptySource,
     InvalidPrefix,
@@ -102,22 +103,8 @@ pub enum ParseError {
     InvalidStringLength,
     NoListPrefix,
     NoDictionaryPrefix,
-    ExternalError(Box<dyn Error + Send + Sync>),
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl Error for ParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            ParseError::ExternalError(e) => Some(e.as_ref()),
-            _ => None,
-        }
-    }
+    #[display("{_0}")]
+    ExternalError(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl From<ParseIntError> for ParseError {
