@@ -8,10 +8,7 @@ use super::u160::U160;
 use crate::dht::peers::PeerTable;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
-use local_async_utils::local_sync::channel as local_channel;
-use local_async_utils::local_sync::LocalShared;
-use local_async_utils::sealed::Set;
-use local_async_utils::shared::Shared;
+use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::select;
@@ -127,8 +124,8 @@ impl Processor {
                         cmd_result_sender: callback,
                         peer_sender: self.peer_sender.clone(),
                         cnt_ctrl: self.cnt_ctrl.split_off(),
-                        queried_nodes: Set::new(),
-                        discovered_peers: Set::new(),
+                        queried_nodes: sealed::Set::new(),
+                        discovered_peers: sealed::Set::new(),
                     });
                     let closest_nodes: Vec<_> = with_rt!(|rt| rt
                         .get_closest_nodes(&info_hash, RoutingTable::BUCKET_SIZE * 3)

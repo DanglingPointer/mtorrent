@@ -1,6 +1,5 @@
 use super::*;
 use crate::utils::{benc, ip, startup};
-use local_async_utils::sec;
 use std::cell::Cell;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;

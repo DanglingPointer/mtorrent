@@ -8,8 +8,7 @@ use super::{msgs::*, U160};
 use crate::trace_stopwatch;
 use derive_more::derive::From;
 use futures::StreamExt;
-use local_async_utils::local_sync;
-use local_async_utils::stopwatch::Stopwatch;
+use local_async_utils::prelude::*;
 use manager::{OutgoingQuery, QueryManager};
 use std::fmt::Debug;
 use std::future::pending;
@@ -24,7 +23,7 @@ use tokio::time::{sleep_until, Instant};
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
 pub struct Client {
-    channel: local_sync::channel::Sender<OutgoingQuery>,
+    channel: local_channel::Sender<OutgoingQuery>,
     query_slots: Rc<Semaphore>,
 }
 
@@ -71,7 +70,7 @@ impl Client {
         R: TryFrom<ResponseMsg, Error = Error> + Debug,
     {
         let _slot = self.query_slots.acquire().await;
-        let (tx, rx) = local_sync::oneshot();
+        let (tx, rx) = local_oneshot::oneshot();
         log::debug!("[{dst_addr}] <= {args:?}");
         self.channel.send(OutgoingQuery {
             query: args.into(),
@@ -89,12 +88,12 @@ impl Client {
 }
 
 /// Server for receiving incoming queries from different nodes.
-pub struct Server(pub(super) local_sync::channel::Receiver<IncomingQuery>);
+pub struct Server(pub(super) local_channel::Receiver<IncomingQuery>);
 
 /// Actor that routes queries between app layer and network layer.
 pub struct Runner {
     queries: QueryManager,
-    outgoing_queries_source: local_sync::channel::Receiver<OutgoingQuery>,
+    outgoing_queries_source: local_channel::Receiver<OutgoingQuery>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 }
 
@@ -141,8 +140,8 @@ pub fn setup_routing(
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
     max_concurrent_queries: Option<usize>,
 ) -> (Client, Server, Runner) {
-    let (outgoing_queries_sink, outgoing_queries_source) = local_sync::channel();
-    let (incoming_queries_sink, incoming_queries_source) = local_sync::channel();
+    let (outgoing_queries_sink, outgoing_queries_source) = local_channel::channel();
+    let (incoming_queries_sink, incoming_queries_source) = local_channel::channel();
     let max_in_flight = max_concurrent_queries.unwrap_or(0);
 
     let runner = Runner {

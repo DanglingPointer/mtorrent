@@ -1,5 +1,4 @@
 use super::*;
-use local_async_utils::{millisec, sec};
 use std::cell::Cell;
 use std::iter;
 use std::net::{Ipv4Addr, SocketAddrV4};

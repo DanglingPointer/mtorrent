@@ -3,7 +3,7 @@ use super::LOCAL_REQQ;
 use crate::utils::bandwidth;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
-use local_async_utils::{local_sync, shared::Shared};
+use local_async_utils::prelude::*;
 use std::io;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -228,7 +228,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     define_with_ctx!(inner.handle);
     let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
 
-    let (request_sink, request_src) = local_sync::channel::<pwp::BlockInfo>();
+    let (request_sink, request_src) = local_channel::channel::<pwp::BlockInfo>();
     let mut state_copy = inner.state.clone();
 
     let mut discarded_requests = 0u64;

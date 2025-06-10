@@ -902,8 +902,8 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
 name = "local_async_utils"
-version = "0.1.0"
-source = "git+https://github.com/DanglingPointer/local_async_utils.git?tag=v0.1.1#5da03ef411986d41356a19c75b8ff9f583302d24"
+version = "0.2.0"
+source = "git+https://github.com/DanglingPointer/local_async_utils.git?tag=v0.2.0#a90be6f3089e0fdbb5cc41ec847bc4eed016fe2b"
 dependencies = [
  "futures",
  "log",

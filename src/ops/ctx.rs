@@ -4,8 +4,7 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{config, magnet, metainfo};
 use crate::{data, pwp};
 use core::fmt;
-use local_async_utils::local_sync::LocalShared;
-use local_async_utils::sec;
+use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -19,7 +18,7 @@ macro_rules! define_with_ctx {
     ($handle:expr) => {
         macro_rules! with_ctx {
             ($f:expr) => {{
-                use local_async_utils::shared::Shared;
+                use local_async_utils::prelude::*;
                 $handle.with(
                     #[inline(always)]
                     $f,

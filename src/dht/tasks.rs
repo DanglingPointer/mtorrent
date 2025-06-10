@@ -5,11 +5,7 @@ use super::U160;
 use crate::debug_stopwatch;
 use crate::utils::connctrl::{ConnectPermit, QuickConnectControl};
 use futures::io;
-use local_async_utils::local_sync::channel as local_channel;
-use local_async_utils::local_sync::LocalShared;
-use local_async_utils::sealed::Set;
-use local_async_utils::shared::Shared;
-use local_async_utils::{min, sec};
+use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -116,8 +112,8 @@ pub(super) struct SearchCtx {
     pub(super) cmd_result_sender: mpsc::Sender<SocketAddr>,
     pub(super) peer_sender: local_channel::Sender<(SocketAddr, U160)>,
     pub(super) cnt_ctrl: QuickConnectControl<PingCtx>,
-    pub(super) queried_nodes: Set<SocketAddr>,
-    pub(super) discovered_peers: Set<SocketAddr>,
+    pub(super) queried_nodes: sealed::Set<SocketAddr>,
+    pub(super) discovered_peers: sealed::Set<SocketAddr>,
 }
 
 pub(super) fn launch_peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) {

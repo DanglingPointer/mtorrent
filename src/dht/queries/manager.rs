@@ -1,8 +1,7 @@
 use super::IncomingQuery;
 use crate::dht::error::Error;
 use crate::dht::msgs::*;
-use local_async_utils::local_sync;
-use local_async_utils::millisec;
+use local_async_utils::prelude::*;
 use std::cmp::Ordering;
 use std::collections::binary_heap::PeekMut;
 use std::collections::hash_map::Entry;
@@ -15,7 +14,7 @@ use tokio::time::Instant;
 pub(super) struct OutgoingQuery {
     pub(super) query: QueryMsg,
     pub(super) destination_addr: SocketAddr,
-    pub(super) response_sink: local_sync::oneshot::Sender<Result<ResponseMsg, Error>>,
+    pub(super) response_sink: local_oneshot::Sender<Result<ResponseMsg, Error>>,
 }
 
 struct PendingTimeout {
@@ -50,7 +49,7 @@ pub struct QueryManager {
     outstanding_queries: HashMap<u32, OutgoingQuery>,
     pending_timeouts: BinaryHeap<PendingTimeout>,
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-    incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
+    incoming_queries_sink: local_channel::Sender<IncomingQuery>,
 }
 
 impl QueryManager {
@@ -59,7 +58,7 @@ impl QueryManager {
 
     pub fn new(
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-        incoming_queries_sink: local_sync::channel::Sender<IncomingQuery>,
+        incoming_queries_sink: local_channel::Sender<IncomingQuery>,
     ) -> Self {
         Self {
             next_tid: 1,

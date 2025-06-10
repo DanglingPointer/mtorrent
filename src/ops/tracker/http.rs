@@ -1,6 +1,6 @@
 use super::utils;
 use crate::utils::benc;
-use local_async_utils::sec;
+use local_async_utils::prelude::*;
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;

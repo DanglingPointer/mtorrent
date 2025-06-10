@@ -1,5 +1,5 @@
 use igd_next::{aio, Error, Gateway, PortMappingProtocol, SearchOptions};
-use local_async_utils::sec;
+use local_async_utils::prelude::*;
 use std::io;
 use std::net::SocketAddr;
 use tokio::time::Instant;

@@ -1,4 +1,4 @@
-use local_async_utils::sealed::Set;
+use local_async_utils::prelude::*;
 use std::cell::Cell;
 use std::future::poll_fn;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use derive_more::Debug;
 
 struct State<D> {
     budget: Cell<usize>,
-    used_addrs: Set<SocketAddr>,
+    used_addrs: sealed::Set<SocketAddr>,
     waker: Cell<Option<Waker>>,
     data: D,
 }

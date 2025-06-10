@@ -9,8 +9,7 @@ use super::ctx;
 use crate::utils::config;
 use crate::utils::peer_id::PeerId;
 use futures::{future, Future, FutureExt, TryFutureExt};
-use local_async_utils::sec;
-use local_async_utils::{local_sync, shared::Shared};
+use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
@@ -22,7 +21,7 @@ use tokio::time;
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<SocketAddr>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -45,7 +44,7 @@ pub async fn make_periodic_announces(
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<SocketAddr>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -114,7 +113,7 @@ async fn launch_announces(
     udp_trackers: impl IntoIterator<Item = String>,
     http_trackers: impl IntoIterator<Item = String>,
     handler: impl AnnounceHandler + Clone,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<SocketAddr>,
 ) {
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| async {
         let tracker_addr_copy = tracker_addr.clone();
@@ -151,7 +150,7 @@ async fn launch_announces(
 async fn announce_periodically(
     mut client: impl TrackerClient,
     mut handler: impl AnnounceHandler,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<SocketAddr>,
 ) {
     loop {
         let request = handler.generate_request();

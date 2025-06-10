@@ -1,8 +1,7 @@
 use super::super::ctx;
 use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, LOCAL_REQQ};
 use crate::{data, pwp};
-use local_async_utils::shared::Shared;
-use local_async_utils::{local_sync, sec};
+use local_async_utils::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::{cmp, io};
@@ -18,7 +17,7 @@ struct Data {
     remote_extensions: HashMap<pwp::Extension, u8>,
     sent_metadata_pieces: pwp::Bitfield,
     last_shared_peers: HashSet<SocketAddr>,
-    peer_discovered_channel: local_sync::channel::Sender<SocketAddr>,
+    peer_discovered_channel: local_channel::Sender<SocketAddr>,
 }
 
 pub struct Peer(Box<Data>);
@@ -29,7 +28,7 @@ pub async fn new_peer(
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
     initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
-    peer_discovered_channel: local_sync::channel::Sender<SocketAddr>,
+    peer_discovered_channel: local_channel::Sender<SocketAddr>,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with(|ctx| ctx.metainfo.size());
     let inner = Box::new(Data {

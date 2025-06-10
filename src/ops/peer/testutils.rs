@@ -3,7 +3,7 @@ use crate::utils::peer_id::PeerId;
 use crate::utils::{magnet, startup};
 use crate::{ops::ctx, pwp};
 use futures::future::LocalBoxFuture;
-use local_async_utils::{local_sync, shared::Shared};
+use local_async_utils::prelude::*;
 use std::fmt::Debug;
 use std::io::Read;
 use std::net::SocketAddr;
@@ -186,7 +186,7 @@ impl PeerBuilder {
                 }
             });
         }
-        let (sink, _src) = local_sync::channel();
+        let (sink, _src) = local_channel::channel();
 
         let ctx_handle_clone = ctx_handle.clone();
         let run_future = async move {

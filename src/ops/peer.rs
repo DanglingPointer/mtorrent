@@ -14,8 +14,7 @@ pub use tcp::run_listener as run_pwp_listener;
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
 use crate::{data, pwp};
-use local_async_utils::shared::Shared;
-use local_async_utils::{local_sync, sec};
+use local_async_utils::prelude::*;
 use std::io;
 use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
@@ -213,7 +212,7 @@ pub struct MainConnectionData {
     pub metainfo_storage: data::StorageClient,
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
-    pub peer_discovered_channel: local_sync::channel::Sender<SocketAddr>,
+    pub peer_discovered_channel: local_channel::Sender<SocketAddr>,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 }
 

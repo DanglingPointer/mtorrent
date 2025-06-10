@@ -2,7 +2,7 @@ use crate::ops;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{ip, magnet, startup, upnp};
 use futures::StreamExt;
-use local_async_utils::local_sync;
+use local_async_utils::prelude::*;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
@@ -132,7 +132,7 @@ async fn preliminary_stage(
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_sync::channel::<SocketAddr>();
+    let (peer_discovered_sink, mut peer_discovered_src) = local_channel::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PRELIMINARY_CONNECTIONS,
         ops::PreliminaryConnectionData {
@@ -222,7 +222,7 @@ async fn main_stage(
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_sync::channel::<SocketAddr>();
+    let (peer_discovered_sink, mut peer_discovered_src) = local_channel::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PEER_CONNECTIONS,
         ops::MainConnectionData {
