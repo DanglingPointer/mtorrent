@@ -136,6 +136,24 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
     let local_id = with_rt!(|rt| *rt.local_id());
     let client = &ctx.cnt_ctrl.data().client;
 
+    macro_rules! announce_peer {
+        ($token:expr) => {
+            if let Some(token) = $token {
+                let _ = client
+                    .announce_peer(
+                        addr,
+                        AnnouncePeerArgs {
+                            id: local_id,
+                            info_hash: ctx.target,
+                            port: Some(ctx.local_peer_port),
+                            token,
+                        },
+                    )
+                    .await?;
+            }
+        };
+    }
+
     while !ctx.cmd_result_sender.is_closed() {
         let response = client
             .get_peers(
@@ -147,17 +165,19 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
             )
             .await?;
 
-        let repeat_at = match response.data {
+        match response.data {
             GetPeersResponseData::Nodes(id_addr_pairs) => {
                 log::debug!("search produced {} nodes", id_addr_pairs.len());
                 // spawn search tasks for the returned nodes
                 for addr in id_addr_pairs.into_iter().map(|(_id, ipv4)| SocketAddr::V4(ipv4)) {
                     launch_peer_search(ctx.clone(), addr);
                 }
-                None
+                announce_peer!(response.token);
+                break;
             }
             GetPeersResponseData::Peers(socket_addr_v4s) => {
                 log::info!("search produced {} peer(s)", socket_addr_v4s.len());
+                let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
                 // report the received peer addresses
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
                     if ctx.discovered_peers.insert(peer_addr) {
@@ -165,31 +185,12 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                         let _ = ctx.cmd_result_sender.send(peer_addr).await;
                     }
                 }
-                Some(Instant::now() + GET_PEERS_INTERVAL)
+                announce_peer!(response.token);
+                time::sleep_until(repeat_at).await;
             }
-        };
-        // announce ourselves if supported
-        if let Some(token) = response.token {
-            let _ = client
-                .announce_peer(
-                    addr,
-                    AnnouncePeerArgs {
-                        id: local_id,
-                        info_hash: ctx.target,
-                        port: Some(ctx.local_peer_port),
-                        token,
-                    },
-                )
-                .await?;
-        }
-        // repeat periodically if needed
-        match repeat_at {
-            None => break,
-            Some(repeat_at) if repeat_at > Instant::now() => time::sleep_until(repeat_at).await,
-            _ => (),
         }
     }
-    // insert in the routing table and start periodic ping unless already in progress
+    // try insert in the routing table and start periodic ping unless already in progress
     if let Some(permit) = ctx.cnt_ctrl.try_acquire_permit(addr) {
         periodic_ping(addr, permit, ctx.cnt_ctrl.clone()).await?;
     }
