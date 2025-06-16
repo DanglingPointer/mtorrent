@@ -81,7 +81,7 @@ impl Client {
         match &result {
             Ok(response) => log::debug!("[{dst_addr}] => {response:?}"),
             Err(Error::ErrorResponse(msg)) => log::error!("[{dst_addr}] => {msg:?}"),
-            Err(e) => log::error!("Query to {dst_addr} failed: {e}"),
+            Err(e) => log::debug!("Query to {dst_addr} failed: {e}"),
         }
         result
     }

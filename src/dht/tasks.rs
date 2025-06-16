@@ -170,7 +170,9 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 log::debug!("search produced {} nodes", id_addr_pairs.len());
                 // spawn search tasks for the returned nodes
                 for addr in id_addr_pairs.into_iter().map(|(_id, ipv4)| SocketAddr::V4(ipv4)) {
-                    launch_peer_search(ctx.clone(), addr);
+                    if !addr.ip().is_unspecified() && addr.port() != 0 {
+                        launch_peer_search(ctx.clone(), addr);
+                    }
                 }
                 announce_peer!(response.token);
                 break;
