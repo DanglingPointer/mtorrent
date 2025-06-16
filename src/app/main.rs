@@ -1,4 +1,5 @@
 use crate::ops;
+use crate::pwp::PeerOrigin;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{ip, magnet, startup, upnp};
 use futures::StreamExt;
@@ -132,7 +133,8 @@ async fn preliminary_stage(
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_channel::channel::<SocketAddr>();
+    let (peer_discovered_sink, mut peer_discovered_src) =
+        local_channel::channel::<(SocketAddr, PeerOrigin)>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PRELIMINARY_CONNECTIONS,
         ops::PreliminaryConnectionData {
@@ -141,7 +143,7 @@ async fn preliminary_stage(
         },
     );
     task::spawn_local(async move {
-        while let Some(peer_addr) = peer_discovered_src.next().await {
+        while let Some((peer_addr, _origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
                     log::debug!("Connecting to {peer_addr}...");
@@ -176,7 +178,7 @@ async fn preliminary_stage(
     });
 
     for peer_ip in extra_peers {
-        peer_discovered_sink.send(peer_ip);
+        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
     let tracker_ctx = ctx.clone();
@@ -222,7 +224,8 @@ async fn main_stage(
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_channel::channel::<SocketAddr>();
+    let (peer_discovered_sink, mut peer_discovered_src) =
+        local_channel::channel::<(SocketAddr, PeerOrigin)>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PEER_CONNECTIONS,
         ops::MainConnectionData {
@@ -235,12 +238,12 @@ async fn main_stage(
         },
     );
     task::spawn_local(async move {
-        while let Some(peer_addr) = peer_discovered_src.next().await {
+        while let Some((peer_addr, origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
-                    ops::outgoing_pwp_connection(peer_addr, permit).await.unwrap_or_else(|e| {
-                        log!(e, "Outgoing peer connection to {peer_addr} failed: {e}")
-                    });
+                    ops::outgoing_pwp_connection(peer_addr, origin, permit).await.unwrap_or_else(
+                        |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
+                    );
                 });
             } else {
                 log::debug!("Outgoing connection to {peer_addr} denied");
@@ -267,7 +270,7 @@ async fn main_stage(
     });
 
     for peer_ip in extra_peers {
-        peer_discovered_sink.send(peer_ip);
+        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
     let tracker_ctx = ctx.clone();

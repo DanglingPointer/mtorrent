@@ -17,7 +17,7 @@ struct Data {
     remote_extensions: HashMap<pwp::Extension, u8>,
     sent_metadata_pieces: pwp::Bitfield,
     last_shared_peers: HashSet<SocketAddr>,
-    peer_discovered_channel: local_channel::Sender<SocketAddr>,
+    peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
 }
 
 pub struct Peer(Box<Data>);
@@ -28,7 +28,7 @@ pub async fn new_peer(
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
     initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
-    peer_discovered_channel: local_channel::Sender<SocketAddr>,
+    peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with(|ctx| ctx.metainfo.size());
     let inner = Box::new(Data {
@@ -145,7 +145,7 @@ pub async fn handle_incoming(peer: Peer, until: Instant, serve_metadata: bool) -
                     let connected_peers: HashSet<SocketAddr> =
                         with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
                     for peer_addr in pex.added.difference(&connected_peers) {
-                        inner.peer_discovered_channel.send(*peer_addr);
+                        inner.peer_discovered_channel.send((*peer_addr, pwp::PeerOrigin::Pex));
                     }
                 };
             }

@@ -149,6 +149,7 @@ macro_rules! maybe_run_extensions {
 // ------------------------------------------------------------------------------------------------
 
 async fn run_peer_connection(
+    origin: pwp::PeerOrigin,
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
@@ -196,6 +197,11 @@ async fn run_peer_connection(
     // create extensions before upload so that we send extended handshake before bitfield
     let (extensions, download, (upload, reporter)) =
         try_join!(extensions_fut, download_fut, upload_fut)?;
+
+    data.ctx_handle
+        .clone()
+        .with(|ctx| ctx.peer_states.set_origin(&remote_ip, origin));
+
     try_join!(
         run_download(download.into(), remote_ip, data.ctx_handle.clone()),
         run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
@@ -212,12 +218,13 @@ pub struct MainConnectionData {
     pub metainfo_storage: data::StorageClient,
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
-    pub peer_discovered_channel: local_channel::Sender<SocketAddr>,
+    pub peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 }
 
 pub async fn outgoing_pwp_connection(
     remote_ip: SocketAddr,
+    origin: pwp::PeerOrigin,
     permit: OutgoingConnectionPermit<MainConnectionData>,
 ) -> io::Result<()> {
     let mut handle = permit.0.ctx_handle.clone();
@@ -242,7 +249,8 @@ pub async fn outgoing_pwp_connection(
         let connected_time = Instant::now();
 
         let run_result =
-            run_peer_connection(download_chans, upload_chans, extended_chans, &permit.0).await;
+            run_peer_connection(origin, download_chans, upload_chans, extended_chans, &permit.0)
+                .await;
 
         match run_result {
             Err(e) if e.kind() != io::ErrorKind::Other && connected_time.elapsed() > sec!(5) => {
@@ -279,14 +287,25 @@ pub async fn incoming_pwp_connection(
     )
     .await?;
 
-    let run_result =
-        run_peer_connection(download_chans, upload_chans, extended_chans, &permit.0).await;
+    let run_result = run_peer_connection(
+        pwp::PeerOrigin::Listener,
+        download_chans,
+        upload_chans,
+        extended_chans,
+        &permit.0,
+    )
+    .await;
 
     match run_result {
         Err(e) if e.kind() != io::ErrorKind::Other => {
             // ErrorKind::Other means we disconnected the peer intentionally
             log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
-            outgoing_pwp_connection(remote_ip, OutgoingConnectionPermit(permit.0)).await
+            outgoing_pwp_connection(
+                remote_ip,
+                pwp::PeerOrigin::Listener,
+                OutgoingConnectionPermit(permit.0),
+            )
+            .await
         }
         Err(e) => Err(e),
         _ => Ok(()),

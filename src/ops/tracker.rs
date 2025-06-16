@@ -6,6 +6,7 @@ mod utils;
 mod tests;
 
 use super::ctx;
+use crate::pwp::PeerOrigin;
 use crate::utils::config;
 use crate::utils::peer_id::PeerId;
 use futures::{future, Future, FutureExt, TryFutureExt};
@@ -21,7 +22,7 @@ use tokio::time;
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -44,7 +45,7 @@ pub async fn make_periodic_announces(
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -113,7 +114,7 @@ async fn launch_announces(
     udp_trackers: impl IntoIterator<Item = String>,
     http_trackers: impl IntoIterator<Item = String>,
     handler: impl AnnounceHandler + Clone,
-    cb_channel: local_channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| async {
         let tracker_addr_copy = tracker_addr.clone();
@@ -150,7 +151,7 @@ async fn launch_announces(
 async fn announce_periodically(
     mut client: impl TrackerClient,
     mut handler: impl AnnounceHandler,
-    cb_channel: local_channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     loop {
         let request = handler.generate_request();
@@ -160,7 +161,7 @@ async fn announce_periodically(
                 handler.process_response(&mut response);
                 let interval = response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {
-                    cb_channel.send(peer_addr);
+                    cb_channel.send((peer_addr, PeerOrigin::Tracker));
                 }
                 time::sleep(interval).await;
             }
