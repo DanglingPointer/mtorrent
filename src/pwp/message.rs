@@ -1,5 +1,6 @@
 use bitvec::prelude::*;
 use bytes::BufMut;
+use derive_more::Display;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
@@ -238,7 +239,8 @@ const ID_EXTENDED: u8 = 20;
 
 // ------
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Display)]
+#[display("ind={piece_index} off={in_piece_offset} len={block_length}")]
 pub struct BlockInfo {
     pub piece_index: usize,
     pub in_piece_offset: usize,
@@ -283,7 +285,8 @@ pub struct ExtendedHandshake {
     pub metadata_size: Option<usize>,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq, Display)]
+#[display("added={added:?} dropped={dropped:?}")]
 pub struct PeerExchangeData {
     pub added: HashSet<SocketAddr>,
     pub dropped: HashSet<SocketAddr>,
@@ -304,12 +307,6 @@ pub enum ExtendedMessage {
         piece: usize,
     },
     PeerExchange(Box<PeerExchangeData>),
-}
-
-impl fmt::Display for BlockInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ind={} off={} len={}", self.piece_index, self.in_piece_offset, self.block_length)
-    }
 }
 
 impl fmt::Display for ExtendedHandshake {
@@ -337,12 +334,6 @@ impl fmt::Display for ExtendedHandshake {
             write!(f, " metasize={metasize}")?;
         }
         Ok(())
-    }
-}
-
-impl fmt::Display for PeerExchangeData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "added={:?} dropped={:?}", self.added, self.dropped)
     }
 }
 
