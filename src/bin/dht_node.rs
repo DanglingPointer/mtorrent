@@ -9,8 +9,9 @@ use tokio::sync::mpsc;
 #[derive(Parser)]
 #[command(version, about = "Standalone DHT node")]
 struct Args {
-    /// Addresses of initial nodes used for bootstrapping
-    nodes: Vec<String>,
+    /// Addresses of extra nodes used for bootstrapping
+    #[arg(short, long)]
+    nodes: Option<Vec<String>>,
 
     /// Shut down after the specified period of time
     #[arg(short, long, value_name = "SECONDS")]
@@ -27,7 +28,9 @@ struct Args {
 
 /// Example usage:
 /// ```
-/// ./target/release/dht_node "router.bittorrent.com:6881" "dht.transmissionbt.com:6881" --duration=72
+/// ./target/release/dht_node --duration=30
+/// ./target/release/dht_node --nodes '"router.bittorrent.com:6881" "dht.transmissionbt.com:6881"' --duration=72
+/// ./target/release/dht_node --duration=30 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
 /// ```
 fn main() -> io::Result<()> {
     #[cfg(debug_assertions)]
@@ -49,24 +52,24 @@ fn main() -> io::Result<()> {
 
     let args = Args::parse();
 
-    let nodes: Vec<SocketAddr> = args
-        .nodes
-        .into_iter()
-        .filter_map(|arg| arg.to_socket_addrs().ok())
-        .flatten()
-        .filter(SocketAddr::is_ipv4)
-        .collect();
+    let extra_nodes: Vec<SocketAddr> = if let Some(nodes) = args.nodes {
+        nodes
+            .into_iter()
+            .filter_map(|arg| arg.to_socket_addrs().ok())
+            .flatten()
+            .filter(SocketAddr::is_ipv4)
+            .collect()
+    } else {
+        vec![]
+    };
 
     let (_worker, cmds) = app::dht::launch_node_runtime(6881, args.parallel_queries);
 
-    for node in nodes {
+    for node in extra_nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
     }
 
     let search_results_channel = if let Some(magnet_link) = args.target_magnet {
-        std::thread::sleep(Duration::from_secs(10));
-        log::info!("Starting search for peers");
-
         let (sender, receiver) = mpsc::channel(512);
         cmds.try_send(dht::Command::FindPeers {
             info_hash: (*magnet_link.info_hash()).into(),

@@ -9,10 +9,11 @@ use crate::dht::peers::PeerTable;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::prelude::*;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::rc::Rc;
-use tokio::select;
 use tokio::sync::Notify;
+use tokio::time::Instant;
+use tokio::{select, time};
 
 macro_rules! define {
     ($name:ident, $handle:expr) => {
@@ -39,10 +40,15 @@ pub struct Processor {
     _client: queries::Client,
     shutdown_signal: Rc<Notify>,
     cnt_ctrl: ConnectControl<PingCtx>,
+    bootstrapping_nodes: Vec<SocketAddr>,
 }
 
 impl Processor {
-    pub fn new(local_id: U160, client: queries::Client) -> Self {
+    pub fn new<I, S>(local_id: U160, client: queries::Client, initial_nodes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let nodes = LocalShared::new(RoutingTable::new_boxed(local_id));
         let shutdown_signal = Rc::new(Notify::const_new());
         let ctx = PingCtx {
@@ -51,6 +57,15 @@ impl Processor {
             shutdown_signal: shutdown_signal.clone(),
         };
         let (peer_sender, peer_receiver) = local_channel::channel();
+
+        // do all DNS resolution first because it's a blocking call
+        let bootstrapping_nodes: Vec<SocketAddr> = initial_nodes
+            .into_iter()
+            .filter_map(|node| node.as_ref().to_socket_addrs().ok())
+            .flatten()
+            .filter(SocketAddr::is_ipv4)
+            .collect();
+
         Self {
             nodes,
             peers: PeerTable::new(),
@@ -60,10 +75,12 @@ impl Processor {
             _client: client,
             shutdown_signal,
             cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
+            bootstrapping_nodes,
         }
     }
 
     pub async fn run(mut self, mut queries: queries::Server, mut commands: cmds::Server) {
+        self.bootstrap(&mut queries).await;
         loop {
             select! {
                 biased;
@@ -86,6 +103,25 @@ impl Processor {
             "Processor shutting down, node_count = {}",
             self.nodes.with(|rt| rt.node_count())
         );
+    }
+
+    async fn bootstrap(&mut self, queries: &mut queries::Server) {
+        if !self.bootstrapping_nodes.is_empty() {
+            let deadline = Instant::now() + sec!(5);
+
+            for addr in &self.bootstrapping_nodes {
+                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(*addr) {
+                    launch_periodic_ping(*addr, permit, self.cnt_ctrl.split_off());
+                }
+            }
+
+            let _ = time::timeout_at(deadline, async {
+                while let Some(incoming_query) = queries.0.next().await {
+                    self.handle_query(incoming_query);
+                }
+            })
+            .await;
+        }
     }
 
     fn handle_query(&mut self, query: IncomingQuery) {

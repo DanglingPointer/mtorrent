@@ -42,7 +42,11 @@ async fn dht_main(
     let (client, server, queries_runner) =
         dht::setup_routing(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
 
-    let processor = dht::Processor::new(local_id, client);
+    let processor = dht::Processor::new(
+        local_id,
+        client,
+        vec!["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"], // TODO: read from config file
+    );
 
     let (udp_result, queries_result, _) =
         join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
