@@ -2,3 +2,4 @@
 .idea
 mtorrent_output*
 seeders_input
+*.profraw
