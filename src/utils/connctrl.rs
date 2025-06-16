@@ -127,6 +127,7 @@ impl<D> Clone for QuickConnectControl<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
     use std::str::FromStr;
     use tokio_test::task::spawn;
     use tokio_test::{assert_pending, assert_ready};
@@ -135,6 +136,9 @@ mod tests {
             SocketAddr::from_str($addr).unwrap()
         };
     }
+
+    assert_not_impl_any!(ConnectControl<()>: Clone);
+    assert_impl_all!(QuickConnectControl<()>: Clone);
 
     #[test]
     fn test_incoming_control_respects_budget() {
