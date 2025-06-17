@@ -156,7 +156,7 @@ pub async fn new_peer(
 
     with_ctx!(|ctx| {
         // the bookkeeping below must be done _after_ the I/O operations above,
-        // otherwise it will be never undone in case of send/recv error
+        // otherwise it will be never undone in the case of a send/recv error
         let peer_ip = rx.remote_ip();
         ctx.connected_peers.insert(*peer_ip);
     });

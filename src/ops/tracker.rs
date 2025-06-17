@@ -282,7 +282,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     }
 
     fn process_response(&mut self, response: &mut ResponseData) {
-        self.with(|ctx| response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip)));
+        self.with(|ctx| response.peers.retain(|peer_ip| !ctx.reachable_peers.contains(peer_ip)));
     }
 }
 

@@ -320,7 +320,7 @@ async fn run_metadata_download(
     extended_chans: Option<pwp::ExtendedChannels>,
     mut ctx_handle: PreliminaryHandle,
 ) -> io::Result<()> {
-    ctx_handle.with(|ctx| ctx.known_peers.insert(*download_chans.0.remote_ip()));
+    ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
 
     let extended_chans = extended_chans.ok_or_else(|| {
         io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
