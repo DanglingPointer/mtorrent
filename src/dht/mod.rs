@@ -1,6 +1,7 @@
 #[macro_use]
 mod processor;
 mod cmds;
+mod config;
 mod error;
 mod kademlia;
 mod msgs;
@@ -12,6 +13,7 @@ mod udp;
 
 pub use cmds::Server as CmdServer;
 pub use cmds::{setup_cmds, Command};
+pub use config::Config;
 pub use msgs::Message;
 pub use processor::Processor;
 pub use queries::setup_routing;

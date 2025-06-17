@@ -6,10 +6,13 @@ use super::queries::{self, IncomingQuery};
 use super::tasks::*;
 use super::u160::U160;
 use crate::dht::peers::PeerTable;
+use crate::dht::Config;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::prelude::*;
+use std::collections::BTreeSet;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -40,16 +43,17 @@ pub struct Processor {
     _client: queries::Client,
     shutdown_signal: Rc<Notify>,
     cnt_ctrl: ConnectControl<PingCtx>,
-    bootstrapping_nodes: Vec<SocketAddr>,
+    config: Config,
+    config_dir: PathBuf,
 }
 
 impl Processor {
-    pub fn new<I, S>(local_id: U160, client: queries::Client, initial_nodes: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let nodes = LocalShared::new(RoutingTable::new_boxed(local_id));
+    pub fn new(config_dir: impl AsRef<Path>, client: queries::Client) -> Self {
+        let config = Config::load(&config_dir).unwrap_or_else(|e| {
+            log::warn!("Failed to load config ({e}), using defaults");
+            Config::default()
+        });
+        let nodes = LocalShared::new(RoutingTable::new_boxed(config.local_id));
         let shutdown_signal = Rc::new(Notify::const_new());
         let ctx = PingCtx {
             nodes: nodes.clone(),
@@ -57,15 +61,6 @@ impl Processor {
             shutdown_signal: shutdown_signal.clone(),
         };
         let (peer_sender, peer_receiver) = local_channel::channel();
-
-        // do all DNS resolution first because it's a blocking call
-        let bootstrapping_nodes: Vec<SocketAddr> = initial_nodes
-            .into_iter()
-            .filter_map(|node| node.as_ref().to_socket_addrs().ok())
-            .flatten()
-            .filter(SocketAddr::is_ipv4)
-            .collect();
-
         Self {
             nodes,
             peers: PeerTable::new(),
@@ -75,7 +70,8 @@ impl Processor {
             _client: client,
             shutdown_signal,
             cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
-            bootstrapping_nodes,
+            config,
+            config_dir: config_dir.as_ref().to_owned(),
         }
     }
 
@@ -103,13 +99,24 @@ impl Processor {
             "Processor shutting down, node_count = {}",
             self.nodes.with(|rt| rt.node_count())
         );
+        self.save_routing_table();
     }
 
     async fn bootstrap(&mut self, queries: &mut queries::Server) {
-        if !self.bootstrapping_nodes.is_empty() {
+        // do all DNS resolution first because it's a blocking call
+        let bootstrapping_nodes: Vec<SocketAddr> = self
+            .config
+            .nodes
+            .iter()
+            .filter_map(|node| node.to_socket_addrs().ok())
+            .flatten()
+            .filter(SocketAddr::is_ipv4)
+            .collect();
+
+        if !bootstrapping_nodes.is_empty() {
             let deadline = Instant::now() + sec!(5);
 
-            for addr in &self.bootstrapping_nodes {
+            for addr in &bootstrapping_nodes {
                 if let Some(permit) = self.cnt_ctrl.try_acquire_permit(*addr) {
                     launch_periodic_ping(*addr, permit, self.cnt_ctrl.split_off());
                 }
@@ -121,6 +128,19 @@ impl Processor {
                 }
             })
             .await;
+        }
+    }
+
+    fn save_routing_table(&mut self) {
+        let connected_nodes: BTreeSet<String> =
+            self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
+
+        if !connected_nodes.is_empty() {
+            self.config.nodes = connected_nodes;
+            self.config.nodes.extend(Config::default().nodes);
+        }
+        if let Err(e) = self.config.save(&self.config_dir) {
+            log::warn!("Failed to save config: {e}");
         }
     }
 

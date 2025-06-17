@@ -190,6 +190,10 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
 
         closest_nodes.into_iter()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Node> {
+        self.buckets.iter().flat_map(Bucket::iter)
+    }
 }
 
 impl<const BUCKET_SIZE: usize> fmt::Display for RoutingTable<BUCKET_SIZE> {

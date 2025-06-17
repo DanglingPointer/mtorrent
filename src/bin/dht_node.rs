@@ -1,9 +1,9 @@
 use clap::Parser;
 use mtorrent::utils::magnet::MagnetLink;
 use mtorrent::{app, dht};
-use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
+use std::{env, io, iter};
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -63,7 +63,8 @@ fn main() -> io::Result<()> {
         vec![]
     };
 
-    let (_worker, cmds) = app::dht::launch_node_runtime(6881, args.parallel_queries);
+    let config_dir = env::current_dir()?;
+    let (_worker, cmds) = app::dht::launch_node_runtime(6881, args.parallel_queries, config_dir);
 
     for node in extra_nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
@@ -88,8 +89,7 @@ fn main() -> io::Result<()> {
     }
 
     if let Some(mut channel) = search_results_channel {
-        let discovered_peers: Vec<_> =
-            std::iter::from_fn(move || channel.try_recv().ok()).collect();
+        let discovered_peers: Vec<_> = iter::from_fn(move || channel.try_recv().ok()).collect();
         log::info!("Discovered peers: {discovered_peers:?}");
     }
 
