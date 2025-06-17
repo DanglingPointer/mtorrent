@@ -1,4 +1,4 @@
-//! Trackers file (bencoded dictionary):
+//! Trackers file (bencoded dictionary or JSON):
 //! ```text
 //! {
 //!     "trackers": [ <tracker1>, <tracker2>, ... ]
@@ -13,6 +13,7 @@
 //! ```
 use crate::pwp::Bitfield;
 use crate::utils::benc::Element;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::{fs, io};
@@ -20,35 +21,61 @@ use std::{fs, io};
 const FILENAME: &str = ".mtorrent";
 const TRACKERS_KEY: &str = "trackers";
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct Trackers {
     trackers: BTreeSet<String>,
 }
 
-fn read_trackers(filepath: impl AsRef<Path>) -> io::Result<Trackers> {
-    let buf = fs::read(filepath)?;
-    let bencode = Element::from_bytes(&buf)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
+impl Trackers {
+    fn from_file(filepath: impl AsRef<Path>) -> io::Result<Self> {
+        let buf = fs::read(filepath)?;
 
-    if let Element::Dictionary(root) = bencode {
-        let mut trackers = BTreeSet::new();
-        for (key, value) in root {
-            match (key, value) {
-                (Element::ByteString(key), Element::List(value))
-                    if key == TRACKERS_KEY.as_bytes() =>
-                {
-                    trackers.extend(value.into_iter().filter_map(|tracker| match tracker {
-                        Element::ByteString(tracker) => String::from_utf8(tracker).ok(),
-                        _ => None,
-                    }));
+        if let Ok(bencode) = Element::from_bytes(&buf) {
+            if let Element::Dictionary(root) = bencode {
+                let mut trackers = BTreeSet::new();
+                for (key, value) in root {
+                    match (key, value) {
+                        (Element::ByteString(key), Element::List(value))
+                            if key == TRACKERS_KEY.as_bytes() =>
+                        {
+                            trackers.extend(value.into_iter().filter_map(
+                                |tracker| match tracker {
+                                    Element::ByteString(tracker) => String::from_utf8(tracker).ok(),
+                                    _ => None,
+                                },
+                            ));
+                        }
+                        _ => (),
+                    }
                 }
-                _ => (),
+                Ok(Self { trackers })
+            } else {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))
             }
+        } else {
+            Ok(serde_json::from_slice(&buf)?)
         }
-        Ok(Trackers { trackers })
-    } else {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))
     }
+}
+
+pub fn load_trackers(
+    config_dir: impl AsRef<Path>,
+) -> io::Result<impl ExactSizeIterator<Item = String>> {
+    let Trackers { trackers } = Trackers::from_file(config_dir.as_ref().join(FILENAME))?;
+    Ok(trackers.into_iter())
+}
+
+pub fn save_trackers<T: Into<String>>(
+    config_dir: impl AsRef<Path>,
+    trackers: impl IntoIterator<Item = T>,
+) -> io::Result<()> {
+    let config_path = config_dir.as_ref().join(FILENAME);
+    let mut saved_trackers = Trackers::from_file(&config_path).unwrap_or_default();
+    saved_trackers.trackers.extend(trackers.into_iter().map(Into::into));
+
+    let json_bytes = serde_json::to_vec_pretty(&saved_trackers)?;
+    fs::write(config_path, json_bytes)?;
+    Ok(())
 }
 
 pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
@@ -68,13 +95,6 @@ pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Res
     }
 }
 
-pub fn load_trackers(
-    config_dir: impl AsRef<Path>,
-) -> io::Result<impl ExactSizeIterator<Item = String>> {
-    let Trackers { trackers } = read_trackers(config_dir.as_ref().join(FILENAME))?;
-    Ok(trackers.into_iter())
-}
-
 pub fn save_state(
     config_dir: impl AsRef<Path>,
     info_hash: &[u8; 20],
@@ -88,30 +108,6 @@ pub fn save_state(
     let config_path = config_dir.as_ref().join(FILENAME);
     fs::write(config_path, bencode.to_bytes())?;
     Ok(())
-}
-
-pub fn save_trackers<T: Into<String>>(
-    config_dir: impl AsRef<Path>,
-    trackers: impl IntoIterator<Item = T>,
-) -> io::Result<()> {
-    let config_path = config_dir.as_ref().join(FILENAME);
-    let Trackers {
-        trackers: mut saved_trackers,
-    } = read_trackers(&config_path).unwrap_or_default();
-    saved_trackers.extend(trackers.into_iter().map(Into::into));
-
-    let mut root = BTreeMap::new();
-    root.insert(
-        Element::from(TRACKERS_KEY),
-        Element::List(
-            saved_trackers
-                .into_iter()
-                .map(|tracker| Element::ByteString(tracker.into_bytes()))
-                .collect(),
-        ),
-    );
-    let bencode = Element::Dictionary(root);
-    fs::write(config_path, bencode.to_bytes())
 }
 
 #[cfg(test)]
@@ -137,6 +133,49 @@ mod tests {
         let mut loaded_state = load_state(dir, &info_hash).unwrap();
         loaded_state.resize(bitfield.len(), false);
         assert_eq!(bitfield, loaded_state);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_read_bencoded_trackers() {
+        let dir = "test_read_bencoded_trackers";
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            Path::new(dir).join(FILENAME),
+            b"d8:trackersl19:http://tracker1.com19:http://tracker2.comee",
+        )
+        .unwrap();
+
+        let loaded_trackers = load_trackers(dir).unwrap();
+        assert_eq!(
+            ["http://tracker1.com", "http://tracker2.com"]
+                .into_iter()
+                .map(ToString::to_string)
+                .collect::<BTreeSet<_>>(),
+            loaded_trackers.collect::<BTreeSet<_>>(),
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_write_json_trackers() {
+        let dir = "test_write_json_trackers";
+        fs::create_dir_all(dir).unwrap();
+
+        save_trackers(dir, ["http://tracker1.com", "http://tracker2.com"]).unwrap();
+
+        let content = fs::read_to_string(Path::new(dir).join(FILENAME)).unwrap();
+        assert_eq!(
+            content,
+            r#"{
+  "trackers": [
+    "http://tracker1.com",
+    "http://tracker2.com"
+  ]
+}"#,
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
