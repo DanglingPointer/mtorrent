@@ -1,9 +1,10 @@
-use core::fmt;
+use derive_more::Display;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::Write;
 use std::num::ParseIntError;
-use std::{io, str};
+use std::{fmt, io, str};
+use thiserror::Error;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
 pub enum Element {
@@ -28,7 +29,7 @@ impl Element {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut dest = Vec::<u8>::new();
-        write_element(self, &mut dest).unwrap();
+        write_element(self, &mut dest);
         dest
     }
 }
@@ -92,7 +93,7 @@ impl fmt::Display for Element {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error, Display)]
 pub enum ParseError {
     EmptySource,
     InvalidPrefix,
@@ -102,22 +103,8 @@ pub enum ParseError {
     InvalidStringLength,
     NoListPrefix,
     NoDictionaryPrefix,
-    ExternalError(Box<dyn Error + Send + Sync>),
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl Error for ParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            ParseError::ExternalError(e) => Some(e.as_ref()),
-            _ => None,
-        }
-    }
+    #[display("{_0}")]
+    ExternalError(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl From<ParseIntError> for ParseError {
@@ -161,32 +148,31 @@ const PREFIX_LIST: u8 = b'l';
 const PREFIX_DICTIONARY: u8 = b'd';
 const SUFFIX_COMMON: u8 = b'e';
 
-fn write_element(e: &Element, dest: &mut Vec<u8>) -> std::io::Result<()> {
+fn write_element(e: &Element, dest: &mut Vec<u8>) {
     match e {
         Element::Integer(number) => {
-            write!(dest, "{}{}{}", PREFIX_INTEGER as char, number, SUFFIX_COMMON as char)?;
+            let _ = write!(dest, "{}{}{}", PREFIX_INTEGER as char, number, SUFFIX_COMMON as char);
         }
         Element::ByteString(data) => {
-            write!(dest, "{}{}", data.len(), DELIMITER_STRING as char)?;
-            dest.write_all(data)?;
+            let _ = write!(dest, "{}{}", data.len(), DELIMITER_STRING as char);
+            dest.extend_from_slice(data);
         }
         Element::List(list) => {
             dest.push(PREFIX_LIST);
             for e in list {
-                write_element(e, dest)?;
+                write_element(e, dest);
             }
             dest.push(SUFFIX_COMMON);
         }
         Element::Dictionary(map) => {
             dest.push(PREFIX_DICTIONARY);
             for (key, value) in map {
-                write_element(key, dest)?;
-                write_element(value, dest)?;
+                write_element(key, dest);
+                write_element(value, dest);
             }
             dest.push(SUFFIX_COMMON);
         }
     };
-    Ok(())
 }
 
 fn read_element(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {

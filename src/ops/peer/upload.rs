@@ -1,8 +1,9 @@
 use super::super::ctx;
 use super::LOCAL_REQQ;
-use crate::utils::{bandwidth, local_sync};
+use crate::utils::bandwidth;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
 use futures::prelude::*;
+use local_async_utils::prelude::*;
 use std::io;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -22,7 +23,7 @@ struct Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| {
+        self.handle.with(|ctx| {
             ctx.piece_tracker.forget_peer(self.tx.remote_ip());
             ctx.peer_states.remove_peer(self.tx.remote_ip());
         });
@@ -103,7 +104,7 @@ macro_rules! update_ctx {
     ($inner:expr) => {
         $inner
             .handle
-            .with_ctx(|ctx| ctx.peer_states.update_upload($inner.tx.remote_ip(), &$inner.state));
+            .with(|ctx| ctx.peer_states.update_upload($inner.tx.remote_ip(), &$inner.state));
     };
 }
 
@@ -139,7 +140,7 @@ pub async fn new_peer(
     storage: data::StorageClient,
     piece_downloaded_channel: broadcast::Receiver<usize>,
 ) -> io::Result<(IdlePeer, AvailabilityReporter)> {
-    let bitfield = handle.with_ctx(|ctx| ctx.accountant.generate_bitfield());
+    let bitfield = handle.with(|ctx| ctx.accountant.generate_bitfield());
     let mut inner = Box::new(Data {
         handle,
         rx,
@@ -227,7 +228,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     define_with_ctx!(inner.handle);
     let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
 
-    let (request_sink, request_src) = local_sync::channel::<pwp::BlockInfo>();
+    let (request_sink, request_src) = local_channel::channel::<pwp::BlockInfo>();
     let mut state_copy = inner.state.clone();
 
     let mut discarded_requests = 0u64;

@@ -4,6 +4,7 @@
         "**/test_output": true,
         "**/mtorrent_output": true,
         "**/target": true,
+        "**/*.profraw": true,
         "**/.idea": true
     },
     "files.exclude": {
@@ -34,4 +35,5 @@
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml"
     ],
+    "terminal.integrated.defaultProfile.linux": "bash",
 }

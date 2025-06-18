@@ -51,6 +51,19 @@
 		},
 		{
 			"type": "cargo",
+			"command": "llvm-cov",
+			"args": [
+				"nextest",
+				"--ignore-run-fail",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "none",
+			"label": "rust: coverage"
+		},
+		{
+			"type": "cargo",
 			"command": "clippy",
 			"args": [
 				"--all-targets",

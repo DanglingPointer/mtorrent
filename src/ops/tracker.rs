@@ -6,10 +6,11 @@ mod utils;
 mod tests;
 
 use super::ctx;
-use crate::sec;
+use crate::pwp::PeerOrigin;
+use crate::utils::config;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{config, local_sync};
 use futures::{future, Future, FutureExt, TryFutureExt};
+use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
@@ -21,7 +22,7 @@ use tokio::time;
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -44,7 +45,7 @@ pub async fn make_periodic_announces(
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     define_with_ctx!(ctx_handle);
 
@@ -113,7 +114,7 @@ async fn launch_announces(
     udp_trackers: impl IntoIterator<Item = String>,
     http_trackers: impl IntoIterator<Item = String>,
     handler: impl AnnounceHandler + Clone,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     let udp_futures_it = udp_trackers.into_iter().map(|tracker_addr| async {
         let tracker_addr_copy = tracker_addr.clone();
@@ -150,7 +151,7 @@ async fn launch_announces(
 async fn announce_periodically(
     mut client: impl TrackerClient,
     mut handler: impl AnnounceHandler,
-    cb_channel: local_sync::channel::Sender<SocketAddr>,
+    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     loop {
         let request = handler.generate_request();
@@ -160,7 +161,7 @@ async fn announce_periodically(
                 handler.process_response(&mut response);
                 let interval = response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {
-                    cb_channel.send(peer_addr);
+                    cb_channel.send((peer_addr, PeerOrigin::Tracker));
                 }
                 time::sleep(interval).await;
             }
@@ -239,7 +240,7 @@ trait AnnounceHandler {
 
 impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
     fn generate_request(&mut self) -> AnnounceData {
-        self.with_ctx(|ctx| AnnounceData {
+        self.with(|ctx| AnnounceData {
             info_hash: *ctx.metainfo.info_hash(),
             downloaded: ctx.accountant.accounted_bytes(),
             left: ctx.accountant.missing_bytes(),
@@ -262,15 +263,13 @@ impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
     }
 
     fn process_response(&mut self, response: &mut ResponseData) {
-        self.with_ctx(|ctx| {
-            response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none())
-        });
+        self.with(|ctx| response.peers.retain(|peer_ip| ctx.peer_states.get(peer_ip).is_none()));
     }
 }
 
 impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     fn generate_request(&mut self) -> AnnounceData {
-        self.with_ctx(|ctx| AnnounceData {
+        self.with(|ctx| AnnounceData {
             info_hash: *ctx.magnet.info_hash(),
             downloaded: 0,
             left: 0,
@@ -283,7 +282,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     }
 
     fn process_response(&mut self, response: &mut ResponseData) {
-        self.with_ctx(|ctx| response.peers.retain(|peer_ip| !ctx.known_peers.contains(peer_ip)));
+        self.with(|ctx| response.peers.retain(|peer_ip| !ctx.reachable_peers.contains(peer_ip)));
     }
 }
 
@@ -292,7 +291,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
 #[derive(Clone, Copy)]
 enum AnnounceEvent {
     Started,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     Stopped,
     Completed,
 }

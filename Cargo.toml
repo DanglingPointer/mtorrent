@@ -1,6 +1,6 @@
 [package]
 name = "mtorrent"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 authors = ["Mikhail Vasilyev"]
 description = "A fast and robust Bittorrent client"
@@ -17,11 +17,11 @@ futures = "0.3.31"
 rand = "0.8.5"
 bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
 igd-next = { version = "0.15.1", features = ["aio_tokio"] }
-log = "0.4.22"
+log = "0.4.27"
 simple_logger = { version = "5.0.0", features = ["threads"] }
 sha1_smol = "1.0.1"
 bytes = "1.8.0"
-tokio = { version = "1.41.1", features = [
+tokio = { version = "1.45.1", features = [
     "rt",
     "net",
     "time",
@@ -30,6 +30,16 @@ tokio = { version = "1.41.1", features = [
     "macros",
 ] }
 clap = { version = "4.5.21", features = ["derive"] }
+derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
+local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.2.0", features = [
+    "tokio-time",
+] }
+pinned-init = { version = "0.0.9", default-features = false, features = [
+    "std",
+] }
+thiserror = "2.0.12"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 
 [target.'cfg(target_family = "windows")'.dependencies]
 ipconfig = "0.3.2"

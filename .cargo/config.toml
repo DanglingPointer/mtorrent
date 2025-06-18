@@ -1,5 +1,5 @@
 [target.'cfg(all())']
-rustflags = ["-D", "warnings"]
+rustflags = ["-D", "warnings", "--cfg", "tokio_unstable"]
 
 [target.'cfg(target_family = "windows")']
 rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,6 +1,7 @@
 use super::super::ctx;
 use super::CLIENT_NAME;
-use crate::{pwp, sec};
+use crate::pwp;
+use local_async_utils::prelude::*;
 use std::{cmp, io};
 use tokio::time::Instant;
 
@@ -15,7 +16,7 @@ struct Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| {
+        self.handle.with(|ctx| {
             ctx.connected_peers.remove(self.rx.remote_ip());
         });
     }
@@ -155,9 +156,8 @@ pub async fn new_peer(
 
     with_ctx!(|ctx| {
         // the bookkeeping below must be done _after_ the I/O operations above,
-        // otherwise it will be never undone in case of send/recv error
+        // otherwise it will be never undone in the case of a send/recv error
         let peer_ip = rx.remote_ip();
-        ctx.known_peers.insert(*peer_ip);
         ctx.connected_peers.insert(*peer_ip);
     });
     let inner = Box::new(Data {

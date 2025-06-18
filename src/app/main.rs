@@ -1,10 +1,12 @@
-use crate::ops;
+use crate::pwp::PeerOrigin;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{ip, local_sync, magnet, startup, upnp};
+use crate::utils::{ip, magnet, startup, upnp};
+use crate::{dht, ops};
 use futures::StreamExt;
+use local_async_utils::prelude::*;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -14,6 +16,7 @@ pub async fn single_torrent(
     local_peer_id: PeerId,
     metainfo_uri: &str,
     output_dir: impl AsRef<Path>,
+    dht_handle: Option<dht::CmdSender>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     use_upnp: bool,
@@ -62,6 +65,7 @@ pub async fn single_torrent(
             public_pwp_ip,
             metainfo_uri,
             output_dir,
+            dht_handle,
             pwp_runtime,
             storage_runtime,
             std::iter::empty(),
@@ -75,6 +79,7 @@ pub async fn single_torrent(
             metainfo_uri,
             &output_dir,
             &output_dir,
+            dht_handle.clone(),
             pwp_runtime.clone(),
         )
         .await?;
@@ -85,6 +90,7 @@ pub async fn single_torrent(
             public_pwp_ip,
             metainfo_filepath,
             &output_dir,
+            dht_handle,
             pwp_runtime,
             storage_runtime,
             peers,
@@ -108,6 +114,7 @@ macro_rules! log {
     }}
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn preliminary_stage(
     local_peer_id: PeerId,
     listener_addr: SocketAddr,
@@ -115,6 +122,7 @@ async fn preliminary_stage(
     magnet_link: impl AsRef<str>,
     config_dir: impl AsRef<Path>,
     metainfo_dir: impl AsRef<Path>,
+    dht_handle: Option<dht::CmdSender>,
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(impl AsRef<Path>, impl IntoIterator<Item = SocketAddr>)> {
     let magnet_link: magnet::MagnetLink = magnet_link
@@ -128,12 +136,22 @@ async fn preliminary_stage(
         .as_ref()
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
 
-    let local_task = task::LocalSet::new();
+    let (peer_discovered_sink, mut peer_discovered_src) =
+        local_channel::channel::<(SocketAddr, PeerOrigin)>();
+
+    let search_handle = dht_handle.map(|dht_cmds| {
+        task::spawn_local(ops::run_dht_search(
+            *magnet_link.info_hash(),
+            dht_cmds,
+            peer_discovered_sink.clone(),
+            public_pwp_ip.port(),
+        ))
+        .abort_handle()
+    });
 
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_sync::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PRELIMINARY_CONNECTIONS,
         ops::PreliminaryConnectionData {
@@ -141,8 +159,8 @@ async fn preliminary_stage(
             pwp_worker_handle: pwp_runtime,
         },
     );
-    local_task.spawn_local(async move {
-        while let Some(peer_addr) = peer_discovered_src.next().await {
+    task::spawn_local(async move {
+        while let Some((peer_addr, _origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
                     log::debug!("Connecting to {peer_addr}...");
@@ -169,7 +187,7 @@ async fn preliminary_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -177,29 +195,28 @@ async fn preliminary_stage(
     });
 
     for peer_ip in extra_peers {
-        peer_discovered_sink.send(peer_ip);
+        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    let tracker_ctx = ctx.clone();
-    let config_dir = config_dir.as_ref().to_owned();
-    local_task.spawn_local(async move {
-        ops::make_preliminary_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
-    });
+    task::spawn_local(ops::make_preliminary_announces(
+        ctx.clone(),
+        PathBuf::from(config_dir.as_ref()),
+        peer_discovered_sink,
+    ));
 
-    let metainfo_filepath_copy = metainfo_filepath.clone();
-    let peers = local_task
-        .run_until(async move { ops::periodic_metadata_check(ctx, metainfo_filepath_copy).await })
-        .await?;
+    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone()).await?;
+    search_handle.inspect(task::AbortHandle::abort);
     Ok((metainfo_filepath, peers))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn main_stage(
     local_peer_id: PeerId,
     listener_addr: SocketAddr,
     public_pwp_ip: SocketAddr,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
+    dht_handle: Option<dht::CmdSender>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
@@ -213,21 +230,28 @@ async fn main_stage(
 
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir)?;
-    storage_runtime.spawn(async move {
-        content_storage_server.run().await;
-    });
+    storage_runtime.spawn(content_storage_server.run());
+
     let (metainfo_storage, metainfo_storage_server) =
         startup::create_metainfo_storage(&metainfo_filepath)?;
-    storage_runtime.spawn(async move {
-        metainfo_storage_server.run().await;
-    });
+    storage_runtime.spawn(metainfo_storage_server.run());
 
-    let local_task = task::LocalSet::new();
+    let (peer_discovered_sink, mut peer_discovered_src) =
+        local_channel::channel::<(SocketAddr, PeerOrigin)>();
+
+    let search_handle = dht_handle.map(|dht_cmds| {
+        task::spawn_local(ops::run_dht_search(
+            *metainfo.info_hash(),
+            dht_cmds,
+            peer_discovered_sink.clone(),
+            public_pwp_ip.port(),
+        ))
+        .abort_handle()
+    });
 
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
-    let (peer_discovered_sink, mut peer_discovered_src) = local_sync::channel::<SocketAddr>();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PEER_CONNECTIONS,
         ops::MainConnectionData {
@@ -239,13 +263,13 @@ async fn main_stage(
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
         },
     );
-    local_task.spawn_local(async move {
-        while let Some(peer_addr) = peer_discovered_src.next().await {
+    task::spawn_local(async move {
+        while let Some((peer_addr, origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
-                    ops::outgoing_pwp_connection(peer_addr, permit).await.unwrap_or_else(|e| {
-                        log!(e, "Outgoing peer connection to {peer_addr} failed: {e}")
-                    });
+                    ops::outgoing_pwp_connection(peer_addr, origin, permit).await.unwrap_or_else(
+                        |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
+                    );
                 });
             } else {
                 log::debug!("Outgoing connection to {peer_addr} denied");
@@ -264,7 +288,7 @@ async fn main_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    local_task.spawn_local(async move {
+    task::spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -272,19 +296,16 @@ async fn main_stage(
     });
 
     for peer_ip in extra_peers {
-        peer_discovered_sink.send(peer_ip);
+        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    let tracker_ctx = ctx.clone();
-    let config_dir = output_dir.as_ref().to_owned();
-    local_task.spawn_local(async move {
-        ops::make_periodic_announces(tracker_ctx, config_dir, peer_discovered_sink).await;
-    });
+    task::spawn_local(ops::make_periodic_announces(
+        ctx.clone(),
+        PathBuf::from(output_dir.as_ref()),
+        peer_discovered_sink,
+    ));
 
-    local_task
-        .run_until(async move {
-            ops::periodic_state_dump(ctx, content_dir).await;
-        })
-        .await;
+    ops::periodic_state_dump(ctx, content_dir).await;
+    search_handle.inspect(task::AbortHandle::abort);
     Ok(())
 }

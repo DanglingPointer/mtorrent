@@ -1,9 +1,9 @@
 use super::handshake::*;
 use super::message::*;
 use super::MAX_BLOCK_SIZE;
-use crate::sec;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+use local_async_utils::prelude::*;
 use std::future::{self, Future};
 use std::io;
 use std::net::SocketAddr;

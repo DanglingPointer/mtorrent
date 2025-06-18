@@ -1,9 +1,10 @@
 use super::utils;
-use crate::sec;
-use core::fmt;
+use derive_more::Display;
+use local_async_utils::prelude::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
-use std::{error, io, str};
+use std::{io, str};
+use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Instant};
 
@@ -71,6 +72,7 @@ impl UdpTrackerConnection {
         .await?
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn do_scrape_request(
         &mut self,
         request_data: ScrapeRequest,
@@ -180,21 +182,13 @@ impl UdpTrackerConnection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display, Error)]
 pub enum ParseError {
     InvalidAction,
     InvalidLength,
     InvalidTransaction,
     NonUtf8String,
 }
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl error::Error for ParseError {}
 
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
@@ -390,7 +384,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: u32,
@@ -423,7 +417,7 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
@@ -431,9 +425,9 @@ pub struct ScrapeResponseEntry {
     pub leechers: u32,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
-pub struct ScrapeResponse(Vec<ScrapeResponseEntry>);
+pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
 impl TryFrom<&[u8]> for ScrapeResponse {
     type Error = ParseError;

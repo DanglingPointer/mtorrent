@@ -1,51 +1,22 @@
 use super::utils;
-use crate::sec;
 use crate::utils::benc;
+use local_async_utils::prelude::*;
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::{error, fmt, io, str};
+use std::{fmt, io, str};
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
-    Http(reqwest::Error),
-    Benc(benc::ParseError),
+    #[error("[http]{0}")]
+    Http(#[from] reqwest::Error),
+    #[error("[benc]{0}")]
+    Benc(#[from] benc::ParseError),
+    #[error("[response]{0}")]
     Response(String),
+    #[error("unsupported")]
     Unsupported,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Http(e) => write!(f, "[http]{e}"),
-            Error::Benc(e) => write!(f, "[benc]{:?}", e),
-            Error::Response(s) => write!(f, "[response]{}", s),
-            Error::Unsupported => write!(f, "unsupported"),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Error::Http(e) => Some(e),
-            Error::Benc(e) => Some(e),
-            Error::Response(_) => None,
-            Error::Unsupported => None,
-        }
-    }
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(value: reqwest::Error) -> Self {
-        Error::Http(value)
-    }
-}
-
-impl From<benc::ParseError> for Error {
-    fn from(value: benc::ParseError) -> Self {
-        Error::Benc(value)
-    }
 }
 
 impl From<Error> for io::Error {
@@ -90,6 +61,7 @@ impl Client {
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn scrape(
         &self,
         request_builder: TrackerRequestBuilder,

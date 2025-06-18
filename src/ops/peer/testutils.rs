@@ -1,8 +1,9 @@
 use crate::data;
 use crate::utils::peer_id::PeerId;
-use crate::utils::{local_sync, magnet, startup};
+use crate::utils::{magnet, startup};
 use crate::{ops::ctx, pwp};
 use futures::future::LocalBoxFuture;
+use local_async_utils::prelude::*;
 use std::fmt::Debug;
 use std::io::Read;
 use std::net::SocketAddr;
@@ -83,7 +84,6 @@ pub struct PeerBuilder {
     has_all_pieces: bool,
 }
 
-#[allow(dead_code)]
 impl PeerBuilder {
     pub fn new() -> Self {
         Self::default()
@@ -108,10 +108,12 @@ impl PeerBuilder {
         self.local_ip = Some(ip);
         self
     }
+    #[expect(dead_code)]
     pub fn with_remote_peer_id(mut self, id: impl Into<PeerId>) -> Self {
         self.remote_peer_id = Some(id.into());
         self
     }
+    #[expect(dead_code)]
     pub fn with_local_peer_id(mut self, id: impl Into<PeerId>) -> Self {
         self.local_peer_id = Some(id.into());
         self
@@ -176,7 +178,7 @@ impl PeerBuilder {
         )
         .unwrap();
         if self.has_all_pieces {
-            ctx_handle.with_ctx(|ctx| {
+            ctx_handle.with(|ctx| {
                 let piece_count = ctx.pieces.piece_count();
                 for piece_index in 0..piece_count {
                     assert!(ctx.accountant.submit_piece(piece_index));
@@ -184,7 +186,7 @@ impl PeerBuilder {
                 }
             });
         }
-        let (sink, _src) = local_sync::channel();
+        let (sink, _src) = local_channel::channel();
 
         let ctx_handle_clone = ctx_handle.clone();
         let run_future = async move {
@@ -196,7 +198,8 @@ impl PeerBuilder {
                 peer_discovered_channel: sink,
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
             };
-            super::run_peer_connection(dlchans, ulchans, extchans, &data).await
+            super::run_peer_connection(pwp::PeerOrigin::Other, dlchans, ulchans, extchans, &data)
+                .await
         };
 
         (ctx_handle_clone, Box::pin(run_future))

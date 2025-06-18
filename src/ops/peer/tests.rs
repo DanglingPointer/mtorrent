@@ -1,9 +1,9 @@
 use super::testutils::*;
 use crate::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use crate::utils::peer_id::PeerId;
-use crate::utils::{local_sync, startup};
-use crate::{millisec, min, msgs};
-use crate::{ops::ctx, pwp, sec};
+use crate::utils::startup;
+use crate::{msgs, ops::ctx, pwp};
+use local_async_utils::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;
@@ -135,13 +135,13 @@ async fn run_listening_seeder(
     let mut handle =
         ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip, listener_ip.port())
             .unwrap();
-    handle.with_ctx(|ctx| {
+    handle.with(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));
             ctx.piece_tracker.forget_piece(piece_index);
         }
     });
-    let (sink, _src) = local_sync::channel();
+    let (sink, _src) = local_channel::channel();
     let (_outgoing_ctrl, mut incoming_ctrl) = super::super::connection_control(
         50,
         super::MainConnectionData {
@@ -225,7 +225,7 @@ async fn pass_torrent_from_peer_to_peer(
     tasks
         .run_until(time::timeout(sec!(30), async move {
             loop {
-                let finished = downloader_ctx_handle.with_ctx(|ctx| {
+                let finished = downloader_ctx_handle.with(|ctx| {
                     ctx.accountant.missing_bytes() == 0
                         && ctx.piece_tracker.missing_pieces_rarest_first().count() == 0
                 });
@@ -293,7 +293,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
     tasks
         .run_until(time::timeout(sec!(30), async move {
             let _ = downloader_fut.await;
-            downloader_ctx_handle.with_ctx(|ctx| {
+            downloader_ctx_handle.with(|ctx| {
                 assert!(!ctx.metainfo_pieces.is_empty());
                 assert!(ctx.metainfo_pieces.all());
                 assert_eq!(metainfo_content, ctx.metainfo);
@@ -423,7 +423,7 @@ async fn test_reevaluate_interest_every_min() {
 
     let _ = try_join!(time::timeout(min!(3), peer_future), async move {
         time::sleep(sec!(119)).await;
-        ctx.with_ctx(|ctx| {
+        ctx.with(|ctx| {
             ctx.piece_tracker.forget_piece(0);
         });
         Ok(())
@@ -764,11 +764,11 @@ async fn test_clear_pending_requests_when_peer_chokes() {
 
     let (peer_result, _) = try_join!(time::timeout(sec!(31), peer_future), async move {
         time::sleep(sec!(14)).await;
-        ctx.with_ctx(|ctx| {
+        ctx.with(|ctx| {
             assert!(ctx.pending_requests.is_piece_requested(0));
         });
         time::sleep(sec!(2)).await;
-        ctx.with_ctx(|ctx| {
+        ctx.with(|ctx| {
             assert!(!ctx.pending_requests.is_piece_requested(0));
         });
         Ok(())

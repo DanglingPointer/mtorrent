@@ -1,49 +1,29 @@
 use super::ctrl;
 use crate::pwp::Bitfield;
-use crate::sec;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{config, magnet, metainfo};
 use crate::{data, pwp};
 use core::fmt;
+use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 use std::{fs, io, mem};
 use tokio::time;
 
-pub struct Handle<C> {
-    ctx: Rc<RefCell<C>>,
-}
-
-impl<C> Clone for Handle<C> {
-    fn clone(&self) -> Self {
-        Self {
-            ctx: self.ctx.clone(),
-        }
-    }
-}
-
-impl<C> Handle<C> {
-    #[inline(always)]
-    pub(super) fn with_ctx<R, F>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut C) -> R,
-    {
-        let mut borrowed = self.ctx.borrow_mut();
-        f(&mut borrowed)
-    }
-}
+pub type Handle<C> = LocalShared<C>;
 
 macro_rules! define_with_ctx {
     ($handle:expr) => {
         macro_rules! with_ctx {
-            ($f:expr) => {
-                $handle.with_ctx(
+            ($f:expr) => {{
+                use local_async_utils::prelude::*;
+                $handle.with(
                     #[inline(always)]
                     $f,
                 )
-            };
+            }};
         }
     };
 }
@@ -70,7 +50,7 @@ pub struct PreliminaryCtx {
     pub(super) magnet: magnet::MagnetLink,
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
-    pub(super) known_peers: HashSet<SocketAddr>,
+    pub(super) reachable_peers: HashSet<SocketAddr>,
     pub(super) connected_peers: HashSet<SocketAddr>,
     pub(super) const_data: ConstData,
 }
@@ -82,20 +62,18 @@ impl PreliminaryCtx {
         pwp_listener_public_addr: SocketAddr,
         pwp_local_tcp_port: u16,
     ) -> Handle<Self> {
-        Handle {
-            ctx: Rc::new(RefCell::new(Self {
-                magnet,
-                metainfo: Vec::new(),
-                metainfo_pieces: Bitfield::new(),
-                known_peers: Default::default(),
-                connected_peers: Default::default(),
-                const_data: ConstData {
-                    local_peer_id,
-                    pwp_listener_public_addr,
-                    pwp_local_tcp_port,
-                },
-            })),
-        }
+        Handle::new(Self {
+            magnet,
+            metainfo: Vec::new(),
+            metainfo_pieces: Bitfield::new(),
+            reachable_peers: Default::default(),
+            connected_peers: Default::default(),
+            const_data: ConstData {
+                local_peer_id,
+                pwp_listener_public_addr,
+                pwp_local_tcp_port,
+            },
+        })
     }
 }
 
@@ -141,7 +119,7 @@ impl MainCtx {
         ));
         let accountant = data::BlockAccountant::new(pieces.clone());
         let piece_tracker = data::PieceTracker::new(pieces.piece_count());
-        let ctx = Rc::new(RefCell::new(Self {
+        let ctx = Self {
             pieces,
             accountant,
             piece_tracker,
@@ -153,8 +131,8 @@ impl MainCtx {
                 pwp_listener_public_addr,
                 pwp_local_tcp_port,
             },
-        }));
-        Ok(Handle { ctx })
+        };
+        Ok(Handle::new(ctx))
     }
 }
 
@@ -188,7 +166,7 @@ pub async fn periodic_metadata_check(
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
 
-    Ok(with_ctx!(|ctx| mem::take(&mut ctx.known_peers)))
+    Ok(with_ctx!(|ctx| mem::take(&mut ctx.reachable_peers)))
 }
 
 pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: impl AsRef<Path>) {

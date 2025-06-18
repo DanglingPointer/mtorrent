@@ -3,6 +3,7 @@ mod ctx;
 mod connections;
 mod ctrl;
 mod peer;
+mod search;
 mod tracker;
 
 pub(crate) use connections::*;
@@ -13,4 +14,5 @@ pub(crate) use peer::{
     PreliminaryConnectionData,
 };
 pub(crate) use peer::{incoming_pwp_connection, outgoing_pwp_connection, MainConnectionData};
+pub(crate) use search::run_dht_search;
 pub(crate) use tracker::{make_periodic_announces, make_preliminary_announces};

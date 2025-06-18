@@ -1,6 +1,7 @@
 use futures::future;
+use local_async_utils::prelude::*;
 use mtorrent::utils::{self, benc, startup};
-use mtorrent::{data, pwp, sec};
+use mtorrent::{data, pwp};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
@@ -518,6 +519,7 @@ async fn test_download_and_upload_multifile_torrent() {
             .arg("-o")
             .arg(output_dir)
             .arg("--no-upnp")
+            .arg("--no-dht")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -551,6 +553,7 @@ async fn test_download_and_upload_multifile_torrent() {
                 .arg("-o")
                 .arg(output_dir)
                 .arg("--no-upnp")
+                .arg("--no-dht")
                 .spawn()
                 .expect("failed to execute 'mtorrent'")
         });
@@ -580,6 +583,7 @@ async fn test_download_and_upload_multifile_torrent() {
             .arg("-o")
             .arg(data_dir)
             .arg("--no-upnp")
+            .arg("--no-dht")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -613,6 +617,7 @@ async fn test_download_and_upload_monofile_torrent() {
             .arg("-o")
             .arg(output_dir)
             .arg("--no-upnp")
+            .arg("--no-dht")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
@@ -646,6 +651,7 @@ async fn test_download_and_upload_monofile_torrent() {
                 .arg("-o")
                 .arg(output_dir)
                 .arg("--no-upnp")
+                .arg("--no-dht")
                 .spawn()
                 .expect("failed to execute 'mtorrent'")
         });
@@ -675,6 +681,7 @@ async fn test_download_and_upload_monofile_torrent() {
             .arg("-o")
             .arg(data_dir)
             .arg("--no-upnp")
+            .arg("--no-dht")
             .spawn()
             .expect("failed to execute 'mtorrent'");
 

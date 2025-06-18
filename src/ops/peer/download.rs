@@ -1,7 +1,8 @@
 use crate::ops::{ctrl, ctx};
-use crate::utils::{bandwidth, local_sync, sealed};
-use crate::{data, debug_stopwatch, min, pwp, sec, trace_stopwatch};
+use crate::utils::bandwidth;
+use crate::{data, debug_stopwatch, pwp, trace_stopwatch};
 use futures::prelude::*;
+use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -24,7 +25,7 @@ struct Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        self.handle.with_ctx(|ctx| {
+        self.handle.with(|ctx| {
             ctx.piece_tracker.forget_peer(self.rx.remote_ip());
             ctx.peer_states.remove_peer(self.rx.remote_ip());
             ctx.pending_requests.clear_requests_to(self.rx.remote_ip());
@@ -76,7 +77,7 @@ macro_rules! update_ctx {
     ($inner:expr) => {
         $inner
             .handle
-            .with_ctx(|ctx| ctx.peer_states.update_download($inner.rx.remote_ip(), &$inner.state));
+            .with(|ctx| ctx.peer_states.update_download($inner.rx.remote_ip(), &$inner.state));
     };
 }
 
@@ -198,8 +199,8 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
     let peer_reqq = with_ctx!(|ctx| ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx));
 
     let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
-    let (piece_sink, piece_src) = local_sync::channel::<usize>();
-    let (block_received_notifier, block_received_waiter) = local_sync::condvar();
+    let (piece_sink, piece_src) = local_channel::channel::<usize>();
+    let (block_received_notifier, block_received_waiter) = local_condvar::condvar();
 
     try_join!(
         async {
@@ -253,7 +254,7 @@ fn divide_piece_into_blocks(
 }
 
 async fn wait_with_retries(
-    signal: &mut local_sync::condvar::Receiver,
+    signal: &mut local_condvar::Receiver,
     tx: &mut pwp::DownloadTxChannel,
     received_data_before: bool,
     requests_to_resend: &(impl IntoIterator<Item = pwp::BlockInfo> + Clone),
@@ -291,7 +292,7 @@ async fn request_pieces(
     mut handle: CtxHandle,
     tx: &mut pwp::DownloadTxChannel,
     received_blocks_ever: bool,
-    mut block_received_signal: local_sync::condvar::Receiver,
+    mut block_received_signal: local_condvar::Receiver,
     peer_reqq: usize,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
@@ -353,8 +354,8 @@ async fn receive_pieces(
     rx: &mut pwp::DownloadRxChannel,
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
-    block_received_reporter: local_sync::condvar::Sender,
-    verification_channel: local_sync::channel::Sender<usize>,
+    block_received_reporter: local_condvar::Sender,
+    verification_channel: local_channel::Sender<usize>,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -402,7 +403,7 @@ async fn verify_pieces(
     mut handle: CtxHandle,
     storage: &data::StorageClient,
     progress_reporter: &broadcast::Sender<usize>,
-    mut downloaded_pieces: local_sync::channel::Receiver<usize>,
+    mut downloaded_pieces: local_channel::Receiver<usize>,
     verified_pieces: &mut usize,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -456,7 +457,7 @@ fn update_state_with_msg(
         }
         pwp::UploaderMessage::Have { piece_index } => {
             log::trace!("Received Have({piece_index}) from {ip}");
-            handle.with_ctx(|ctx| ctx.piece_tracker.add_single_record(ip, *piece_index));
+            handle.with(|ctx| ctx.piece_tracker.add_single_record(ip, *piece_index));
             true
         }
         pwp::UploaderMessage::Bitfield(bitfield) => {
@@ -464,7 +465,7 @@ fn update_state_with_msg(
                 let remote_piece_count = bitfield.count_ones();
                 log::trace!("Received bitfield from {ip}: peer has {remote_piece_count} pieces");
             }
-            handle.with_ctx(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
+            handle.with(|ctx| ctx.piece_tracker.add_bitfield_record(ip, bitfield));
             true
         }
         pwp::UploaderMessage::Choke => {

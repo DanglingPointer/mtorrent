@@ -3,6 +3,16 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tokio::time::Instant;
 
+#[derive(Default, Clone, Copy, Debug)]
+pub enum PeerOrigin {
+    Tracker,
+    Listener,
+    Pex,
+    Dht,
+    #[default]
+    Other,
+}
+
 #[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct DownloadState {
@@ -69,6 +79,7 @@ pub struct PeerState {
     pub download: DownloadState,
     pub upload: UploadState,
     pub extensions: Option<Box<super::ExtendedHandshake>>,
+    pub origin: PeerOrigin,
     pub last_download_time: Instant,
     pub last_upload_time: Instant,
 }
@@ -79,6 +90,7 @@ impl Default for PeerState {
             download: Default::default(),
             upload: Default::default(),
             extensions: None,
+            origin: Default::default(),
             last_download_time: Instant::now(),
             last_upload_time: Instant::now(),
         }
@@ -131,6 +143,11 @@ impl PeerStates {
         }
     }
 
+    pub fn set_origin(&mut self, remote_ip: &SocketAddr, origin: PeerOrigin) {
+        let state = self.peers.entry(*remote_ip).or_default();
+        state.origin = origin;
+    }
+
     pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         if let Some(state) = self.peers.get(remote_ip) {
             self.previously_uploaded_bytes += state.upload.bytes_sent;
@@ -168,13 +185,23 @@ impl PeerStates {
 
 impl fmt::Display for PeerStates {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn origin_str(origin: PeerOrigin) -> &'static str {
+            match origin {
+                PeerOrigin::Tracker => "tracker",
+                PeerOrigin::Listener => "✨listener✨",
+                PeerOrigin::Pex => "✨pex✨",
+                PeerOrigin::Dht => "✨dht✨",
+                PeerOrigin::Other => "other",
+            }
+        }
+
         write!(f, "Connected peers ({}):", self.peers.len())?;
         for (ip, state) in &self.peers {
-            write!(f, "\n[ {:^21} ]", ip)?;
+            write!(f, "\n[ {:^21} ]     origin: {:<12}", ip, origin_str(state.origin))?;
             if let Some(hs) = &state.extensions {
                 write!(
                     f,
-                    "     client: {:<20} reqq: {}",
+                    "client: {:<20} reqq: {}",
                     hs.client_type.as_deref().unwrap_or("n/a"),
                     hs.request_limit.unwrap_or_default()
                 )?;
