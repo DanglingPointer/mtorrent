@@ -76,7 +76,35 @@ impl Processor {
     }
 
     pub async fn run(mut self, mut queries: queries::Server, mut commands: cmds::Server) {
-        self.bootstrap(&mut queries).await;
+        // do all DNS resolution first because it's a blocking call
+        let bootstrapping_nodes: Vec<SocketAddr> = self
+            .config
+            .nodes
+            .iter()
+            .filter_map(|node| node.to_socket_addrs().ok())
+            .flatten()
+            .filter(SocketAddr::is_ipv4)
+            .collect();
+
+        // do bootstrapping for the next 10 sec
+        if !bootstrapping_nodes.is_empty() {
+            let deadline = Instant::now() + sec!(10);
+
+            for addr in &bootstrapping_nodes {
+                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(*addr) {
+                    launch_periodic_ping(*addr, permit, self.cnt_ctrl.split_off());
+                }
+            }
+
+            let _ = time::timeout_at(deadline, async {
+                while let Some(incoming_query) = queries.0.next().await {
+                    self.handle_query(incoming_query);
+                }
+            })
+            .await;
+        }
+
+        // now we can handle commands
         loop {
             select! {
                 biased;
@@ -93,54 +121,6 @@ impl Processor {
                     None => unreachable!(),
                 }
             }
-        }
-        self.shutdown_signal.notify_waiters();
-        log::debug!(
-            "Processor shutting down, node_count = {}",
-            self.nodes.with(|rt| rt.node_count())
-        );
-        self.save_routing_table();
-    }
-
-    async fn bootstrap(&mut self, queries: &mut queries::Server) {
-        // do all DNS resolution first because it's a blocking call
-        let bootstrapping_nodes: Vec<SocketAddr> = self
-            .config
-            .nodes
-            .iter()
-            .filter_map(|node| node.to_socket_addrs().ok())
-            .flatten()
-            .filter(SocketAddr::is_ipv4)
-            .collect();
-
-        if !bootstrapping_nodes.is_empty() {
-            let deadline = Instant::now() + sec!(5);
-
-            for addr in &bootstrapping_nodes {
-                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(*addr) {
-                    launch_periodic_ping(*addr, permit, self.cnt_ctrl.split_off());
-                }
-            }
-
-            let _ = time::timeout_at(deadline, async {
-                while let Some(incoming_query) = queries.0.next().await {
-                    self.handle_query(incoming_query);
-                }
-            })
-            .await;
-        }
-    }
-
-    fn save_routing_table(&mut self) {
-        let connected_nodes: BTreeSet<String> =
-            self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
-
-        if !connected_nodes.is_empty() {
-            self.config.nodes = connected_nodes;
-            self.config.nodes.extend(Config::default().nodes);
-        }
-        if let Err(e) = self.config.save(&self.config_dir) {
-            log::warn!("Failed to save config: {e}");
         }
     }
 
@@ -193,6 +173,25 @@ impl Processor {
                 }
             }
         }
+    }
+}
+
+impl Drop for Processor {
+    fn drop(&mut self) {
+        let connected_nodes: BTreeSet<String> =
+            self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
+
+        log::debug!("Processor shutting down, node_count = {}", connected_nodes.len());
+
+        if !connected_nodes.is_empty() {
+            self.config.nodes = connected_nodes;
+            self.config.nodes.extend(Config::default().nodes);
+        }
+        if let Err(e) = self.config.save(&self.config_dir) {
+            log::warn!("Failed to save config: {e}");
+        }
+
+        self.shutdown_signal.notify_waiters();
     }
 }
 

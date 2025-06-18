@@ -1,4 +1,5 @@
 use clap::Parser;
+use mtorrent::app::dht;
 use mtorrent::utils::peer_id::PeerId;
 use mtorrent::utils::worker;
 use mtorrent::{app, info_stopwatch};
@@ -18,6 +19,10 @@ struct Cli {
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
+
+    /// Disable DHT
+    #[arg(long)]
+    no_dht: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -25,6 +30,8 @@ fn main() -> io::Result<()> {
         .with_threads(false)
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
+        .with_module_level("mtorrent::dht", log::LevelFilter::Off)
+        .with_module_level("mtorrent::ops::search", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::metadata", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
@@ -65,6 +72,13 @@ fn main() -> io::Result<()> {
         ..Default::default()
     });
 
+    let (_dht_worker, dht_cmds) = if !cli.no_dht {
+        let (dht_worker, dht_cmds) = dht::launch_node_runtime(6881, None, output_dir.clone());
+        (Some(dht_worker), Some(dht_cmds))
+    } else {
+        (None, None)
+    };
+
     let peer_id = PeerId::generate_new();
 
     tokio::runtime::Builder::new_current_thread()
@@ -74,6 +88,7 @@ fn main() -> io::Result<()> {
             peer_id,
             &cli.metainfo_uri,
             output_dir,
+            dht_cmds,
             pwp_worker.runtime_handle(),
             storage_worker.runtime_handle(),
             !cli.no_upnp,

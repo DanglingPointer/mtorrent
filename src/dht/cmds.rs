@@ -26,7 +26,9 @@ impl Stream for Server {
     }
 }
 
-pub fn setup_cmds() -> (mpsc::Sender<Command>, Server) {
+pub type Sender = mpsc::Sender<Command>;
+
+pub fn setup_cmds() -> (Sender, Server) {
     let (sender, receiver) = mpsc::channel(512);
     (sender, Server(receiver))
 }

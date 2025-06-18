@@ -1,12 +1,12 @@
 use crate::{dht, info_stopwatch, utils::worker};
 use std::path::Path;
-use tokio::{join, runtime, sync::mpsc};
+use tokio::{join, runtime};
 
 pub fn launch_node_runtime(
     local_port: u16,
     max_concurrent_queries: Option<usize>,
     config_dir: impl AsRef<Path> + Send + 'static,
-) -> (worker::simple::Handle, mpsc::Sender<dht::Command>) {
+) -> (worker::simple::Handle, dht::CmdSender) {
     let (cmd_sender, cmd_server) = dht::setup_cmds();
 
     let worker_handle = worker::without_runtime(

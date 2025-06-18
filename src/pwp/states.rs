@@ -3,12 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tokio::time::Instant;
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub enum PeerOrigin {
     Tracker,
     Listener,
     Pex,
-    #[expect(dead_code)]
     Dht,
     #[default]
     Other,
