@@ -10,6 +10,7 @@ mod tests;
 mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
+use tokio_util::sync::CancellationToken;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
@@ -202,12 +203,18 @@ async fn run_peer_connection(
         .clone()
         .with(|ctx| ctx.peer_states.set_origin(&remote_ip, origin));
 
-    try_join!(
-        run_download(download.into(), remote_ip, data.ctx_handle.clone()),
-        run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
-        maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
-        reporter.run(),
-    )?;
+    data.canceller
+        .run_until_cancelled(async {
+            try_join!(
+                run_download(download.into(), remote_ip, data.ctx_handle.clone()),
+                run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
+                maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
+                reporter.run(),
+            )
+            .map(|_| ())
+        })
+        .await
+        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
     Ok(())
 }
 
@@ -220,6 +227,7 @@ pub struct MainConnectionData {
     pub pwp_worker_handle: runtime::Handle,
     pub peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    pub canceller: CancellationToken,
 }
 
 pub async fn outgoing_pwp_connection(
@@ -319,6 +327,7 @@ async fn run_metadata_download(
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
     mut ctx_handle: PreliminaryHandle,
+    canceller: &CancellationToken,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
 
@@ -362,17 +371,24 @@ async fn run_metadata_download(
         }
         Ok(())
     }
-    try_join!(
-        handle_download(download_chans),
-        handle_upload(upload_chans),
-        handle_metadata(extended_chans, ctx_handle),
-    )?;
+    canceller
+        .run_until_cancelled(async {
+            try_join!(
+                handle_download(download_chans),
+                handle_upload(upload_chans),
+                handle_metadata(extended_chans, ctx_handle),
+            )
+            .map(|_| ())
+        })
+        .await
+        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
     Ok(())
 }
 
 pub struct PreliminaryConnectionData {
     pub ctx_handle: PreliminaryHandle,
     pub pwp_worker_handle: runtime::Handle,
+    pub canceller: CancellationToken,
 }
 
 pub async fn outgoing_preliminary_connection(
@@ -399,7 +415,8 @@ pub async fn outgoing_preliminary_connection(
     )
     .await?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+        .await
 }
 
 pub async fn incoming_preliminary_connection(
@@ -423,5 +440,6 @@ pub async fn incoming_preliminary_connection(
     )
     .await?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+        .await
 }

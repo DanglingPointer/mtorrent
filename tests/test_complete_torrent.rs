@@ -1,5 +1,6 @@
 use futures::future;
 use local_async_utils::prelude::*;
+use mtorrent::utils::metainfo::Metainfo;
 use mtorrent::utils::{self, benc, startup};
 use mtorrent::{data, pwp};
 use std::collections::{BTreeMap, HashSet};
@@ -14,18 +15,21 @@ use std::{cmp, process};
 use std::{fs, io, iter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
-use tokio::{task, time};
+use tokio::{join, task, time};
 
 trait Peer {
     const NEEDS_INPUT_DATA: bool;
 
+    #[expect(clippy::too_many_arguments)]
     fn run(
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
+        ext_chans: Option<pwp::ExtendedChannels>,
         runner: impl pwp::ConnectionRunner,
-        storage: data::StorageClient,
-        info: Rc<data::PieceInfo>,
+        content_storage: data::StorageClient,
+        metainfo_storage: data::StorageClient,
+        metainfo: Rc<Metainfo>,
     ) -> impl Future<Output = ()>;
 }
 
@@ -38,10 +42,15 @@ impl Peer for Leech {
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
+        ext_chans: Option<pwp::ExtendedChannels>,
         runner: impl pwp::ConnectionRunner + 'static,
         storage: data::StorageClient,
-        info: Rc<data::PieceInfo>,
+        _metainfo_storage: data::StorageClient,
+        metainfo: Rc<Metainfo>,
     ) {
+        assert!(ext_chans.is_none());
+
+        let info = get_piece_info(&metainfo);
         task::spawn_local(async move {
             let _ = runner.await;
         });
@@ -156,21 +165,75 @@ impl Peer for Leech {
 
 struct Seeder;
 
-impl Peer for Seeder {
-    const NEEDS_INPUT_DATA: bool = true;
+impl Seeder {
+    async fn seed_metainfo(
+        index: u8,
+        mut download_chans: pwp::DownloadChannels,
+        mut upload_chans: pwp::UploadChannels,
+        ext_chans: pwp::ExtendedChannels,
+        meta_storage: data::StorageClient,
+        metadata_len: usize,
+    ) {
+        task::spawn_local(async move {
+            if let Ok(msg) = download_chans.1.receive_message().await {
+                panic!("Received unexpected downloader msg: {msg}");
+            }
+        });
+        task::spawn_local(async move {
+            if let Ok(msg) = upload_chans.1.receive_message().await {
+                panic!("Received unexpected uploader msg: {msg}");
+            }
+        });
 
-    async fn run(
+        let pwp::ExtendedChannels(mut tx, mut rx) = ext_chans;
+        tx.send_message((
+            pwp::ExtendedMessage::Handshake(Box::new(pwp::ExtendedHandshake {
+                extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            })),
+            0,
+        ))
+        .await
+        .unwrap();
+        while let Ok(msg) = rx.receive_message().await {
+            if let pwp::ExtendedMessage::MetadataRequest { piece } = msg {
+                if index % 2 == 0 {
+                    tx.send_message((
+                        pwp::ExtendedMessage::MetadataReject { piece },
+                        pwp::Extension::Metadata.local_id(),
+                    ))
+                    .await
+                    .unwrap();
+                } else {
+                    let max_block_size = 16 * 1024;
+                    let global_offset = piece * max_block_size;
+                    let length = cmp::min(max_block_size, metadata_len - global_offset);
+                    let data = meta_storage.read_block(global_offset, length).await.unwrap();
+                    tx.send_message((
+                        pwp::ExtendedMessage::MetadataBlock {
+                            piece,
+                            total_size: metadata_len,
+                            data,
+                        },
+                        pwp::Extension::Metadata.local_id(),
+                    ))
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+        println!("Seeder uploaded metainfo successfully");
+    }
+
+    async fn seed_content(
         index: u8,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
-        runner: impl pwp::ConnectionRunner,
-        storage: data::StorageClient,
-        info: Rc<data::PieceInfo>,
+        content_storage: data::StorageClient,
+        info: data::PieceInfo,
     ) {
-        task::spawn_local(async move {
-            let _ = runner.await;
-        });
-
         let piece_count = info.piece_count();
         let bitfield = pwp::Bitfield::repeat(true, piece_count);
         let pwp::UploadChannels(mut tx, mut rx) = upload_chans;
@@ -197,7 +260,7 @@ impl Peer for Seeder {
                             .unwrap_or_else(|_| {
                                 panic!("Seeder received invalid request {requested_block}");
                             });
-                        let data = storage
+                        let data = content_storage
                             .read_block(global_offset, requested_block.block_length)
                             .await
                             .unwrap_or_else(|e| {
@@ -267,27 +330,98 @@ impl Peer for Seeder {
     }
 }
 
+fn get_piece_info(metainfo: &Metainfo) -> data::PieceInfo {
+    let total_length = metainfo
+        .length()
+        .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
+        .unwrap();
+
+    data::PieceInfo::new(metainfo.pieces().unwrap(), metainfo.piece_length().unwrap(), total_length)
+}
+
+impl Peer for Seeder {
+    const NEEDS_INPUT_DATA: bool = true;
+
+    async fn run(
+        index: u8,
+        download_chans: pwp::DownloadChannels,
+        upload_chans: pwp::UploadChannels,
+        ext_chans: Option<pwp::ExtendedChannels>,
+        runner: impl pwp::ConnectionRunner,
+        content_storage: data::StorageClient,
+        meta_storage: data::StorageClient,
+        metainfo: Rc<Metainfo>,
+    ) {
+        let pieces = get_piece_info(&metainfo);
+        task::spawn_local(async move {
+            let _ = runner.await;
+        });
+        if let Some(ext_chans) = ext_chans {
+            Self::seed_metainfo(
+                index,
+                download_chans,
+                upload_chans,
+                ext_chans,
+                meta_storage,
+                metainfo.size(),
+            )
+            .await;
+        } else {
+            Self::seed_content(index, download_chans, upload_chans, content_storage, pieces).await;
+        }
+    }
+}
+
 async fn listening_peer<P: Peer>(
     index: u8,
     listening_addr: SocketAddr,
     expected_remote_addr: SocketAddr,
-    storage: data::StorageClient,
-    info: Rc<data::PieceInfo>,
+    content_storage: data::StorageClient,
+    metainfo_storage: data::StorageClient,
+    metainfo: Rc<Metainfo>,
+    mut extensions_enabled: bool,
 ) {
-    match TcpListener::bind(listening_addr).await {
-        Ok(listener) => {
-            let (stream, remote_addr) = listener.accept().await.unwrap();
+    let verify_remote_addr = !extensions_enabled;
+    macro_rules! accept_and_run {
+        ($listener:expr) => {{
+            let (stream, remote_addr) = $listener.accept().await.unwrap();
             stream.set_nodelay(true).unwrap();
             println!(
                 "Peer {} on {} accepted connection from {}",
                 index, listening_addr, remote_addr
             );
-            assert_eq!(remote_addr, expected_remote_addr);
-            let (download_chans, upload_chans, _, runner) =
-                pwp::channels_from_incoming(&[index + b'0'; 20], None, false, remote_addr, stream)
-                    .await
-                    .unwrap();
-            P::run(index, download_chans, upload_chans, runner, storage, info).await;
+            if verify_remote_addr {
+                assert_eq!(remote_addr, expected_remote_addr);
+            }
+            let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_from_incoming(
+                &[index + b'0'; 20],
+                None,
+                extensions_enabled,
+                remote_addr,
+                stream,
+            )
+            .await
+            .unwrap();
+            P::run(
+                index,
+                download_chans,
+                upload_chans,
+                ext_chans,
+                runner,
+                content_storage.clone(),
+                metainfo_storage.clone(),
+                metainfo.clone(),
+            )
+            .await;
+        }};
+    }
+    match TcpListener::bind(listening_addr).await {
+        Ok(listener) => {
+            accept_and_run!(listener);
+            if extensions_enabled {
+                extensions_enabled = false;
+                accept_and_run!(listener);
+            }
         }
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
             eprintln!("Couldn't create listener on {listening_addr}")
@@ -300,8 +434,9 @@ async fn connecting_peer<P: Peer>(
     index: u8,
     remote_ip: SocketAddr,
     info_hash: [u8; 20],
-    storage: data::StorageClient,
-    info: Rc<data::PieceInfo>,
+    content_storage: data::StorageClient,
+    metainfo_storage: data::StorageClient,
+    metainfo: Rc<Metainfo>,
 ) {
     println!("Peer {} connecting to {}...", index, remote_ip);
     let start_time = time::Instant::now();
@@ -316,7 +451,7 @@ async fn connecting_peer<P: Peer>(
         time::sleep(sec!(1)).await;
     };
     stream.set_nodelay(true).unwrap();
-    let (download_chans, upload_chans, _, runner) = pwp::channels_from_outgoing(
+    let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_from_outgoing(
         &[index + b'0'; 20],
         &info_hash,
         false,
@@ -327,7 +462,17 @@ async fn connecting_peer<P: Peer>(
     .await
     .expect("connecting peer failed to create channels");
     println!("Peer {} connected to {}", index, remote_ip);
-    P::run(index, download_chans, upload_chans, runner, storage, info).await;
+    P::run(
+        index,
+        download_chans,
+        upload_chans,
+        ext_chans,
+        runner,
+        content_storage,
+        metainfo_storage,
+        metainfo,
+    )
+    .await;
 }
 
 enum ConnectionMode {
@@ -343,27 +488,20 @@ async fn launch_peers<P: Peer>(
     metainfo_file: &str,
     files_parentdir: impl AsRef<Path>,
     mode: ConnectionMode,
+    extensions_enabled: bool,
 ) {
-    let metainfo = startup::read_metainfo(metainfo_file).unwrap();
-
-    let total_length = metainfo
-        .length()
-        .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
-        .unwrap();
-
-    let pieces = Rc::new(data::PieceInfo::new(
-        metainfo.pieces().unwrap(),
-        metainfo.piece_length().unwrap(),
-        total_length,
-    ));
+    let metainfo = Rc::new(startup::read_metainfo(metainfo_file).unwrap());
 
     assert!(files_parentdir.as_ref().is_dir() == P::NEEDS_INPUT_DATA);
-    let (storage, storage_server) =
+
+    let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &files_parentdir).unwrap();
+    let (meta_storage, meta_storage_server) =
+        startup::create_metainfo_storage(metainfo_file).unwrap();
 
     let task_set = task::LocalSet::new();
     task_set.spawn_local(async move {
-        storage_server.run().await;
+        join!(content_storage_server.run(), meta_storage_server.run());
     });
 
     let info_hash = *metainfo.info_hash();
@@ -377,8 +515,9 @@ async fn launch_peers<P: Peer>(
                         peer_index as u8,
                         remote_ip,
                         info_hash,
-                        storage.clone(),
-                        pieces.clone(),
+                        content_storage.clone(),
+                        meta_storage.clone(),
+                        metainfo.clone(),
                     )
                 })))
                 .await;
@@ -391,8 +530,10 @@ async fn launch_peers<P: Peer>(
                             index as u8,
                             listen_addr,
                             remote_ip,
-                            storage.clone(),
-                            pieces.clone(),
+                            content_storage.clone(),
+                            meta_storage.clone(),
+                            metainfo.clone(),
+                            extensions_enabled,
                         )
                     },
                 )))
@@ -527,6 +668,7 @@ async fn test_download_and_upload_multifile_torrent() {
             metainfo_file,
             data_dir,
             ConnectionMode::Outgoing { num_peers: 50 },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
@@ -564,6 +706,7 @@ async fn test_download_and_upload_multifile_torrent() {
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
             },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
@@ -590,7 +733,8 @@ async fn test_download_and_upload_multifile_torrent() {
         with_timeout!(launch_peers::<Leech>(
             metainfo_file,
             output_dir,
-            ConnectionMode::Outgoing { num_peers: 1 }
+            ConnectionMode::Outgoing { num_peers: 1 },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
@@ -624,7 +768,8 @@ async fn test_download_and_upload_monofile_torrent() {
         with_timeout!(launch_peers::<Seeder>(
             metainfo_file,
             data_dir,
-            ConnectionMode::Outgoing { num_peers: 50 }
+            ConnectionMode::Outgoing { num_peers: 50 },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
@@ -662,6 +807,7 @@ async fn test_download_and_upload_monofile_torrent() {
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
             },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
@@ -688,7 +834,8 @@ async fn test_download_and_upload_monofile_torrent() {
         with_timeout!(launch_peers::<Leech>(
             metainfo_file,
             output_dir,
-            ConnectionMode::Outgoing { num_peers: 1 }
+            ConnectionMode::Outgoing { num_peers: 1 },
+            false,
         ));
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
@@ -698,4 +845,55 @@ async fn test_download_and_upload_monofile_torrent() {
         std::fs::remove_dir_all(output_dir).unwrap();
     }
     let _ = std::fs::remove_file("tests/assets/.mtorrent");
+}
+
+#[tokio::test]
+async fn test_download_torrent_from_magnet_link() {
+    let output_dir = "test_download_torrent_from_magnet_link";
+    let data_dir = "tests/assets/screenshots";
+    fs::create_dir_all(output_dir).unwrap();
+
+    let metainfo_file = "tests/assets/screenshots.torrent";
+    let torrent_name = "screenshots";
+
+    let peer_ips = (50100u16..50150u16)
+        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+        .collect::<Vec<_>>();
+
+    let magnet_link = {
+        let mut tmp = "magnet:?xt=urn:btih:faa73597e79968e1946fcb223e274aa5bb7d2eda&dn=screenshots"
+            .to_string();
+        for peer_addr in &peer_ips {
+            tmp.push_str("&x.pe=");
+            tmp.push_str(&peer_addr.to_string());
+        }
+        tmp
+    };
+
+    let mtorrent = task::spawn(async move {
+        time::sleep(sec!(2)).await; // wait for listening peers to launch
+        process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+            .arg(magnet_link)
+            .arg("-o")
+            .arg(output_dir)
+            .arg("--no-upnp")
+            .arg("--no-dht")
+            .spawn()
+            .expect("failed to execute 'mtorrent'")
+    });
+
+    with_timeout!(launch_peers::<Seeder>(
+        metainfo_file,
+        data_dir,
+        ConnectionMode::Incoming {
+            listen_addrs: peer_ips
+        },
+        true
+    ));
+
+    let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(data_dir, output_dir, torrent_name);
+    fs::remove_dir_all(output_dir).unwrap();
 }

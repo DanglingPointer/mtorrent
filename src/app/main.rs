@@ -11,6 +11,7 @@ use std::rc::Rc;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::{runtime, task};
+use tokio_util::sync::CancellationToken;
 
 pub async fn single_torrent(
     local_peer_id: PeerId,
@@ -130,6 +131,9 @@ async fn preliminary_stage(
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
+
+    let mut tasks = task::JoinSet::new();
+
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
 
     let metainfo_filepath = metainfo_dir
@@ -139,27 +143,28 @@ async fn preliminary_stage(
     let (peer_discovered_sink, mut peer_discovered_src) =
         local_channel::channel::<(SocketAddr, PeerOrigin)>();
 
-    let search_handle = dht_handle.map(|dht_cmds| {
-        task::spawn_local(ops::run_dht_search(
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
             *magnet_link.info_hash(),
             dht_cmds,
             peer_discovered_sink.clone(),
             public_pwp_ip.port(),
         ))
-        .abort_handle()
     });
 
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
+    let canceller = CancellationToken::new();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PRELIMINARY_CONNECTIONS,
         ops::PreliminaryConnectionData {
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime,
+            canceller: canceller.clone(),
         },
     );
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         while let Some((peer_addr, _origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -187,7 +192,7 @@ async fn preliminary_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -198,14 +203,16 @@ async fn preliminary_stage(
         peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    task::spawn_local(ops::make_preliminary_announces(
+    tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
         PathBuf::from(config_dir.as_ref()),
         peer_discovered_sink,
     ));
 
-    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone()).await?;
-    search_handle.inspect(task::AbortHandle::abort);
+    let peers =
+        ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), canceller.drop_guard())
+            .await?;
+    tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }
 
@@ -236,22 +243,24 @@ async fn main_stage(
         startup::create_metainfo_storage(&metainfo_filepath)?;
     storage_runtime.spawn(metainfo_storage_server.run());
 
+    let mut tasks = task::JoinSet::new();
+
     let (peer_discovered_sink, mut peer_discovered_src) =
         local_channel::channel::<(SocketAddr, PeerOrigin)>();
 
-    let search_handle = dht_handle.map(|dht_cmds| {
-        task::spawn_local(ops::run_dht_search(
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
             *metainfo.info_hash(),
             dht_cmds,
             peer_discovered_sink.clone(),
             public_pwp_ip.port(),
         ))
-        .abort_handle()
     });
 
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
+    let canceller = CancellationToken::new();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PEER_CONNECTIONS,
         ops::MainConnectionData {
@@ -261,9 +270,10 @@ async fn main_stage(
             pwp_worker_handle: pwp_runtime,
             peer_discovered_channel: peer_discovered_sink.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+            canceller: canceller.clone(),
         },
     );
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         while let Some((peer_addr, origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -288,7 +298,7 @@ async fn main_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -299,13 +309,13 @@ async fn main_stage(
         peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    task::spawn_local(ops::make_periodic_announces(
+    tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
         PathBuf::from(output_dir.as_ref()),
         peer_discovered_sink,
     ));
 
-    ops::periodic_state_dump(ctx, content_dir).await;
-    search_handle.inspect(task::AbortHandle::abort);
+    ops::periodic_state_dump(ctx, content_dir, canceller.drop_guard()).await;
+    tasks.shutdown().await;
     Ok(())
 }
