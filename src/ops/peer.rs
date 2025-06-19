@@ -214,7 +214,7 @@ async fn run_peer_connection(
             .map(|_| ())
         })
         .await
-        .unwrap_or(Ok(()))?;
+        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
     Ok(())
 }
 
@@ -381,7 +381,7 @@ async fn run_metadata_download(
             .map(|_| ())
         })
         .await
-        .unwrap_or(Ok(()))?;
+        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
     Ok(())
 }
 
