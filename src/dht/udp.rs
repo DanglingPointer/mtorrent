@@ -26,9 +26,11 @@ pub async fn create_ipv4_socket(port: u16) -> io::Result<UdpSocket> {
     UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
 }
 
+pub(super) const MSG_QUEUE_LEN: usize = 512;
+
 pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelReceiver, Runner) {
-    let (ingress_sender, ingress_receiver) = mpsc::channel(512);
-    let (egress_sender, egress_receiver) = mpsc::channel(512);
+    let (ingress_sender, ingress_receiver) = mpsc::channel(MSG_QUEUE_LEN);
+    let (egress_sender, egress_receiver) = mpsc::channel(MSG_QUEUE_LEN);
     let actor = Runner {
         socket,
         ingress_sender,

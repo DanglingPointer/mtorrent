@@ -4,7 +4,7 @@ mod manager;
 mod tests;
 
 use super::error::Error;
-use super::{msgs::*, U160};
+use super::{msgs::*, udp, U160};
 use crate::trace_stopwatch;
 use derive_more::derive::From;
 use futures::StreamExt;
@@ -143,7 +143,7 @@ pub fn setup_routing(
 ) -> (Client, Server, Runner) {
     let (outgoing_queries_sink, outgoing_queries_source) = local_channel::channel();
     let (incoming_queries_sink, incoming_queries_source) = local_channel::channel();
-    let max_in_flight = max_concurrent_queries.unwrap_or(0);
+    let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
     let runner = Runner {
         queries: QueryManager::new(outgoing_msgs_sink, incoming_queries_sink),
