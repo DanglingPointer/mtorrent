@@ -18,10 +18,14 @@ fn test_bootstrap_dht_node() {
         .spawn()
         .expect("failed to launch DHT node");
 
-    std::thread::sleep(sec!(11));
-    if let Err(e) = dht_node.try_wait() {
-        dht_node.kill().unwrap();
-        panic!("DHT node didn't exit in time: {e}");
+    std::thread::sleep(sec!(12));
+    match dht_node.try_wait() {
+        Ok(Some(status)) if !status.success() => {
+            panic!("DHT node exited with error code: {:?}", status.code())
+        }
+        Ok(None) => panic!("DHT node exit status not available"),
+        Err(e) => panic!("DHT node didn't exit in time: {e}"),
+        _ => (),
     }
 
     let config_str = fs::read_to_string(config_file).unwrap();
