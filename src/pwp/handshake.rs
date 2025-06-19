@@ -102,7 +102,9 @@ where
     let mut remote_handshake = Handshake::default();
 
     let mut socket = writer.into_inner();
-    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
+    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?; // convert to Other to avoid reconnect
 
     socket.read_exact(&mut remote_handshake.info_hash).await?;
     if local_handshake.info_hash != remote_handshake.info_hash {
