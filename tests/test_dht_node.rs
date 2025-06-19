@@ -27,6 +27,6 @@ fn test_bootstrap_dht_node() {
     let config_str = fs::read_to_string(config_file).unwrap();
     let content: ConfigContent = serde_json::from_str(&config_str).unwrap();
     assert_eq!(content.local_id.len(), 40);
-    assert!(content.nodes.len() > 2, "only {} nodes in config", content.nodes.len());
+    assert!(content.nodes.len() > 3, "only {} nodes in config", content.nodes.len());
     fs::remove_file(config_file).unwrap();
 }

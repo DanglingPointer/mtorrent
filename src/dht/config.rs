@@ -6,7 +6,11 @@ use std::{fs, io};
 
 const FILENAME: &str = ".mtorrent_dht";
 
-const DEFAULT_NODES: [&str; 2] = ["dht.transmissionbt.com:6881", "router.bittorrent.com:6881"];
+const DEFAULT_NODES: &[&str] = &[
+    "dht.transmissionbt.com:6881",
+    "router.bittorrent.com:6881",
+    "dht.libtorrent.org:25401",
+];
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
@@ -39,7 +43,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             local_id: U160::from(rand::random::<[u8; 20]>()),
-            nodes: DEFAULT_NODES.into_iter().map(ToOwned::to_owned).collect(),
+            nodes: DEFAULT_NODES.iter().map(ToString::to_string).collect(),
         }
     }
 }
@@ -122,7 +126,8 @@ mod tests {
   "local_id": "afafafafafafafafafafafafafafafafafafafaf",
   "nodes": [
     "dht.transmissionbt.com:6881",
-    "router.bittorrent.com:6881"
+    "router.bittorrent.com:6881",
+    "dht.libtorrent.org:25401"
   ]
 }"#,
         );
