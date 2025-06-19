@@ -11,6 +11,7 @@ use std::rc::Rc;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::{runtime, task};
+use tokio_util::sync::CancellationToken;
 
 pub async fn single_torrent(
     local_peer_id: PeerId,
@@ -154,11 +155,13 @@ async fn preliminary_stage(
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
+    let canceller = CancellationToken::new();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PRELIMINARY_CONNECTIONS,
         ops::PreliminaryConnectionData {
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime,
+            canceller: canceller.clone(),
         },
     );
     tasks.spawn_local(async move {
@@ -206,7 +209,9 @@ async fn preliminary_stage(
         peer_discovered_sink,
     ));
 
-    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone()).await?;
+    let peers =
+        ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), canceller.drop_guard())
+            .await?;
     tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }

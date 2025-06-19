@@ -13,6 +13,7 @@ use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::task;
+use tokio_util::sync::CancellationToken;
 
 pub fn compare_input_and_output(
     input_dir: impl AsRef<Path> + Debug,
@@ -232,8 +233,13 @@ impl PeerBuilder {
             local_addr,
             local_addr.port(),
         );
-        let run_future =
-            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone());
+
+        let ctx_handle_clone = ctx_handle.clone();
+        let run_future = async move {
+            let canceller = CancellationToken::new();
+            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle_clone, &canceller)
+                .await
+        };
 
         (ctx_handle, Box::pin(run_future))
     }

@@ -10,6 +10,7 @@ mod tests;
 mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
+use tokio_util::sync::CancellationToken;
 
 use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
 use super::{ctrl, ctx};
@@ -319,6 +320,7 @@ async fn run_metadata_download(
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
     mut ctx_handle: PreliminaryHandle,
+    canceller: &CancellationToken,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
 
@@ -362,17 +364,24 @@ async fn run_metadata_download(
         }
         Ok(())
     }
-    try_join!(
-        handle_download(download_chans),
-        handle_upload(upload_chans),
-        handle_metadata(extended_chans, ctx_handle),
-    )?;
+    canceller
+        .run_until_cancelled(async {
+            try_join!(
+                handle_download(download_chans),
+                handle_upload(upload_chans),
+                handle_metadata(extended_chans, ctx_handle),
+            )
+            .map(|_| ())
+        })
+        .await
+        .unwrap_or(Ok(()))?;
     Ok(())
 }
 
 pub struct PreliminaryConnectionData {
     pub ctx_handle: PreliminaryHandle,
     pub pwp_worker_handle: runtime::Handle,
+    pub canceller: CancellationToken,
 }
 
 pub async fn outgoing_preliminary_connection(
@@ -399,7 +408,8 @@ pub async fn outgoing_preliminary_connection(
     )
     .await?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+        .await
 }
 
 pub async fn incoming_preliminary_connection(
@@ -423,5 +433,6 @@ pub async fn incoming_preliminary_connection(
     )
     .await?;
 
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+        .await
 }

@@ -11,6 +11,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::{fs, io, mem};
 use tokio::time;
+use tokio_util::sync::DropGuard;
 
 pub type Handle<C> = LocalShared<C>;
 
@@ -155,6 +156,7 @@ impl Drop for MainCtx {
 pub async fn periodic_metadata_check(
     mut ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
+    _canceller: DropGuard,
 ) -> io::Result<impl IntoIterator<Item = SocketAddr>> {
     define_with_ctx!(ctx_handle);
 
