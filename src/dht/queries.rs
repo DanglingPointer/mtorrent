@@ -71,7 +71,7 @@ impl Client {
     {
         let _slot = self.query_slots.acquire().await;
         let (tx, rx) = local_oneshot::oneshot();
-        log::debug!("[{dst_addr}] <= {args:?}");
+        log::trace!("[{dst_addr}] <= {args:?}");
         self.channel.send(OutgoingQuery {
             query: args.into(),
             destination_addr: dst_addr,
@@ -79,8 +79,9 @@ impl Client {
         });
         let result = rx.await.ok_or(Error::ChannelClosed)?.and_then(R::try_from);
         match &result {
-            Ok(response) => log::debug!("[{dst_addr}] => {response:?}"),
-            Err(Error::ErrorResponse(msg)) => log::error!("[{dst_addr}] => {msg:?}"),
+            Ok(response) => log::trace!("[{dst_addr}] => {response:?}"),
+            Err(Error::ErrorResponse(msg)) => log::debug!("[{dst_addr}] => {msg:?}"),
+            Err(Error::Timeout) => log::trace!("Query to {dst_addr} timed out"),
             Err(e) => log::debug!("Query to {dst_addr} failed: {e}"),
         }
         result
@@ -195,7 +196,7 @@ impl IncomingQuery {
     ) -> IncomingQuery {
         macro_rules! convert {
             ($query_args:expr, $name:literal) => {{
-                log::debug!("[{}] => {:?}", remote_addr, $query_args);
+                log::trace!("[{}] => {:?}", remote_addr, $query_args);
                 IncomingQuery::from(IncomingGenericQuery {
                     transaction_id: tid,
                     query: $query_args,
@@ -247,7 +248,7 @@ impl<Q, R> IncomingGenericQuery<Q, R> {
     where
         R: Into<ResponseMsg> + Debug,
     {
-        log::debug!("[{}] <= {:?}", self.source_addr, response);
+        log::trace!("[{}] <= {:?}", self.source_addr, response);
         let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
             Message {
                 transaction_id: mem::take(&mut self.transaction_id),
@@ -288,7 +289,7 @@ impl<Q, R> Drop for IncomingGenericQuery<Q, R> {
                 error_code: ErrorCode::Server,
                 error_msg: "Unable to handle query".to_string(),
             };
-            log::debug!("[{}] <= {:?}", self.source_addr, error_msg);
+            log::warn!("[{}] <= {:?}", self.source_addr, error_msg);
             sink.send((
                 Message {
                     transaction_id: mem::take(&mut self.transaction_id),

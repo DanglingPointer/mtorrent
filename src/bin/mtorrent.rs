@@ -30,7 +30,6 @@ fn main() -> io::Result<()> {
         .with_threads(false)
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
-        .with_module_level("mtorrent::dht", log::LevelFilter::Off)
         .with_module_level("mtorrent::ops::search", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::metadata", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)

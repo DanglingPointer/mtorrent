@@ -91,7 +91,7 @@ impl<'s> Future for Ingress<'s> {
                 .inspect_err(|e| log::error!("Failed to receive UDP packet: {e}"))?;
             let message = match parse_msg(buffer.filled()) {
                 Err(e) => {
-                    log::error!("Failed to parse message from {src_addr}: {e:?}");
+                    log::debug!("Failed to parse message from {src_addr}: {e:?}");
                     continue;
                 }
                 Ok(msg) => msg,
@@ -104,7 +104,7 @@ impl<'s> Future for Ingress<'s> {
                     )));
                 }
                 Err(TrySendError::Full(_)) => {
-                    log::error!("Dropping message from {src_addr}: channel is full");
+                    log::warn!("Dropping message from {src_addr}: channel is full");
                     continue;
                 }
                 Ok(()) => continue,
@@ -141,7 +141,7 @@ impl<'s> Future for Egress<'s> {
                     let data_len = data.len();
                     match ready!(socket.poll_send_to(cx, data, *dest_addr)) {
                         Err(e) => {
-                            log::error!("Failed to send UDP packet to {dest_addr}: {e}");
+                            log::warn!("Failed to send UDP packet to {dest_addr}: {e}");
                         }
                         Ok(bytes_sent) if bytes_sent != data_len => {
                             log::error!(

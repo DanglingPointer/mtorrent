@@ -49,7 +49,7 @@ pub struct Processor {
 impl Processor {
     pub fn new(config_dir: impl AsRef<Path>, client: queries::Client) -> Self {
         let config = Config::load(&config_dir).unwrap_or_else(|e| {
-            log::warn!("Failed to load config ({e}), using defaults");
+            log::info!("Failed to load config ({e}), using defaults");
             Config::default()
         });
         let nodes = LocalShared::new(RoutingTable::new_boxed(config.local_id));
@@ -136,6 +136,7 @@ impl Processor {
 
     fn handle_command(&mut self, cmd: Command) {
         define!(with_rt, self.nodes);
+        log::info!("Processing command: {cmd:?}");
         match cmd {
             Command::AddNode { addr } => {
                 if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
@@ -180,14 +181,14 @@ impl Drop for Processor {
         let connected_nodes: Vec<String> =
             self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
 
-        log::debug!("Processor shutting down, node_count = {}", connected_nodes.len());
+        log::info!("Processor shutting down, node_count = {}", connected_nodes.len());
 
         if !connected_nodes.is_empty() {
             self.config.nodes = connected_nodes;
             self.config.nodes.extend(Config::default().nodes);
         }
         if let Err(e) = self.config.save(&self.config_dir) {
-            log::warn!("Failed to save config: {e}");
+            log::error!("Failed to save config: {e}");
         }
 
         self.shutdown_signal.notify_waiters();
@@ -262,6 +263,6 @@ fn respond_to_incoming_query(
         }
     };
     if let Err(e) = result {
-        log::error!("Failed to respond to query: {e}");
+        log::warn!("Failed to respond to query: {e}");
     }
 }

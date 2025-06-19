@@ -2,7 +2,7 @@ use super::msgs::*;
 use super::processor::BoxRoutingTable;
 use super::queries::Client;
 use super::U160;
-use crate::debug_stopwatch;
+use crate::trace_stopwatch;
 use crate::utils::connctrl::{ConnectPermit, QuickConnectControl};
 use futures::io;
 use local_async_utils::prelude::*;
@@ -82,7 +82,7 @@ async fn periodic_ping(
         with_rt!(|routing| routing.node_count())
     );
 
-    let _sw = debug_stopwatch!("Periodic ping of {addr}");
+    let _sw = trace_stopwatch!("Periodic ping of {addr}");
     while with_rt!(|rt| rt.get_node(&id).is_some()) {
         // send periodic ping
         let response =
@@ -178,7 +178,7 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 break;
             }
             GetPeersResponseData::Peers(socket_addr_v4s) => {
-                log::info!("search produced {} peer(s)", socket_addr_v4s.len());
+                log::debug!("search produced {} peer(s)", socket_addr_v4s.len());
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
                 // report the received peer addresses
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {

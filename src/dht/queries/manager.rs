@@ -168,7 +168,7 @@ impl QueryManager {
             // erase the corresponding timeout
             self.pending_timeouts.retain(|pt| pt.tid != tid);
         } else {
-            log::warn!(
+            log::debug!(
                 "Received orphaned {} message from {}",
                 match msg.data {
                     MessageData::Response(_) => "response",

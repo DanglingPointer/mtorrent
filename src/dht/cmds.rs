@@ -1,16 +1,19 @@
 use super::u160::U160;
+use derive_more::Debug;
 use futures::Stream;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 
+#[derive(Debug)]
 pub enum Command {
     AddNode {
         addr: SocketAddr,
     },
     FindPeers {
         info_hash: U160,
+        #[debug(skip)]
         callback: mpsc::Sender<SocketAddr>,
         local_peer_port: u16,
     },
