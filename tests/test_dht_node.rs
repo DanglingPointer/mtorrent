@@ -10,7 +10,7 @@ struct ConfigContent {
 
 #[test]
 fn test_bootstrap_dht_node() {
-    let config_file = ".mtorrent_dht.json";
+    let config_file = ".mtorrent_dht";
     assert!(matches!(fs::exists(config_file), Ok(false)));
 
     let mut dht_node = process::Command::new(env!("CARGO_BIN_EXE_dht_node"))

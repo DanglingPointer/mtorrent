@@ -10,7 +10,6 @@ use crate::dht::Config;
 use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::prelude::*;
-use std::collections::BTreeSet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -178,7 +177,7 @@ impl Processor {
 
 impl Drop for Processor {
     fn drop(&mut self) {
-        let connected_nodes: BTreeSet<String> =
+        let connected_nodes: Vec<String> =
             self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
 
         log::debug!("Processor shutting down, node_count = {}", connected_nodes.len());

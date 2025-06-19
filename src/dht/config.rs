@@ -1,13 +1,12 @@
 use super::U160;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeSet;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::{fs, io};
 
-const FILENAME: &str = ".mtorrent_dht.json";
+const FILENAME: &str = ".mtorrent_dht";
 
-const DEFAULT_NODES: [&str; 2] = ["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
+const DEFAULT_NODES: [&str; 2] = ["dht.transmissionbt.com:6881", "router.bittorrent.com:6881"];
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
@@ -16,7 +15,7 @@ pub struct Config {
         deserialize_with = "deserialize_node_id"
     )]
     pub(super) local_id: U160,
-    pub(super) nodes: BTreeSet<String>,
+    pub(super) nodes: Vec<String>,
 }
 
 impl Config {
@@ -69,8 +68,8 @@ mod tests {
         let cfg = Config {
             local_id: [0x0f; 20].into(),
             nodes: [
-                "router.bittorrent.com:6881".to_string(),
                 "dht.transmissionbt.com:6881".to_string(),
+                "router.bittorrent.com:6881".to_string(),
             ]
             .into(),
         };
@@ -95,10 +94,10 @@ mod tests {
         assert_eq!(deserialized.local_id, [0xaf; 20].into());
         assert_eq!(
             deserialized.nodes,
-            BTreeSet::from([
-                "router.bittorrent.com:6881".to_string(),
+            vec![
                 "dht.transmissionbt.com:6881".to_string(),
-            ])
+                "router.bittorrent.com:6881".to_string(),
+            ]
         );
     }
 
@@ -144,10 +143,10 @@ mod tests {
         assert_eq!(cfg.local_id, [0xde; 20].into());
         assert_eq!(
             cfg.nodes,
-            BTreeSet::from([
-                "router.bittorrent.com:6666".to_string(),
+            vec![
                 "dht.transmissionbt.com:6666".to_string(),
-            ])
+                "router.bittorrent.com:6666".to_string(),
+            ]
         );
     }
 
