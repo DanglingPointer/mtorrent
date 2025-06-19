@@ -198,6 +198,7 @@ impl PeerBuilder {
                 pwp_worker_handle: tokio::runtime::Handle::current(),
                 peer_discovered_channel: sink,
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+                canceller: CancellationToken::new(),
             };
             super::run_peer_connection(pwp::PeerOrigin::Other, dlchans, ulchans, extchans, &data)
                 .await

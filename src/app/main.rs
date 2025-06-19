@@ -260,6 +260,7 @@ async fn main_stage(
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
+    let canceller = CancellationToken::new();
     let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
         MAX_PEER_CONNECTIONS,
         ops::MainConnectionData {
@@ -269,6 +270,7 @@ async fn main_stage(
             pwp_worker_handle: pwp_runtime,
             peer_discovered_channel: peer_discovered_sink.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+            canceller: canceller.clone(),
         },
     );
     tasks.spawn_local(async move {
@@ -313,7 +315,7 @@ async fn main_stage(
         peer_discovered_sink,
     ));
 
-    ops::periodic_state_dump(ctx, content_dir).await;
+    ops::periodic_state_dump(ctx, content_dir, canceller.drop_guard()).await;
     tasks.shutdown().await;
     Ok(())
 }

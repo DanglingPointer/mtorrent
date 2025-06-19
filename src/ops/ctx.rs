@@ -171,7 +171,11 @@ pub async fn periodic_metadata_check(
     Ok(with_ctx!(|ctx| mem::take(&mut ctx.reachable_peers)))
 }
 
-pub async fn periodic_state_dump(mut ctx_handle: Handle<MainCtx>, outputdir: impl AsRef<Path>) {
+pub async fn periodic_state_dump(
+    mut ctx_handle: Handle<MainCtx>,
+    outputdir: impl AsRef<Path>,
+    _canceller: DropGuard,
+) {
     define_with_ctx!(ctx_handle);
 
     with_ctx!(|ctx| {

@@ -13,6 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
+use tokio_util::sync::CancellationToken;
 
 async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_path: &'static str) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
@@ -151,6 +152,7 @@ async fn run_listening_seeder(
             pwp_worker_handle: runtime::Handle::current(),
             peer_discovered_channel: sink,
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+            canceller: CancellationToken::new(),
         },
     );
 

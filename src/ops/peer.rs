@@ -203,12 +203,18 @@ async fn run_peer_connection(
         .clone()
         .with(|ctx| ctx.peer_states.set_origin(&remote_ip, origin));
 
-    try_join!(
-        run_download(download.into(), remote_ip, data.ctx_handle.clone()),
-        run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
-        maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
-        reporter.run(),
-    )?;
+    data.canceller
+        .run_until_cancelled(async {
+            try_join!(
+                run_download(download.into(), remote_ip, data.ctx_handle.clone()),
+                run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
+                maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
+                reporter.run(),
+            )
+            .map(|_| ())
+        })
+        .await
+        .unwrap_or(Ok(()))?;
     Ok(())
 }
 
@@ -221,6 +227,7 @@ pub struct MainConnectionData {
     pub pwp_worker_handle: runtime::Handle,
     pub peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    pub canceller: CancellationToken,
 }
 
 pub async fn outgoing_pwp_connection(
