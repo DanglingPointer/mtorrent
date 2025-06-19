@@ -130,6 +130,9 @@ async fn preliminary_stage(
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
+
+    let mut tasks = task::JoinSet::new();
+
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
 
     let metainfo_filepath = metainfo_dir
@@ -139,14 +142,13 @@ async fn preliminary_stage(
     let (peer_discovered_sink, mut peer_discovered_src) =
         local_channel::channel::<(SocketAddr, PeerOrigin)>();
 
-    let search_handle = dht_handle.map(|dht_cmds| {
-        task::spawn_local(ops::run_dht_search(
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
             *magnet_link.info_hash(),
             dht_cmds,
             peer_discovered_sink.clone(),
             public_pwp_ip.port(),
         ))
-        .abort_handle()
     });
 
     let ctx =
@@ -159,7 +161,7 @@ async fn preliminary_stage(
             pwp_worker_handle: pwp_runtime,
         },
     );
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         while let Some((peer_addr, _origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -187,7 +189,7 @@ async fn preliminary_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -198,14 +200,14 @@ async fn preliminary_stage(
         peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    task::spawn_local(ops::make_preliminary_announces(
+    tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
         PathBuf::from(config_dir.as_ref()),
         peer_discovered_sink,
     ));
 
     let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone()).await?;
-    search_handle.inspect(task::AbortHandle::abort);
+    tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }
 
@@ -236,17 +238,18 @@ async fn main_stage(
         startup::create_metainfo_storage(&metainfo_filepath)?;
     storage_runtime.spawn(metainfo_storage_server.run());
 
+    let mut tasks = task::JoinSet::new();
+
     let (peer_discovered_sink, mut peer_discovered_src) =
         local_channel::channel::<(SocketAddr, PeerOrigin)>();
 
-    let search_handle = dht_handle.map(|dht_cmds| {
-        task::spawn_local(ops::run_dht_search(
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
             *metainfo.info_hash(),
             dht_cmds,
             peer_discovered_sink.clone(),
             public_pwp_ip.port(),
         ))
-        .abort_handle()
     });
 
     let ctx: ops::Handle<_> =
@@ -263,7 +266,7 @@ async fn main_stage(
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
         },
     );
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         while let Some((peer_addr, origin)) = peer_discovered_src.next().await {
             if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
                 task::spawn_local(async move {
@@ -288,7 +291,7 @@ async fn main_stage(
             log::info!("Incoming connection from {peer_ip} rejected");
         }
     };
-    task::spawn_local(async move {
+    tasks.spawn_local(async move {
         match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
             Ok(_) => (),
             Err(e) => log::error!("TCP listener exited: {e}"),
@@ -299,13 +302,13 @@ async fn main_stage(
         peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
     }
 
-    task::spawn_local(ops::make_periodic_announces(
+    tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
         PathBuf::from(output_dir.as_ref()),
         peer_discovered_sink,
     ));
 
     ops::periodic_state_dump(ctx, content_dir).await;
-    search_handle.inspect(task::AbortHandle::abort);
+    tasks.shutdown().await;
     Ok(())
 }
