@@ -15,6 +15,7 @@ fn test_bootstrap_dht_node() {
 
     let mut dht_node = process::Command::new(env!("CARGO_BIN_EXE_dht_node"))
         .arg("--duration=10")
+        .arg("--no-upnp")
         .spawn()
         .expect("failed to launch DHT node");
 

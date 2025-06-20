@@ -37,21 +37,22 @@ pub async fn single_torrent(
         match upnp::PortOpener::new(
             SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into(),
             igd_next::PortMappingProtocol::TCP,
+            None,
         )
         .await
         {
             Ok(port_opener) => {
                 let public_ip = port_opener.external_ip();
-                log::info!("UPnP succeeded, public ip: {}", public_ip);
+                log::info!("UPnP for PWP succeeded, public ip: {}", public_ip);
                 pwp_runtime.spawn(async move {
-                    if let Err(e) = port_opener.do_continuous_renewal().await {
-                        log::error!("UPnP port renewal failed: {e}");
+                    if let Err(e) = port_opener.run_continuous_renewal().await {
+                        log::error!("UPnP port renewal for PWP failed: {e}");
                     }
                 });
                 public_ip
             }
             Err(e) => {
-                log::error!("UPnP failed: {e}");
+                log::error!("UPnP for PWP failed: {e}");
                 listener_addr
             }
         }
