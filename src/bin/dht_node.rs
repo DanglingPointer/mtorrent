@@ -24,6 +24,10 @@ struct Args {
     /// Magnet link to the torrent to search for
     #[arg(short, long)]
     target_magnet: Option<MagnetLink>,
+
+    /// Disable UPnP
+    #[arg(long)]
+    no_upnp: bool,
 }
 
 /// Example usage:
@@ -64,7 +68,8 @@ fn main() -> io::Result<()> {
     };
 
     let config_dir = env::current_dir()?;
-    let (_worker, cmds) = app::dht::launch_node_runtime(6881, args.parallel_queries, config_dir);
+    let (_worker, cmds) =
+        app::dht::launch_node_runtime(6881, args.parallel_queries, config_dir, !args.no_upnp);
 
     for node in extra_nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
