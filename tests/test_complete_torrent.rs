@@ -639,9 +639,12 @@ fn compare_input_and_output(
     }
 }
 
-macro_rules! with_timeout {
-    ($fut:expr) => {
-        tokio::time::timeout(sec!(60), $fut).await.expect("failed to finish in 60s");
+macro_rules! with_30s_timeout {
+    ($fut:expr, $proc:expr) => {
+        if tokio::time::timeout(sec!(30), $fut).await.is_err() {
+            let _ = $proc.kill();
+            panic!("failed to finish in 60s");
+        }
     };
 }
 
@@ -664,12 +667,15 @@ async fn test_download_and_upload_multifile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
-        with_timeout!(launch_peers::<Seeder>(
-            metainfo_file,
-            data_dir,
-            ConnectionMode::Outgoing { num_peers: 50 },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Seeder>(
+                metainfo_file,
+                data_dir,
+                ConnectionMode::Outgoing { num_peers: 50 },
+                false,
+            ),
+            mtorrent
+        );
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -700,14 +706,17 @@ async fn test_download_and_upload_multifile_torrent() {
                 .expect("failed to execute 'mtorrent'")
         });
 
-        with_timeout!(launch_peers::<Seeder>(
-            metainfo_file,
-            data_dir,
-            ConnectionMode::Incoming {
-                listen_addrs: seeder_ips,
-            },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Seeder>(
+                metainfo_file,
+                data_dir,
+                ConnectionMode::Incoming {
+                    listen_addrs: seeder_ips,
+                },
+                false,
+            ),
+            mtorrent.await.unwrap()
+        );
 
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -730,12 +739,15 @@ async fn test_download_and_upload_multifile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
-        with_timeout!(launch_peers::<Leech>(
-            metainfo_file,
-            output_dir,
-            ConnectionMode::Outgoing { num_peers: 1 },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Leech>(
+                metainfo_file,
+                output_dir,
+                ConnectionMode::Outgoing { num_peers: 1 },
+                false,
+            ),
+            mtorrent
+        );
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -765,12 +777,15 @@ async fn test_download_and_upload_monofile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
-        with_timeout!(launch_peers::<Seeder>(
-            metainfo_file,
-            data_dir,
-            ConnectionMode::Outgoing { num_peers: 50 },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Seeder>(
+                metainfo_file,
+                data_dir,
+                ConnectionMode::Outgoing { num_peers: 50 },
+                false,
+            ),
+            mtorrent
+        );
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -801,14 +816,17 @@ async fn test_download_and_upload_monofile_torrent() {
                 .expect("failed to execute 'mtorrent'")
         });
 
-        with_timeout!(launch_peers::<Seeder>(
-            metainfo_file,
-            data_dir,
-            ConnectionMode::Incoming {
-                listen_addrs: seeder_ips,
-            },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Seeder>(
+                metainfo_file,
+                data_dir,
+                ConnectionMode::Incoming {
+                    listen_addrs: seeder_ips,
+                },
+                false,
+            ),
+            mtorrent.await.unwrap()
+        );
 
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -831,12 +849,15 @@ async fn test_download_and_upload_monofile_torrent() {
             .spawn()
             .expect("failed to execute 'mtorrent'");
 
-        with_timeout!(launch_peers::<Leech>(
-            metainfo_file,
-            output_dir,
-            ConnectionMode::Outgoing { num_peers: 1 },
-            false,
-        ));
+        with_30s_timeout!(
+            launch_peers::<Leech>(
+                metainfo_file,
+                output_dir,
+                ConnectionMode::Outgoing { num_peers: 1 },
+                false,
+            ),
+            mtorrent
+        );
 
         let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
@@ -882,14 +903,17 @@ async fn test_download_torrent_from_magnet_link() {
             .expect("failed to execute 'mtorrent'")
     });
 
-    with_timeout!(launch_peers::<Seeder>(
-        metainfo_file,
-        data_dir,
-        ConnectionMode::Incoming {
-            listen_addrs: peer_ips
-        },
-        true
-    ));
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            metainfo_file,
+            data_dir,
+            ConnectionMode::Incoming {
+                listen_addrs: peer_ips
+            },
+            true
+        ),
+        mtorrent.await.unwrap()
+    );
 
     let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
     assert!(mtorrent_ecode.success());
