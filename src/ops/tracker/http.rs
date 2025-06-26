@@ -47,9 +47,9 @@ impl Client {
         let announce_url = request_builder.build_announce();
         log::debug!("Sending announce request to {}", announce_url);
 
-        let response_data = self.0.get(announce_url).send().await?.bytes().await?;
-        let bencoded = benc::Element::from_bytes(&response_data)
-            .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
+        let response_data =
+            self.0.get(announce_url).send().await?.error_for_status()?.bytes().await?;
+        let bencoded = benc::Element::from_bytes(&response_data)?;
         log::debug!("Received announce response: {bencoded}");
 
         let content = AnnounceResponseContent::from_benc(bencoded)
@@ -69,9 +69,9 @@ impl Client {
         let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
         log::debug!("Sending scrape request to {}", scrape_url);
 
-        let response_data = self.0.get(scrape_url).send().await?.bytes().await?;
-        let bencoded = benc::Element::from_bytes(&response_data)
-            .map_err(|_| Error::Response(String::from_utf8_lossy(&response_data).into_owned()))?;
+        let response_data =
+            self.0.get(scrape_url).send().await?.error_for_status()?.bytes().await?;
+        let bencoded = benc::Element::from_bytes(&response_data)?;
         log::debug!("Scrape response: {}", bencoded);
 
         // TODO: parse response
