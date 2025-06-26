@@ -1195,7 +1195,7 @@ fn test_incoming_ping_channel_error() {
 
     drop(outgoing_msgs_source);
     drop(incoming_msgs_sink);
-    assert_ready!(runner_fut.poll()).unwrap_err();
+    assert_ready!(runner_fut.poll()).unwrap();
     let error = incoming_ping
         .respond(PingResponse {
             id: U160::from([2u8; 20]),

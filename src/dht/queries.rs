@@ -5,7 +5,7 @@ mod tests;
 
 use super::error::Error;
 use super::{msgs::*, udp, U160};
-use crate::trace_stopwatch;
+use crate::{debug_stopwatch, trace_stopwatch};
 use derive_more::derive::From;
 use futures::StreamExt;
 use local_async_utils::prelude::*;
@@ -100,23 +100,29 @@ pub struct Runner {
 
 impl Runner {
     pub async fn run(mut self) -> Result<(), Error> {
+        let _sw = debug_stopwatch!("Queries runner");
         loop {
             let next_timeout = self.queries.next_timeout();
             select! {
                 biased;
                 outgoing = self.outgoing_queries_source.next() => {
-                    let query = outgoing.ok_or(Error::ChannelClosed)?;
-                    self.queries.handle_one_outgoing(query).await?;
+                    match outgoing {
+                        None => break,
+                        Some(query) => self.queries.handle_one_outgoing(query).await?,
+                    }
                 }
                 incoming = self.incoming_msgs_source.recv() => {
-                    let msg = incoming.ok_or(Error::ChannelClosed)?;
-                    self.queries.handle_one_incoming(msg).await?;
+                    match incoming {
+                        None => break,
+                        Some(msg) => self.queries.handle_one_incoming(msg).await?,
+                    }
                 }
                 _ = Self::sleep_until(next_timeout), if next_timeout.is_some() => {
                     self.queries.handle_timeouts().await?;
                 }
             }
         }
+        Ok(())
     }
 
     async fn sleep_until(deadline: Option<Instant>) {

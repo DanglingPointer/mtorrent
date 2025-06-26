@@ -1,5 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
+use crate::debug_stopwatch;
 use crate::utils::benc;
 use std::future::Future;
 use std::io;
@@ -9,9 +10,9 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 use tokio::io::ReadBuf;
 use tokio::net::UdpSocket;
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::try_join;
 
 pub struct Runner {
     socket: UdpSocket,
@@ -41,6 +42,7 @@ pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelRece
 
 impl Runner {
     pub async fn run(self) -> io::Result<()> {
+        let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
             socket: &self.socket,
             buffer: [MaybeUninit::uninit(); 1500],
@@ -51,8 +53,11 @@ impl Runner {
             pending: None,
             source: self.egress_receiver,
         };
-        try_join!(ingress, egress)?;
-        Ok(())
+        select! {
+            biased;
+            egress_result = egress => egress_result,
+            ingress_result = ingress => ingress_result,
+        }
     }
 }
 
@@ -100,10 +105,7 @@ impl<'s> Future for Ingress<'s> {
             };
             match sink.try_send((message, src_addr)) {
                 Err(TrySendError::Closed(_)) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Channel closed",
-                    )));
+                    return Poll::Ready(Ok(()));
                 }
                 Err(TrySendError::Full(_)) => {
                     log::warn!("Dropping message from {src_addr}: channel is full");
@@ -129,10 +131,7 @@ impl<'s> Future for Egress<'s> {
             match pending {
                 None => match ready!(source.poll_recv(cx)) {
                     None => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "Channel closed",
-                        )));
+                        return Poll::Ready(Ok(()));
                     }
                     Some((message, dst_addr)) => {
                         let bencode = benc::Element::from(message);
