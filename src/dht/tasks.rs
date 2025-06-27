@@ -16,6 +16,12 @@ use tokio::{select, task, time};
 const PING_INTERVAL: Duration = min!(5);
 const GET_PEERS_INTERVAL: Duration = sec!(30);
 
+macro_rules! is_valid_addr {
+    ($addr:expr) => {
+        !$addr.ip().is_unspecified() && $addr.port() >= 1024
+    };
+}
+
 pub(super) struct PingCtx {
     pub(super) nodes: LocalShared<BoxRoutingTable>,
     pub(super) client: Client,
@@ -63,7 +69,11 @@ async fn periodic_ping(
 
     // process response
     for (node_id, node_addr) in response.nodes {
-        if node_id != local_id && node_id != id && with_rt!(|rt| rt.can_insert(&node_id)) {
+        if is_valid_addr!(node_addr)
+            && node_id != local_id
+            && node_id != id
+            && with_rt!(|rt| rt.can_insert(&node_id))
+        {
             let node_addr = SocketAddr::V4(node_addr);
             if let Some(permit) = cnt_ctrl.try_acquire_permit(node_addr) {
                 launch_periodic_ping(node_addr, permit, cnt_ctrl.clone());
@@ -170,7 +180,7 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 log::debug!("search produced {} nodes", id_addr_pairs.len());
                 // spawn search tasks for the returned nodes
                 for addr in id_addr_pairs.into_iter().map(|(_id, ipv4)| SocketAddr::V4(ipv4)) {
-                    if !addr.ip().is_unspecified() && addr.port() != 0 {
+                    if is_valid_addr!(addr) {
                         launch_peer_search(ctx.clone(), addr);
                     }
                 }
@@ -182,7 +192,7 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
                 // report the received peer addresses
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
-                    if ctx.discovered_peers.insert(peer_addr) {
+                    if is_valid_addr!(peer_addr) && ctx.discovered_peers.insert(peer_addr) {
                         ctx.peer_sender.send((peer_addr, ctx.target));
                         let _ = ctx.cmd_result_sender.send(peer_addr).await;
                     }
