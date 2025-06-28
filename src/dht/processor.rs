@@ -170,6 +170,8 @@ impl Processor {
                     for node_addr in closest_nodes {
                         launch_peer_search(ctx.clone(), node_addr);
                     }
+                } else {
+                    log::warn!("Not starting search as callback channel is closed");
                 }
             }
         }
@@ -212,9 +214,10 @@ fn respond_to_incoming_query(
                 })
                 .take(8)
                 .collect();
-            if nodes.first().is_some_and(|(id, _)| id == &find_node.args().target) {
-                // exact match
-                nodes.truncate(1);
+            if let Some(&exact_match) = nodes.iter().find(|(id, _)| *id == find_node.args().target)
+            {
+                nodes.clear();
+                nodes.push(exact_match);
             }
             find_node.respond(FindNodeResponse {
                 id: *rt.local_id(),
@@ -223,8 +226,11 @@ fn respond_to_incoming_query(
         }
         IncomingQuery::GetPeers(get_peers) => {
             let token = token_mgr.generate_token_for(get_peers.source_addr());
-            let peer_addrs: Vec<_> =
-                peers.get_ipv4_peers(get_peers.args().info_hash).cloned().collect();
+            let peer_addrs: Vec<_> = peers
+                .get_ipv4_peers(get_peers.args().info_hash)
+                .take(128) // apprx to fit MTU
+                .cloned()
+                .collect();
             let response_data = if !peer_addrs.is_empty() {
                 GetPeersResponseData::Peers(peer_addrs)
             } else {
