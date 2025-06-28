@@ -1,12 +1,14 @@
 use crate::utils::{ip, upnp, worker};
 use crate::{dht, info_stopwatch};
-use std::{io, net::SocketAddr, path::Path};
+use std::io;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::{join, runtime, task};
 
 pub fn launch_node_runtime(
     local_port: u16,
     max_concurrent_queries: Option<usize>,
-    config_dir: impl AsRef<Path> + Send + 'static,
+    config_dir: PathBuf,
     use_upnp: bool,
 ) -> (worker::simple::Handle, dht::CmdSender) {
     let (cmd_sender, cmd_server) = dht::setup_cmds();
@@ -62,7 +64,7 @@ async fn start_upnp(local_port: u16) -> io::Result<()> {
 async fn dht_main(
     cmd_server: dht::CmdServer,
     local_port: u16,
-    config_dir: impl AsRef<Path>,
+    config_dir: PathBuf,
     max_concurrent_queries: Option<usize>,
     use_upnp: bool,
 ) {

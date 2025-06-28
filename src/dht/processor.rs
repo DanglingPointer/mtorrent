@@ -11,7 +11,7 @@ use crate::utils::connctrl::ConnectControl;
 use futures::StreamExt;
 use local_async_utils::prelude::*;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -47,7 +47,7 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn new(config_dir: impl AsRef<Path>, client: queries::Client) -> Self {
+    pub fn new(config_dir: PathBuf, client: queries::Client) -> Self {
         let config = Config::load(&config_dir).unwrap_or_else(|e| {
             log::info!("Failed to load config ({e}), using defaults");
             Config::default()
@@ -70,7 +70,7 @@ impl Processor {
             shutdown_signal,
             cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
             config,
-            config_dir: config_dir.as_ref().to_owned(),
+            config_dir,
         }
     }
 
