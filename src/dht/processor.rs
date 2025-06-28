@@ -116,7 +116,7 @@ impl Processor {
                     None => break,
                 },
                 peer_target = self.peer_receiver.next() => match peer_target {
-                    Some((peer, target)) => self.peers.add_record(&target, peer),
+                    Some((peer, target)) => self.peers.add_record(target, peer),
                     None => unreachable!(),
                 }
             }
@@ -150,7 +150,7 @@ impl Processor {
             } => {
                 if self
                     .peers
-                    .get_peers(&info_hash)
+                    .get_peers(info_hash)
                     .try_for_each(|addr| callback.try_send(*addr))
                     .is_ok()
                 {
@@ -224,7 +224,7 @@ fn respond_to_incoming_query(
         IncomingQuery::GetPeers(get_peers) => {
             let token = token_mgr.generate_token_for(get_peers.source_addr());
             let peer_addrs: Vec<_> =
-                peers.get_ipv4_peers(&get_peers.args().info_hash).cloned().collect();
+                peers.get_ipv4_peers(get_peers.args().info_hash).cloned().collect();
             let response_data = if !peer_addrs.is_empty() {
                 GetPeersResponseData::Peers(peer_addrs)
             } else {
@@ -257,7 +257,7 @@ fn respond_to_incoming_query(
                 if let Some(port) = announce_peer.args().port {
                     peer_addr.set_port(port);
                 }
-                peers.add_record(&announce_peer.args().info_hash, peer_addr);
+                peers.add_record(announce_peer.args().info_hash, peer_addr);
                 announce_peer.respond(AnnouncePeerResponse { id: *rt.local_id() })
             }
         }
