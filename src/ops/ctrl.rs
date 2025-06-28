@@ -21,19 +21,11 @@ pub fn get_peer_reqq(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> usize {
 const MAX_SEEDER_COUNT: usize = 100;
 
 fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
-    let has_missing_pieces = || {
+    let has_missing_pieces = || ctx.piece_tracker.get_peer_pieces(peer_ip).next().is_some();
+    let has_unique_pieces = || {
         ctx.piece_tracker
             .get_peer_pieces(peer_ip)
-            .is_some_and(|mut it| it.next().is_some())
-    };
-    let has_unique_pieces = || {
-        ctx.piece_tracker.get_peer_pieces(peer_ip).is_some_and(|mut piece_it| {
-            piece_it.any(|piece| {
-                ctx.piece_tracker
-                    .get_piece_owners(piece)
-                    .is_some_and(|owners_it| owners_it.count() == 1)
-            })
-        })
+            .any(|piece| ctx.piece_tracker.get_piece_owners(piece).count() == 1)
     };
     let has_recently_uploaded_data = || {
         ctx.peer_states.get(peer_ip).is_some_and(|state| {
@@ -289,11 +281,7 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
 
     const TIMEOUT: Duration = min!(5);
 
-    let owns_missing_piece = || {
-        ctx.piece_tracker
-            .get_peer_pieces(peer_addr)
-            .is_some_and(|mut it| it.next().is_some())
-    };
+    let owns_missing_piece = || ctx.piece_tracker.get_peer_pieces(peer_addr).next().is_some();
     let supports_pex = || {
         state
             .extensions
