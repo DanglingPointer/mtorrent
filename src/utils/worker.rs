@@ -48,6 +48,7 @@ pub mod rt {
         pub io_enabled: bool,
         pub time_enabled: bool,
         pub stack_size: usize,
+        pub max_blocking_threads: usize,
     }
 
     impl Default for Config {
@@ -57,6 +58,7 @@ pub mod rt {
                 io_enabled: false,
                 time_enabled: false,
                 stack_size: 128 * 1024,
+                max_blocking_threads: 1,
             }
         }
     }
@@ -111,6 +113,7 @@ pub fn with_runtime(config: rt::Config) -> rt::Handle {
         builder.enable_time();
     }
     let rt = builder
+        .max_blocking_threads(config.max_blocking_threads)
         .build()
         .unwrap_or_else(|_| panic!("Failed to build runtime '{}'", config.name));
     let rt_handle = rt.handle().clone();

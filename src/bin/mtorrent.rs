@@ -82,6 +82,7 @@ fn main() -> io::Result<()> {
     let peer_id = PeerId::generate_new();
 
     tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(32) // used for DNS resolution
         .enable_all()
         .build_local(&Default::default())?
         .block_on(app::main::single_torrent(

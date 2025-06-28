@@ -18,6 +18,7 @@ pub fn launch_node_runtime(
         },
         move || {
             runtime::Builder::new_current_thread()
+                .max_blocking_threads(1) // should not be using these
                 .enable_all()
                 .build_local(&Default::default())
                 .expect("Failed to build DHT runtime")
