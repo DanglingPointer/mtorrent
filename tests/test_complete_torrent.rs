@@ -1,3 +1,4 @@
+#![expect(clippy::zombie_processes)]
 use futures::future;
 use local_async_utils::prelude::*;
 use mtorrent::utils::metainfo::Metainfo;
@@ -438,7 +439,7 @@ async fn connecting_peer<P: Peer>(
     metainfo_storage: data::StorageClient,
     metainfo: Rc<Metainfo>,
 ) {
-    println!("Peer {} connecting to {}...", index, remote_ip);
+    println!("Peer {index} connecting to {remote_ip}...");
     let start_time = time::Instant::now();
     let stream = loop {
         let connect_result = time::timeout(sec!(10), TcpStream::connect(remote_ip)).await;
@@ -461,7 +462,7 @@ async fn connecting_peer<P: Peer>(
     )
     .await
     .expect("connecting peer failed to create channels");
-    println!("Peer {} connected to {}", index, remote_ip);
+    println!("Peer {index} connected to {remote_ip}");
     P::run(
         index,
         download_chans,
@@ -605,13 +606,13 @@ fn compare_input_and_output(
             match (f1.read(buff1), f2.read(buff2)) {
                 (Ok(f1_read_len), Ok(f2_read_len)) => {
                     if f1_read_len != f2_read_len {
-                        panic!("{} and {} are different", name1, name2);
+                        panic!("{name1} and {name2} are different");
                     }
                     if f1_read_len == 0 {
                         break;
                     }
                     if buff1[0..f1_read_len] != buff2[0..f2_read_len] {
-                        panic!("{} and {} are different", name1, name2);
+                        panic!("{name1} and {name2} are different");
                     }
                 }
                 _ => panic!(),

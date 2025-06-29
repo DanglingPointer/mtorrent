@@ -3,7 +3,7 @@ use crate::{pwp, warn_stopwatch};
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::{cmp, error, fs, io};
+use std::{cmp, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
 pub type StorageServer = GenericStorageServer<fs::File>;
@@ -156,37 +156,31 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
 impl StorageClient {
     pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
         let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
-        self.channel
-            .send(Command::WriteBlock {
-                global_offset,
-                data,
-                callback: Some(result_sender),
-            })
-            .map_err(Self::to_io_error_other)?;
-        result_receiver.await.map_err(Self::to_io_error_other)?
+        self.channel.send(Command::WriteBlock {
+            global_offset,
+            data,
+            callback: Some(result_sender),
+        })?;
+        result_receiver.await?
     }
 
     pub fn start_write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
-        self.channel
-            .send(Command::WriteBlock {
-                global_offset,
-                data,
-                callback: None,
-            })
-            .map_err(Self::to_io_error_other)?;
+        self.channel.send(Command::WriteBlock {
+            global_offset,
+            data,
+            callback: None,
+        })?;
         Ok(())
     }
 
     pub async fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
         let (result_sender, result_receiver) = oneshot::channel::<ReadResult>();
-        self.channel
-            .send(Command::ReadBlock {
-                global_offset,
-                length,
-                callback: result_sender,
-            })
-            .map_err(Self::to_io_error_other)?;
-        result_receiver.await.map_err(Self::to_io_error_other)?
+        self.channel.send(Command::ReadBlock {
+            global_offset,
+            length,
+            callback: result_sender,
+        })?;
+        result_receiver.await?
     }
 
     pub async fn verify_block(
@@ -197,19 +191,13 @@ impl StorageClient {
     ) -> Result<bool, Error> {
         let _sw = warn_stopwatch!("Verification of {length} bytes");
         let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
-        self.channel
-            .send(Command::VerifyBlock {
-                global_offset,
-                length,
-                expected_sha1: *expected_sha1,
-                callback: result_sender,
-            })
-            .map_err(Self::to_io_error_other)?;
-        result_receiver.await.map_err(Self::to_io_error_other)?
-    }
-
-    fn to_io_error_other<E: error::Error + Send + Sync + 'static>(e: E) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, Box::new(e))
+        self.channel.send(Command::VerifyBlock {
+            global_offset,
+            length,
+            expected_sha1: *expected_sha1,
+            callback: result_sender,
+        })?;
+        result_receiver.await?
     }
 }
 

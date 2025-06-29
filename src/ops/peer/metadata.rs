@@ -61,9 +61,10 @@ macro_rules! to_enum {
 }
 
 fn get_metadata_ext_id(hs: &pwp::ExtendedHandshake) -> io::Result<u8> {
-    hs.extensions.get(&pwp::Extension::Metadata).cloned().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::Other, "peer does not support metadata extension")
-    })
+    hs.extensions
+        .get(&pwp::Extension::Metadata)
+        .cloned()
+        .ok_or_else(|| io::Error::other("peer does not support metadata extension"))
 }
 
 fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) -> io::Result<()> {
@@ -73,7 +74,7 @@ fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) -> io::Res
         MIN_METADATA_SIZE..=MAX_METADATA_SIZE => {
             if ctx.metainfo_pieces.is_empty() {
                 ctx.metainfo.resize(metadata_size, 0);
-                let piece_count = (metadata_size + pwp::MAX_BLOCK_SIZE - 1) / pwp::MAX_BLOCK_SIZE;
+                let piece_count = metadata_size.div_ceil(pwp::MAX_BLOCK_SIZE);
                 ctx.metainfo_pieces = pwp::Bitfield::repeat(false, piece_count);
             } else if ctx.metainfo.len() != metadata_size {
                 log::error!(
@@ -85,37 +86,27 @@ fn init_metadata(ctx: &mut ctx::PreliminaryCtx, metadata_size: usize) -> io::Res
             }
             Ok(())
         }
-        _ => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("invalid metainfo file size ({})", metadata_size),
-        )),
+        _ => Err(io::Error::other(format!("invalid metainfo file size ({metadata_size})"))),
     }
 }
 
 fn submit_block(ctx: &mut ctx::PreliminaryCtx, piece_index: usize, data: &[u8]) -> io::Result<()> {
-    let mut has_piece = ctx.metainfo_pieces.get_mut(piece_index).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("invalid metadata piece index ({})", piece_index),
-        )
-    })?;
+    let mut has_piece = ctx
+        .metainfo_pieces
+        .get_mut(piece_index)
+        .ok_or_else(|| io::Error::other(format!("invalid metadata piece index ({piece_index})")))?;
     if *has_piece {
         return Ok(());
     }
     let offset = piece_index * pwp::MAX_BLOCK_SIZE;
     let expected_len = cmp::min(pwp::MAX_BLOCK_SIZE, ctx.metainfo.len() - offset);
     if data.len() != expected_len {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("invalid metadata block length ({})", data.len()),
-        ))
+        Err(io::Error::other(format!("invalid metadata block length ({})", data.len())))
     } else {
-        let chunk = ctx.metainfo.get_mut(offset..offset + data.len()).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("invalid metadata block offset ({})", offset),
-            )
-        })?;
+        let chunk = ctx
+            .metainfo
+            .get_mut(offset..offset + data.len())
+            .ok_or_else(|| io::Error::other(format!("invalid metadata block offset ({offset})")))?;
         chunk.copy_from_slice(data);
         *has_piece = true;
         Ok(())

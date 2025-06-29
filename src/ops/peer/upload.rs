@@ -269,10 +269,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
         while let Some(request) = request_src.next().await {
             let _sw = debug_stopwatch!("Serving request {} to {}", request, remote_ip);
             if request.block_length > pwp::MAX_BLOCK_SIZE {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("received too big request: {request}"),
-                ));
+                return Err(io::Error::other(format!("received too big request: {request}")));
             }
             let global_offset = with_ctx!(|ctx| {
                 ctx.pieces.global_offset(
@@ -281,9 +278,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                     request.block_length,
                 )
             })
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, format!("received invalid request: {request}"))
-            })?;
+            .map_err(|_| io::Error::other(format!("received invalid request: {request}")))?;
             if !with_ctx!(|ctx| {
                 ctx.accountant.has_exact_block_at(global_offset, request.block_length)
             }) {

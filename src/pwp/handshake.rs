@@ -44,14 +44,14 @@ where
     // Read remote handshake up until peer id,
     // then send entire local handshake (with either local info_hash or remote one),
     // then read remote peer id.
-    log::debug!("Receiving incoming handshake from {}", remote_ip);
+    log::debug!("Receiving incoming handshake from {remote_ip}");
 
     let mut remote_handshake = Handshake::default();
 
     socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
     socket.read_exact(&mut remote_handshake.info_hash).await?;
     if !use_remote_info_hash && local_handshake.info_hash != remote_handshake.info_hash {
-        return Err(io::Error::new(io::ErrorKind::Other, "info_hash doesn't match"));
+        return Err(io::Error::other("info_hash doesn't match"));
     }
 
     let mut writer = BufWriter::new(socket);
@@ -69,7 +69,7 @@ where
 
     if remote_handshake.peer_id == local_handshake.peer_id {
         // possible because some trackers include our own external ip
-        Err(io::Error::new(io::ErrorKind::Other, "incoming connect from ourselves"))
+        Err(io::Error::other("incoming connect from ourselves"))
     } else {
         log::debug!(
             "Incoming handshake with {} DONE. Peer id: {}",
@@ -92,7 +92,7 @@ where
     // Send local hanshake up until peer id,
     // then wait for the entire remote handshake,
     // then send local peer id.
-    log::debug!("Starting outgoing handshake with {}", remote_ip);
+    log::debug!("Starting outgoing handshake with {remote_ip}");
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
@@ -104,22 +104,22 @@ where
     let mut socket = writer.into_inner();
     socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved)
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?; // convert to Other to avoid reconnect
+        .map_err(io::Error::other)?; // convert to Other to avoid reconnect
 
     socket.read_exact(&mut remote_handshake.info_hash).await?;
     if local_handshake.info_hash != remote_handshake.info_hash {
-        return Err(io::Error::new(io::ErrorKind::Other, "info_hash doesn't match"));
+        return Err(io::Error::other("info_hash doesn't match"));
     }
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
     if matches!(expected_remote_peer_id, Some(id) if id != &remote_handshake.peer_id) {
-        return Err(io::Error::new(io::ErrorKind::Other, "remote peer_id doesn't match"));
+        return Err(io::Error::other("remote peer_id doesn't match"));
     }
 
     socket.write_all(&local_handshake.peer_id).await?;
 
     if remote_handshake.peer_id == local_handshake.peer_id {
-        Err(io::Error::new(io::ErrorKind::Other, "connecting to ourselves"))
+        Err(io::Error::other("connecting to ourselves"))
     } else {
         log::debug!(
             "Outgoing handshake with {} DONE. Peer id: {}",
@@ -155,7 +155,7 @@ async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
         String::from_utf8_lossy(&pstr_bytes).to_string()
     };
     if pstr != "BitTorrent protocol" {
-        return Err(io::Error::new(io::ErrorKind::Other, format!("Unknown protocol: '{}'", pstr)));
+        return Err(io::Error::other(format!("Unknown protocol: '{pstr}'")));
     }
     source.read_exact(&mut reserved.data).await?;
     Ok(source)

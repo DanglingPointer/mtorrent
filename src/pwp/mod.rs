@@ -7,7 +7,7 @@ mod states;
 pub(crate) mod testutils;
 
 pub use channels::*;
-pub use handshake::{reserved_bits, Handshake};
+pub use handshake::{Handshake, reserved_bits};
 pub use message::{
     Bitfield, BlockInfo, DownloaderMessage, ExtendedHandshake, ExtendedMessage, Extension,
     PeerExchangeData, UploaderMessage,

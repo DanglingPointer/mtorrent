@@ -7,21 +7,17 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
     let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
         .split_once(' ')
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Unexpected output from 'hostname -I'")
-        })?
+        .ok_or_else(|| io::Error::other("Unexpected output from 'hostname -I'"))?
         .0
         .to_string();
-    ipv4_string
-        .parse::<Ipv4Addr>()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))
+    ipv4_string.parse::<Ipv4Addr>().map_err(io::Error::other)
 }
 
 #[cfg(target_family = "windows")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     // naively uses first connected adapter
     ipconfig::get_adapters()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?
+        .map_err(io::Error::other)?
         .iter()
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)

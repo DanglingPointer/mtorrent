@@ -432,7 +432,7 @@ async fn verify_pieces(
             log::error!("Piece verification failed, piece_index={piece_index}");
             with_ctx!(|ctx| ctx.accountant.remove_piece(piece_index));
             if *verified_pieces == 0 {
-                return Err(io::Error::new(io::ErrorKind::Other, "piece verification failed"));
+                return Err(io::Error::other("piece verification failed"));
             }
         }
     }

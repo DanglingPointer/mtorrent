@@ -1,4 +1,4 @@
-use igd_next::{aio, PortMappingProtocol, SearchOptions};
+use igd_next::{PortMappingProtocol, SearchOptions, aio};
 use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 

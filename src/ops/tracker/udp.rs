@@ -1,4 +1,5 @@
 use super::utils;
+use bytes::Buf;
 use derive_more::Display;
 use local_async_utils::prelude::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -6,7 +7,7 @@ use std::str::Utf8Error;
 use std::{io, str};
 use thiserror::Error;
 use tokio::net::UdpSocket;
-use tokio::time::{timeout, Instant};
+use tokio::time::{Instant, timeout};
 
 pub struct UdpTrackerConnection {
     socket: UdpSocket,
@@ -62,9 +63,7 @@ impl UdpTrackerConnection {
                         );
                         Some(Ok(announce))
                     }
-                    Ok(AnyResponse::Error(error)) => {
-                        Some(Err(io::Error::new(io::ErrorKind::Other, error.message)))
-                    }
+                    Ok(AnyResponse::Error(error)) => Some(Err(io::Error::other(error.message))),
                     _ => None,
                 }
             },
@@ -103,9 +102,7 @@ impl UdpTrackerConnection {
                         );
                         Some(Ok(scrape))
                     }
-                    Ok(AnyResponse::Error(error)) => {
-                        Some(Err(io::Error::new(io::ErrorKind::Other, error.message)))
-                    }
+                    Ok(AnyResponse::Error(error)) => Some(Err(io::Error::other(error.message))),
                     _ => None,
                 }
             },
@@ -175,7 +172,7 @@ impl UdpTrackerConnection {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     retransmit_n += 1;
-                    log::trace!("Retrying request, retransmit_n={}", retransmit_n);
+                    log::trace!("Retrying request, retransmit_n={retransmit_n}");
                 }
             }
         }
@@ -349,17 +346,16 @@ impl CommonResponseHeader {
 impl TryFrom<&[u8]> for CommonResponseHeader {
     type Error = ParseError;
 
-    fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
-        if let Some(data) = src.get(..8) {
-            let (action_bytes, transaction_id_bytes) = data.split_at(4);
-            Ok(unsafe {
-                CommonResponseHeader {
-                    action: u32_from_be_bytes(action_bytes),
-                    transaction_id: u32_from_be_bytes(transaction_id_bytes),
-                }
-            })
-        } else {
+    fn try_from(mut src: &[u8]) -> Result<Self, Self::Error> {
+        if src.remaining() < 8 {
             Err(ParseError::InvalidLength)
+        } else {
+            let action = src.get_u32();
+            let transaction_id = src.get_u32();
+            Ok(CommonResponseHeader {
+                action,
+                transaction_id,
+            })
         }
     }
 }
@@ -372,11 +368,9 @@ impl TryFrom<&[u8]> for ConnectResponse {
     type Error = ParseError;
 
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
-        if let Some(data) = src.get(..8) {
-            Ok(unsafe {
-                ConnectResponse {
-                    connection_id: u64_from_be_bytes(data),
-                }
+        if let Some(&data) = src.first_chunk() {
+            Ok(ConnectResponse {
+                connection_id: u64::from_be_bytes(data),
             })
         } else {
             Err(ParseError::InvalidLength)
@@ -396,22 +390,22 @@ pub struct AnnounceResponse {
 impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     type Error = ParseError;
 
-    fn try_from((src, tracker_ip): (&[u8], &IpAddr)) -> Result<Self, Self::Error> {
-        if src.len() < 12 {
+    fn try_from((mut src, tracker_ip): (&[u8], &IpAddr)) -> Result<Self, Self::Error> {
+        if src.remaining() < 12 {
             Err(ParseError::InvalidLength)
         } else {
-            let (src, addrs) = src.split_at(12);
-            let peers: Vec<_> = match tracker_ip {
-                IpAddr::V4(_) => utils::parse_binary_ipv4_peers(addrs).collect(),
-                IpAddr::V6(_) => utils::parse_binary_ipv6_peers(addrs).collect(),
+            let interval = src.get_u32();
+            let leechers = src.get_u32();
+            let seeders = src.get_u32();
+            let ips: Vec<_> = match tracker_ip {
+                IpAddr::V4(_) => utils::parse_binary_ipv4_peers(src).collect(),
+                IpAddr::V6(_) => utils::parse_binary_ipv6_peers(src).collect(),
             };
-            Ok(unsafe {
-                AnnounceResponse {
-                    interval: u32_from_be_bytes(src.get_unchecked(..4)),
-                    leechers: u32_from_be_bytes(src.get_unchecked(4..8)),
-                    seeders: u32_from_be_bytes(src.get_unchecked(8..12)),
-                    ips: peers,
-                }
+            Ok(AnnounceResponse {
+                interval,
+                leechers,
+                seeders,
+                ips,
             })
         }
     }
@@ -433,14 +427,15 @@ impl TryFrom<&[u8]> for ScrapeResponse {
     type Error = ParseError;
 
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
-        fn to_scrape_entry(src: &[u8]) -> ScrapeResponseEntry {
-            assert!(src.len() >= 12);
-            unsafe {
-                ScrapeResponseEntry {
-                    seeders: u32_from_be_bytes(src.get_unchecked(..4)),
-                    completed: u32_from_be_bytes(src.get_unchecked(4..8)),
-                    leechers: u32_from_be_bytes(src.get_unchecked(8..12)),
-                }
+        fn to_scrape_entry(mut src: &[u8]) -> ScrapeResponseEntry {
+            assert!(src.remaining() == 12);
+            let seeders = src.get_u32();
+            let completed = src.get_u32();
+            let leechers = src.get_u32();
+            ScrapeResponseEntry {
+                seeders,
+                completed,
+                leechers,
             }
         }
         Ok(ScrapeResponse(src.chunks_exact(12).map(to_scrape_entry).collect()))
@@ -459,18 +454,6 @@ impl TryFrom<&[u8]> for ErrorResponse {
             message: str::from_utf8(src)?.to_string(),
         })
     }
-}
-
-unsafe fn u32_from_be_bytes(src: &[u8]) -> u32 {
-    let mut dest = [0u8; 4];
-    dest.copy_from_slice(src.get_unchecked(..4));
-    u32::from_be_bytes(dest)
-}
-
-unsafe fn u64_from_be_bytes(src: &[u8]) -> u64 {
-    let mut dest = [0u8; 8];
-    dest.copy_from_slice(src.get_unchecked(..8));
-    u64::from_be_bytes(dest)
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ mod manager;
 mod tests;
 
 use super::error::Error;
-use super::{msgs::*, udp, U160};
+use super::{U160, msgs::*, udp};
 use crate::{debug_stopwatch, trace_stopwatch};
 use derive_more::derive::From;
 use futures::StreamExt;
@@ -17,8 +17,8 @@ use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::select;
-use tokio::sync::{mpsc, Semaphore};
-use tokio::time::{sleep_until, Instant};
+use tokio::sync::{Semaphore, mpsc};
+use tokio::time::{Instant, sleep_until};
 
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]

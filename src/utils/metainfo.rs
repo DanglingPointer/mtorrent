@@ -115,7 +115,7 @@ impl Metainfo {
     }
 
     pub fn files(&self) -> Option<impl Iterator<Item = (usize, PathBuf)> + '_> {
-        if let Some(benc::Element::List(ref data)) = self.info.get("files") {
+        if let Some(benc::Element::List(data)) = self.info.get("files") {
             Some(data.iter().filter_map(try_get_length_path_pair))
         } else {
             None
@@ -182,7 +182,7 @@ mod tests {
         let info = Metainfo::new(&data).unwrap();
 
         let announce = info.announce().unwrap();
-        assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {}", announce);
+        assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {announce}");
 
         {
             let mut iter = info.announce_list().unwrap();
@@ -208,18 +208,17 @@ mod tests {
         let name = info.name().unwrap();
         assert_eq!(
             "The.Witcher.Nightmare.of.the.Wolf.2021.1080p.WEBRip.x265-RARBG", name,
-            "name: {}",
-            name
+            "name: {name}"
         );
 
         let piece_length = info.piece_length().unwrap();
-        assert_eq!(2_097_152, piece_length, "piece length: {}", piece_length);
+        assert_eq!(2_097_152, piece_length, "piece length: {piece_length}");
 
         let piece_count = info.pieces().unwrap().count();
         assert_eq!(/* 13360 / 20 */ 668, piece_count);
 
         let length = info.length();
-        assert_eq!(None, length, "length: {:?}", length);
+        assert_eq!(None, length, "length: {length:?}");
 
         let total_length: usize = info.files().unwrap().map(|(len, _path)| len).sum();
         assert!(piece_length * piece_count > total_length);
@@ -381,7 +380,7 @@ mod tests {
         let info = Metainfo::new(&data).unwrap();
 
         let announce = info.announce().unwrap();
-        assert_eq!("http://localhost:8000/announce", announce, "announce: {}", announce);
+        assert_eq!("http://localhost:8000/announce", announce, "announce: {announce}");
 
         assert!(info.announce_list().is_none());
     }

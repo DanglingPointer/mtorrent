@@ -121,7 +121,7 @@ impl From<str::Utf8Error> for ParseError {
 
 impl From<ParseError> for io::Error {
     fn from(e: ParseError) -> Self {
-        io::Error::new(io::ErrorKind::Other, Box::new(e))
+        io::Error::other(e)
     }
 }
 

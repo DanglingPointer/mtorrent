@@ -55,10 +55,7 @@ pub async fn new_peer(
             with_ctx!(|ctx| ctx.peer_states.set_extended_handshake(inner.rx.remote_ip(), hs));
         }
         Ok(msg) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("unexpected first extended message: {msg}"),
-            ))
+            return Err(io::Error::other(format!("unexpected first extended message: {msg}")));
         }
         Err(pwp::ChannelError::Timeout) => (),
         Err(e) => return Err(e.into()),

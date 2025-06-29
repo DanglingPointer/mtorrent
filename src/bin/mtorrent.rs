@@ -35,7 +35,7 @@ fn main() -> io::Result<()> {
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
         .init()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
+        .map_err(io::Error::other)?;
 
     let _sw = info_stopwatch!("mtorrent");
 

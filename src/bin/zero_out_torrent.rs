@@ -4,7 +4,7 @@ use std::{env, fs};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    println!("{:?}", args);
+    println!("{args:?}");
 
     let source = if args.len() >= 2 {
         args[1].to_owned()

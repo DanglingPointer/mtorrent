@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn last_incomplete_piece_is_handled_correctly() {
-        let p = PieceInfo::new(std::iter::repeat([0u8; 20].as_slice()).take(3), 5, 12);
+        let p = PieceInfo::new(std::iter::repeat_n([0u8; 20].as_slice(), 3), 5, 12);
         assert_eq!(3, p.piece_count());
         assert_eq!(5, p.piece_len(0));
         assert_eq!(5, p.piece_len(1));
