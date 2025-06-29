@@ -345,7 +345,7 @@ mod tests {
 
         assert_eq!(Some(1), a.max_block_length_at(19));
         for pos in 20..30 {
-            assert_eq!(None, a.max_block_length_at(pos), "pos={}", pos);
+            assert_eq!(None, a.max_block_length_at(pos), "pos={pos}");
         }
         assert_eq!(Some(10), a.max_block_length_at(30));
         assert_eq!(Some(9), a.max_block_length_at(31));
@@ -360,8 +360,8 @@ mod tests {
         a.submit_block_internal(10, 10);
 
         for len in 0..=10 {
-            assert!(!a.has_exact_block_at(9, len), "len={}", len);
-            assert!(a.has_exact_block_at(10, len), "len={}", len);
+            assert!(!a.has_exact_block_at(9, len), "len={len}");
+            assert!(a.has_exact_block_at(10, len), "len={len}");
         }
         assert!(a.has_exact_block_at(11, 9));
         assert!(!a.has_exact_block_at(11, 10));

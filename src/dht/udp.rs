@@ -7,7 +7,7 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::io::ReadBuf;
 use tokio::net::UdpSocket;
 use tokio::select;
@@ -161,7 +161,7 @@ impl<'s> Future for Egress<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dht::{msgs::*, U160};
+    use crate::dht::{U160, msgs::*};
     use local_async_utils::prelude::*;
     use std::iter;
     use tokio::{task, time::timeout};

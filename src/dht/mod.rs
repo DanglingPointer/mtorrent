@@ -13,7 +13,7 @@ mod udp;
 
 pub use cmds::Sender as CmdSender;
 pub use cmds::Server as CmdServer;
-pub use cmds::{setup_cmds, Command};
+pub use cmds::{Command, setup_cmds};
 pub use config::Config;
 pub use msgs::Message;
 pub use processor::Processor;

@@ -167,7 +167,7 @@ pub fn idle_upload_next_action(
 ) -> IdleUploadAction {
     let state = peer_states
         .get(peer_addr)
-        .unwrap_or_else(|| panic!("Unknown peer: {}", peer_addr));
+        .unwrap_or_else(|| panic!("Unknown peer: {peer_addr}"));
     debug_assert!(state.upload.am_choking || !state.upload.peer_interested);
 
     if !state.upload.peer_interested {
@@ -182,7 +182,7 @@ pub fn idle_upload_next_action(
             .count()
     };
 
-    if interested_top_seeders.iter().any(|&addr| addr == peer_addr) {
+    if interested_top_seeders.contains(&peer_addr) {
         if peer_states.leeches_count() < MAX_LEECH_COUNT {
             // serve to this top seeder
             IdleUploadAction::ActivateUploadAndServe(sec!(15))
@@ -220,12 +220,12 @@ pub fn active_upload_next_action(
 ) -> LeechUploadAction {
     let state = peer_states
         .get(peer_addr)
-        .unwrap_or_else(|| panic!("Unknown peer: {}", peer_addr));
+        .unwrap_or_else(|| panic!("Unknown peer: {peer_addr}"));
     debug_assert!(!state.upload.am_choking && state.upload.peer_interested);
 
     let interested_top_seeders = get_interested_top_seeders(peer_states);
 
-    if interested_top_seeders.iter().any(|&addr| addr == peer_addr) {
+    if interested_top_seeders.contains(&peer_addr) {
         // is a top seeder
         LeechUploadAction::Serve(sec!(15))
     } else if count_interested_peers(peer_states) <= MAX_LEECH_COUNT {
@@ -277,7 +277,7 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
     let state = ctx
         .peer_states
         .get(peer_addr)
-        .unwrap_or_else(|| panic!("Unknown peer: {}", peer_addr));
+        .unwrap_or_else(|| panic!("Unknown peer: {peer_addr}"));
 
     const TIMEOUT: Duration = min!(5);
 
@@ -293,7 +293,7 @@ pub fn validate_peer_utility(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> io::
         && (!owns_missing_piece() || state.download.bytes_received == 0)
         && (!supports_pex() || ctx.peer_states.seeders_count() > 2)
     {
-        Err(io::Error::new(io::ErrorKind::Other, "peer is useless"))
+        Err(io::Error::other("peer is useless"))
     } else {
         Ok(())
     }
@@ -357,12 +357,12 @@ mod tests {
             // non top seeders
             let ip = it.next().unwrap();
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::Linger(sec!(5)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::Linger(sec!(5)), "{ip:?}");
         }
         for ip in it {
             // top seeders
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(15)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(15)), "{ip:?}");
             peer_states.update_upload(
                 ip,
                 &pwp::UploadState {
@@ -375,7 +375,7 @@ mod tests {
         // swap the optimistic unchoke
         let ip = &ips[0];
         let action = active_upload_next_action(ip, &peer_states);
-        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(5)), "{:?}", ip);
+        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(5)), "{ip:?}");
         peer_states.update_upload(ip, &ul_state);
 
         let ip = &ips[1];
@@ -421,7 +421,7 @@ mod tests {
         for _ in 0..MAX_LEECH_COUNT - 1 {
             let ip = it.next().unwrap();
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{ip:?}");
             peer_states.update_upload(
                 ip,
                 &pwp::UploadState {
@@ -434,13 +434,13 @@ mod tests {
         for _ in 0..ips.len() - MAX_LEECH_COUNT {
             let ip = it.next().unwrap();
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{ip:?}");
         }
 
         // reciprocate to the one seeder
         let last_ip = it.next().unwrap();
         let action = idle_upload_next_action(last_ip, &peer_states);
-        assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(15)), "{:?}", last_ip);
+        assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(15)), "{last_ip:?}");
 
         assert!(it.next().is_none());
     }
@@ -488,7 +488,7 @@ mod tests {
         // stop uploading to non-seeding peers
         for ip in ips.iter().skip(1).take(MAX_LEECH_COUNT - 1) {
             let action = active_upload_next_action(ip, &peer_states);
-            assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}", ip);
+            assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{ip:?}");
             peer_states.update_upload(
                 ip,
                 &pwp::UploadState {
@@ -501,7 +501,7 @@ mod tests {
         // start uploading to other non-seeding peers
         for ip in ips.iter().skip(MAX_LEECH_COUNT).take(MAX_LEECH_COUNT - 1) {
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{ip:?}");
             peer_states.update_upload(
                 ip,
                 &pwp::UploadState {
@@ -513,7 +513,7 @@ mod tests {
 
         for ip in ips.iter().skip(1).take(MAX_LEECH_COUNT - 1) {
             let action = idle_upload_next_action(ip, &peer_states);
-            assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{:?}", ip);
+            assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{ip:?}");
         }
     }
 
@@ -556,7 +556,7 @@ mod tests {
         // continue uploading to non-seeding peers, as no one else is interested
         for ip in ips.iter().skip(1).take(MAX_LEECH_COUNT - 1) {
             let action = active_upload_next_action(ip, &peer_states);
-            assert_eq!(action, LeechUploadAction::Serve(sec!(10)), "{:?}", ip);
+            assert_eq!(action, LeechUploadAction::Serve(sec!(10)), "{ip:?}");
         }
 
         // last peer becomes an interested seeder, but there is no slot
@@ -572,16 +572,16 @@ mod tests {
             },
         );
         let action = idle_upload_next_action(new_seeder_ip, &peer_states);
-        assert_eq!(action, IdleUploadAction::Linger(sec!(2)), "{:?}", new_seeder_ip);
+        assert_eq!(action, IdleUploadAction::Linger(sec!(2)), "{new_seeder_ip:?}");
 
         // continue uploading to the first seeder
         let action = active_upload_next_action(&ips[0], &peer_states);
-        assert_eq!(action, LeechUploadAction::Serve(sec!(15)), "{:?}", new_seeder_ip);
+        assert_eq!(action, LeechUploadAction::Serve(sec!(15)), "{new_seeder_ip:?}");
 
         // stop uploading to one of the non-seeding peers
         let ip = &ips[2];
         let action = active_upload_next_action(ip, &peer_states);
-        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}", ip);
+        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{ip:?}");
         peer_states.update_upload(
             ip,
             &pwp::UploadState {
@@ -592,12 +592,7 @@ mod tests {
 
         // start uploading to the new seeder
         let action = idle_upload_next_action(new_seeder_ip, &peer_states);
-        assert_eq!(
-            action,
-            IdleUploadAction::ActivateUploadAndServe(sec!(15)),
-            "{:?}",
-            new_seeder_ip
-        );
+        assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(15)), "{new_seeder_ip:?}",);
         peer_states.update_upload(
             new_seeder_ip,
             &pwp::UploadState {
@@ -609,7 +604,7 @@ mod tests {
         // swap one non-seeding peer
         let ip = &ips[1];
         let action = active_upload_next_action(ip, &peer_states);
-        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}", ip);
+        assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{ip:?}");
         peer_states.update_upload(
             ip,
             &pwp::UploadState {
@@ -619,7 +614,7 @@ mod tests {
         );
         let ip = &ips[2];
         let action = idle_upload_next_action(ip, &peer_states);
-        assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{:?}", ip);
+        assert_eq!(action, IdleUploadAction::ActivateUploadAndServe(sec!(10)), "{ip:?}",);
         peer_states.update_upload(
             ip,
             &pwp::UploadState {
@@ -629,7 +624,7 @@ mod tests {
         );
         let ip = &ips[1];
         let action = idle_upload_next_action(ip, &peer_states);
-        assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{:?}", ip);
+        assert_eq!(action, IdleUploadAction::Linger(sec!(30)), "{ip:?}");
     }
 
     #[test]
@@ -666,7 +661,7 @@ mod tests {
         // deactivate excessive upload (in reality all upload to non-seeders)
         for ip in ips.iter().skip(1) {
             let action = active_upload_next_action(ip, &peer_states);
-            assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}", ip);
+            assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{ip:?}");
             peer_states.update_upload(
                 ip,
                 &pwp::UploadState {

@@ -43,12 +43,12 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
 
     let download_fut = async {
         while let Ok(msg) = download_chans.1.receive_message().await {
-            log::info!("Received downloader message: {}", msg);
+            log::info!("Received downloader message: {msg}");
         }
     };
     let upload_fut = async {
         while let Ok(msg) = upload_chans.1.receive_message().await {
-            log::info!("Received uploader message: {}", msg);
+            log::info!("Received uploader message: {msg}");
         }
     };
     let meta_fut = async move {

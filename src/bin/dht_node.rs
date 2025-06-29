@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
         .with_module_level("mtorrent::app::dht", log::LevelFilter::Debug)
         .with_module_level("dht_node", log::LevelFilter::Debug)
         .init()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
+        .map_err(io::Error::other)?;
 
     let args = Args::parse();
 

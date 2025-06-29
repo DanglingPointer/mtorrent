@@ -149,7 +149,7 @@ impl fmt::Display for MainCtx {
 
 impl Drop for MainCtx {
     fn drop(&mut self) {
-        log::info!("Final state dump:\n{}", self);
+        log::info!("Final state dump:\n{self}");
     }
 }
 
@@ -163,7 +163,7 @@ pub async fn periodic_metadata_check(
     let mut interval = time::interval(sec!(1));
     while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
         interval.tick().await;
-        with_ctx!(|ctx| log::info!("Periodic state dump:\n{}", ctx));
+        with_ctx!(|ctx| log::info!("Periodic state dump:\n{ctx}"));
     }
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
@@ -208,7 +208,7 @@ pub async fn periodic_state_dump(
             ) {
                 log::warn!("Failed to save state to file: {e}");
             }
-            log::info!("Periodic state dump:\n{}", ctx);
+            log::info!("Periodic state dump:\n{ctx}");
             ctrl::is_finished(ctx)
         });
         if finished {

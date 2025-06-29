@@ -125,10 +125,11 @@ impl TokenManager {
         }
 
         if exceeded_age(&self.current_secret, Self::SECRET_MAX_AGE_FOR_TX) {
-            assert!(!self
-                .previous_secret
-                .as_ref()
-                .is_some_and(|s| s.birthtime.elapsed() <= Self::SECRET_MAX_AGE_FOR_RX));
+            assert!(
+                self.previous_secret
+                    .as_ref()
+                    .is_none_or(|s| s.birthtime.elapsed() > Self::SECRET_MAX_AGE_FOR_RX)
+            );
             self.previous_secret = self.current_secret.take();
         }
         if exceeded_age(&self.previous_secret, Self::SECRET_MAX_AGE_FOR_RX) {

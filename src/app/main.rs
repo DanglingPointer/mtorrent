@@ -43,7 +43,7 @@ pub async fn single_torrent(
         {
             Ok(port_opener) => {
                 let public_ip = port_opener.external_ip();
-                log::info!("UPnP for PWP succeeded, public ip: {}", public_ip);
+                log::info!("UPnP for PWP succeeded, public ip: {public_ip}");
                 pwp_runtime.spawn(async move {
                     if let Err(e) = port_opener.run_continuous_renewal().await {
                         log::error!("UPnP port renewal for PWP failed: {e}");

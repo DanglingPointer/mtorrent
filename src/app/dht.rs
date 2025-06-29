@@ -47,7 +47,7 @@ async fn start_upnp(local_port: u16) -> io::Result<()> {
         Some(local_port),
     )
     .await
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    .map_err(io::Error::other)?;
 
     log::info!("UPnP for DHT succeeded, public ip: {}", port_opener.external_ip());
 

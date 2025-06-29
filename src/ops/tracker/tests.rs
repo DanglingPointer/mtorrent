@@ -106,7 +106,7 @@ async fn test_udp_announce() {
             .await
             .unwrap_or_else(|e| panic!("Announce error: {e}"));
 
-        println!("Announce response: {:?}", response);
+        println!("Announce response: {response:?}");
         let peer_count = response.ips.len();
         let seeders = response.seeders as usize;
         let leechers = response.leechers as usize;

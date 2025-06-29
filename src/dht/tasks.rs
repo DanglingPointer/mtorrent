@@ -1,7 +1,7 @@
+use super::U160;
 use super::msgs::*;
 use super::processor::BoxRoutingTable;
 use super::queries::Client;
-use super::U160;
 use crate::trace_stopwatch;
 use crate::utils::connctrl::{ConnectPermit, QuickConnectControl};
 use futures::io;
@@ -9,7 +9,7 @@ use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 use tokio::{select, task, time};
 

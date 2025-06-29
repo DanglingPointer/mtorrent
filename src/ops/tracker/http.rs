@@ -21,7 +21,7 @@ pub enum Error {
 
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
-        io::Error::new(io::ErrorKind::Other, format!("{e}"))
+        io::Error::other(format!("{e}"))
     }
 }
 
@@ -45,7 +45,7 @@ impl Client {
         request_builder: TrackerRequestBuilder,
     ) -> Result<AnnounceResponseContent, Error> {
         let announce_url = request_builder.build_announce();
-        log::debug!("Sending announce request to {}", announce_url);
+        log::debug!("Sending announce request to {announce_url}");
 
         let response_data =
             self.0.get(announce_url).send().await?.error_for_status()?.bytes().await?;
@@ -67,12 +67,12 @@ impl Client {
         request_builder: TrackerRequestBuilder,
     ) -> Result<benc::Element, Error> {
         let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
-        log::debug!("Sending scrape request to {}", scrape_url);
+        log::debug!("Sending scrape request to {scrape_url}");
 
         let response_data =
             self.0.get(scrape_url).send().await?.error_for_status()?.bytes().await?;
         let bencoded = benc::Element::from_bytes(&response_data)?;
-        log::debug!("Scrape response: {}", bencoded);
+        log::debug!("Scrape response: {bencoded}");
 
         // TODO: parse response
         Ok(bencoded)
@@ -292,7 +292,7 @@ impl fmt::Display for AnnounceResponseContent {
             write!(f, "incomplete={incomplete} ")?;
         }
         if let Some(peers) = self.peers() {
-            write!(f, "peers={:?}", peers)?;
+            write!(f, "peers={peers:?}")?;
         }
         Ok(())
     }
@@ -340,7 +340,8 @@ mod tests {
 
         assert_eq!(
             "http://example.com/announce?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A&left=42&uploaded=3&no_peer_id=1&numwant=50",
-            uri.as_str());
+            uri.as_str()
+        );
     }
 
     #[test]

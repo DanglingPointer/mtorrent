@@ -34,13 +34,13 @@ pub fn compare_input_and_output(
             match (f1.read(buff1), f2.read(buff2)) {
                 (Ok(f1_read_len), Ok(f2_read_len)) => {
                     if f1_read_len != f2_read_len {
-                        panic!("{} and {} are different", name1, name2);
+                        panic!("{name1} and {name2} are different");
                     }
                     if f1_read_len == 0 {
                         break;
                     }
                     if buff1[0..f1_read_len] != buff2[0..f2_read_len] {
-                        panic!("{} and {} are different", name1, name2);
+                        panic!("{name1} and {name2} are different");
                     }
                 }
                 _ => panic!(),

@@ -1,6 +1,6 @@
+use super::MAX_BLOCK_SIZE;
 use super::handshake::*;
 use super::message::*;
-use super::MAX_BLOCK_SIZE;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use local_async_utils::prelude::*;
@@ -326,7 +326,7 @@ impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
 
     async fn write_messages(mut self) -> io::Result<()> {
         fn new_channel_closed_error() -> io::Error {
-            io::Error::new(io::ErrorKind::Other, "Channel closed")
+            io::Error::new(io::ErrorKind::BrokenPipe, "Channel closed")
         }
 
         macro_rules! process_msg {
@@ -393,7 +393,7 @@ impl From<ChannelError> for io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{join, FutureExt};
+    use futures::{FutureExt, join};
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};
@@ -653,7 +653,7 @@ mod tests {
         let run_fut = async move {
             let result = runner.await;
             let error = result.unwrap_err();
-            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{}", error);
+            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{error}");
         };
 
         join!(download_fut, upload_fut, run_fut);
@@ -758,7 +758,7 @@ mod tests {
         let run_fut = async move {
             let result = runner.await;
             let error = result.unwrap_err();
-            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{}", error);
+            assert_eq!(io::ErrorKind::OutOfMemory, error.kind(), "{error}");
         };
 
         join!(send_msg_fut, run_fut);

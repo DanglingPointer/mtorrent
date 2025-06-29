@@ -123,7 +123,7 @@ impl PeerMessage {
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Unknown message type: {}", id),
+                format!("Unknown message type: {id}"),
             )),
         }
     }
@@ -395,7 +395,7 @@ impl fmt::Display for UploaderMessage {
                 write!(f, "Unchoke")
             }
             UploaderMessage::Have { piece_index } => {
-                write!(f, "Have[ind={}]", piece_index)
+                write!(f, "Have[ind={piece_index}]")
             }
             UploaderMessage::Bitfield(bitvec) => {
                 write!(f, "Bitfield[len={}]", bitvec.len())
