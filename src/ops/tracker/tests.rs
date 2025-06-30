@@ -73,8 +73,13 @@ fn test_combine_supplied_and_saved_trackers() {
 #[tokio::test]
 async fn test_udp_announce() {
     let metainfo = startup::read_metainfo("tests/assets/example.torrent").unwrap();
-    let udp_tracker_addrs = utils::trackers_from_metainfo(&metainfo)
-        .filter_map(|addr| utils::get_udp_tracker_addr(&addr).map(ToString::to_string));
+    let udp_tracker_addrs =
+        utils::trackers_from_metainfo(&metainfo).filter_map(
+            |addr| match utils::TrackerUrl::from_str(addr) {
+                Ok(utils::TrackerUrl::Udp(addr)) => Some(addr),
+                _ => None,
+            },
+        );
 
     let local_ip = SocketAddr::V4(SocketAddrV4::new(ip::get_local_addr().unwrap(), 6666));
 

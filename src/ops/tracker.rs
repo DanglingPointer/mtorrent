@@ -14,6 +14,7 @@ use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{fmt, io};
 use tokio::net::{self, UdpSocket};
@@ -75,10 +76,7 @@ fn add_http_and_udp_trackers<'a>(
 ) {
     let supplied_trackers: HashSet<_> = supplied_trackers
         .into_iter()
-        .filter(|addr| {
-            utils::get_http_tracker_addr(addr).is_some()
-                || utils::get_udp_tracker_addr(addr).is_some()
-        })
+        .filter(|addr| utils::TrackerUrl::from_str(addr).is_ok())
         .map(|addr| addr.to_string())
         .collect();
 
@@ -92,11 +90,16 @@ fn add_http_and_udp_trackers<'a>(
     match config::load_trackers(config_dir) {
         Ok(loaded_trackers) => {
             for tracker_addr in loaded_trackers {
-                if let Some(http) = utils::get_http_tracker_addr(&tracker_addr) {
-                    http_trackers.insert(http.into());
-                }
-                if let Some(udp) = utils::get_udp_tracker_addr(&tracker_addr) {
-                    udp_trackers.insert(udp.into());
+                match tracker_addr.parse::<utils::TrackerUrl>() {
+                    Ok(utils::TrackerUrl::Http(addr)) => {
+                        http_trackers.insert(addr);
+                    }
+                    Ok(utils::TrackerUrl::Udp(addr)) => {
+                        udp_trackers.insert(addr);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse tracker URL '{tracker_addr}': {e}");
+                    }
                 }
             }
         }

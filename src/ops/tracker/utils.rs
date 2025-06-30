@@ -1,6 +1,8 @@
 use crate::utils::metainfo::Metainfo;
 use std::iter;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::str::FromStr;
+use thiserror::Error;
 
 pub(super) fn parse_binary_ipv4_peers(data: &[u8]) -> impl Iterator<Item = SocketAddr> + '_ {
     fn to_addr_and_port(src: &[u8]) -> Option<SocketAddr> {
@@ -20,7 +22,7 @@ pub(super) fn parse_binary_ipv6_peers(data: &[u8]) -> impl Iterator<Item = Socke
     data.chunks_exact(18).filter_map(to_addr_and_port)
 }
 
-pub fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &str> + '_> {
+pub(super) fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &str> + '_> {
     if let Some(announce_list) = metainfo.announce_list() {
         Box::new(announce_list.flatten())
     } else if let Some(url) = metainfo.announce() {
@@ -30,70 +32,95 @@ pub fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &s
     }
 }
 
-pub fn get_udp_tracker_addr<'t, T: AsRef<str> + ?Sized + 't>(tracker: &'t T) -> Option<&'t str> {
-    let tracker = tracker.as_ref();
-    let udp_addr = tracker.strip_prefix("udp://")?;
-    Some(udp_addr.strip_suffix("/announce").unwrap_or(udp_addr))
+#[derive(Error, Debug)]
+pub enum UrlParseError {
+    #[error("invalid URL: {0}")]
+    NotAUrl(#[from] url::ParseError),
+    #[error("invalid UDP URL: {0}")]
+    InvalidUdpUrl(&'static str),
+    #[error("unsupported scheme: {0}")]
+    UnsupportedScheme(String),
 }
 
-pub fn get_http_tracker_addr<'t, T: AsRef<str> + ?Sized + 't>(tracker: &'t T) -> Option<&'t str> {
-    let tracker = tracker.as_ref();
-    (tracker.starts_with("http://") || tracker.starts_with("https://")).then_some(tracker)
+pub enum TrackerUrl {
+    Http(String),
+    Udp(String),
+}
+
+impl FromStr for TrackerUrl {
+    type Err = UrlParseError;
+
+    fn from_str(url: &str) -> Result<Self, Self::Err> {
+        let parsed_url = url::Url::parse(url)?;
+        match parsed_url.scheme() {
+            "http" | "https" => Ok(TrackerUrl::Http(url.to_owned())),
+            "udp" => Ok(TrackerUrl::Udp(format!(
+                "{}:{}",
+                parsed_url.host_str().ok_or(UrlParseError::InvalidUdpUrl("no host"))?,
+                parsed_url.port().ok_or(UrlParseError::InvalidUdpUrl("no port"))?
+            ))),
+            scheme => Err(UrlParseError::UnsupportedScheme(scheme.to_owned())),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::metainfo;
-
     use super::*;
+    use crate::utils::metainfo;
     use std::{collections::HashSet, fs};
 
     #[test]
-    fn test_extract_udp_trackers() {
+    fn test_extract_http_and_udp_trackers() {
         let trackers = [
             "udp://open.stealth.si:80/announce",
             "udp://tracker.opentrackr.org:1337/announce",
             "udp://tracker.tiny-vps.com:6969",
             "https://example.com",
-            "udp://tracker.internetwarriors.net:1337/announce",
-            "udp://tracker.skyts.net:6969/announce",
+            "udp://tracker.internetwarriors.net:1337/",
+            "udp://tracker.skyts.net:6969/announce330",
             "http://example.com",
+            "udp://[2001:db8:85a3:8d3:1319:8a2e:370:7348]:6969/",
         ];
-        let expected = [
+        let expected_udp_trackers = [
             "open.stealth.si:80",
             "tracker.opentrackr.org:1337",
             "tracker.tiny-vps.com:6969",
             "tracker.internetwarriors.net:1337",
             "tracker.skyts.net:6969",
+            "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:6969",
         ];
-        let actual: HashSet<_> = trackers
-            .into_iter()
-            .filter_map(|tracker| get_udp_tracker_addr(&tracker).map(ToString::to_string))
-            .collect();
-        assert_eq!(actual, expected.into_iter().map(Into::into).collect());
-    }
+        let expected_http_trackers = ["https://example.com", "http://example.com"];
 
-    #[test]
-    fn test_extract_http_trackers() {
-        let trackers = [
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.opentrackr.org:1337/announce",
-            "udp://tracker.tiny-vps.com:6969",
-            "https://example.com",
-            "udp://tracker.internetwarriors.net:1337/announce",
-            "udp://tracker.skyts.net:6969/announce",
-            "http://example.com",
-        ];
-        let expected = ["https://example.com", "http://example.com"];
-        let actual: HashSet<_> = trackers
-            .into_iter()
-            .filter_map(|tracker| get_http_tracker_addr(&tracker).map(ToString::to_string))
-            .collect();
-        assert_eq!(actual, expected.into_iter().map(ToOwned::to_owned).collect());
+        let mut udp_trackers = HashSet::new();
+        let mut http_trackers = HashSet::new();
+        for tracker in trackers {
+            match tracker.parse::<TrackerUrl>().unwrap() {
+                TrackerUrl::Http(addr) => http_trackers.insert(addr),
+                TrackerUrl::Udp(addr) => udp_trackers.insert(addr),
+            };
+        }
+
+        assert_eq!(http_trackers, expected_http_trackers.into_iter().map(Into::into).collect());
+        assert_eq!(udp_trackers, expected_udp_trackers.into_iter().map(Into::into).collect());
     }
 
     #[test]
     fn test_extract_trackers_from_metainfo() {
+        fn get_udp_tracker_addr(tracker: &str) -> Option<String> {
+            match tracker.parse::<TrackerUrl>() {
+                Ok(TrackerUrl::Udp(url)) => Some(url),
+                _ => None,
+            }
+        }
+
+        fn get_http_tracker_addr(tracker: &str) -> Option<String> {
+            match tracker.parse::<TrackerUrl>() {
+                Ok(TrackerUrl::Http(url)) => Some(url),
+                _ => None,
+            }
+        }
+
         let data = fs::read("tests/assets/example.torrent").unwrap();
         let info = metainfo::Metainfo::new(&data).unwrap();
 
