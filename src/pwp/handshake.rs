@@ -164,9 +164,9 @@ async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::join;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use tokio::io::duplex;
+    use tokio::join;
 
     const IP: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
 

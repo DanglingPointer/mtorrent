@@ -1,5 +1,5 @@
 use super::message::*;
-use futures::FutureExt;
+use futures_util::FutureExt;
 use std::io;
 use tokio::io::BufWriter;
 

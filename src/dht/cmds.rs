@@ -1,6 +1,6 @@
 use super::u160::U160;
 use derive_more::Debug;
-use futures::Stream;
+use futures_util::Stream;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};

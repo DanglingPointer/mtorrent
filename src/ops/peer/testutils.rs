@@ -2,7 +2,7 @@ use crate::data;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{magnet, startup};
 use crate::{ops::ctx, pwp};
-use futures::future::LocalBoxFuture;
+use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
 use std::fmt::Debug;
 use std::io::Read;

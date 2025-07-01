@@ -1,8 +1,8 @@
 use super::MAX_BLOCK_SIZE;
 use super::handshake::*;
 use super::message::*;
-use futures::channel::mpsc;
-use futures::{SinkExt, StreamExt};
+use futures_channel::mpsc;
+use futures_util::{SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use std::future::{self, Future};
 use std::io;
@@ -393,7 +393,7 @@ impl From<ChannelError> for io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{FutureExt, join};
+    use futures_util::{FutureExt, join};
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};

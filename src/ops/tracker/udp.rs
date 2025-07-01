@@ -459,8 +459,8 @@ impl TryFrom<&[u8]> for ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::join;
     use std::net::Ipv6Addr;
+    use tokio::join;
 
     #[test]
     fn test_serialize_connect_request() {

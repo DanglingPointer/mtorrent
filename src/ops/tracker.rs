@@ -9,7 +9,7 @@ use super::ctx;
 use crate::pwp::PeerOrigin;
 use crate::utils::config;
 use crate::utils::peer_id::PeerId;
-use futures::{Future, FutureExt, TryFutureExt, future};
+use futures_util::{Future, FutureExt, TryFutureExt, future};
 use local_async_utils::prelude::*;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};

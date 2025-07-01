@@ -2,7 +2,7 @@ use super::super::ctx;
 use super::LOCAL_REQQ;
 use crate::utils::bandwidth;
 use crate::{data, debug_stopwatch, info_stopwatch, pwp};
-use futures::prelude::*;
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use std::io;
 use std::time::Duration;

@@ -8,7 +8,7 @@ use super::u160::U160;
 use crate::dht::Config;
 use crate::dht::peers::PeerTable;
 use crate::utils::connctrl::ConnectControl;
-use futures::StreamExt;
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;

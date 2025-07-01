@@ -1,7 +1,7 @@
 use crate::ops::{ctrl, ctx};
 use crate::utils::bandwidth;
 use crate::{data, debug_stopwatch, pwp, trace_stopwatch};
-use futures::prelude::*;
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use std::net::SocketAddr;
 use std::rc::Rc;

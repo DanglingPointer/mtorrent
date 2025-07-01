@@ -7,7 +7,7 @@ use super::error::Error;
 use super::{U160, msgs::*, udp};
 use crate::{debug_stopwatch, trace_stopwatch};
 use derive_more::derive::From;
-use futures::StreamExt;
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use manager::{OutgoingQuery, QueryManager};
 use std::fmt::Debug;

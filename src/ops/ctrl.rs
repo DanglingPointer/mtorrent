@@ -146,7 +146,7 @@ fn with_jitter(duration: Duration) -> Duration {
     use rand::Rng;
     let min = duration - MAX_JITTER;
     let max = duration + MAX_JITTER;
-    rand::thread_rng().gen_range(min..=max)
+    rand::rng().random_range(min..=max)
 }
 
 #[cfg(test)]

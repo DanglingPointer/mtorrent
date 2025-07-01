@@ -1,5 +1,5 @@
 #![expect(clippy::zombie_processes)]
-use futures::future;
+use futures_util::future;
 use local_async_utils::prelude::*;
 use mtorrent::utils::metainfo::Metainfo;
 use mtorrent::utils::{self, benc, startup};

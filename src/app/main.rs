@@ -2,7 +2,7 @@ use crate::pwp::PeerOrigin;
 use crate::utils::peer_id::PeerId;
 use crate::utils::{ip, magnet, startup, upnp};
 use crate::{dht, ops};
-use futures::StreamExt;
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};

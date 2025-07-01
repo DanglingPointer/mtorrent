@@ -19,7 +19,7 @@ impl PeerId {
         ret[..PREFIX.len()].copy_from_slice(PREFIX);
 
         for b in &mut ret[PREFIX.len()..] {
-            *b = rand::thread_rng().gen_range(33..127); // non-control characters and not space
+            *b = rand::rng().random_range(33..127); // non-control characters and not space
         }
         Self(ret)
     }
