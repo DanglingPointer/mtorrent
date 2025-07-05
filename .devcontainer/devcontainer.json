@@ -21,4 +21,18 @@
 	// "customizations": {},
 	// Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "devcontainer"
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// automatically install the following extensions:
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"fill-labs.dependi",
+				"tamasfe.even-better-toml",
+				"eamodio.gitlens",
+				"github.copilot",
+				"vadimcn.vscode-lldb",
+			]
+		}
+	}
 }
