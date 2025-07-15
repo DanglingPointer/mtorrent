@@ -1,6 +1,7 @@
 use super::error::Error;
 use super::u160::U160;
 use crate::utils::benc;
+use bytes::Buf;
 use derive_more::derive::From;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -532,14 +533,22 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
         } else if let Some(peers) = msg.data.remove("values") {
             GetPeersResponseData::Peers(match peers {
                 benc::Element::List(peers) => peers
-                    .into_iter()
+                    .iter()
                     .filter_map(|peer| match peer {
-                        benc::Element::ByteString(bytes) => {
-                            let octets = *bytes.first_chunk::<4>()?;
-                            let port = u16::from_be_bytes(*bytes.last_chunk::<2>()?);
-                            Some(SocketAddrV4::new(Ipv4Addr::from(octets), port))
-                        }
+                        benc::Element::ByteString(bytes) => Some(bytes),
                         _ => None,
+                    })
+                    .flat_map(|bytes| {
+                        let mut bytes = bytes.as_slice();
+                        iter::from_fn(move || {
+                            if bytes.remaining() >= 6 {
+                                let octets = bytes.get_u32();
+                                let port = bytes.get_u16();
+                                Some(SocketAddrV4::new(Ipv4Addr::from(octets), port))
+                            } else {
+                                None
+                            }
+                        })
                     })
                     .collect::<Vec<_>>(),
                 _ => return Err(Error::ParseError("peers not a list")),
@@ -879,6 +888,29 @@ mod tests {
     #[test]
     fn test_decode_get_peers_response() {
         let bencoded = benc::Element::from_bytes(b"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:\x7F\x00\x00\x01\x1A\x0A6:\x7F\x00\x00\x01\x1E\x61ee1:t2:aa1:y1:re").unwrap();
+        let msg = Message::try_from(bencoded).unwrap();
+        assert_eq!(msg.transaction_id, Vec::from(b"aa"));
+        assert_eq!(msg.version, None);
+        if let MessageData::Response(msg) = msg.data {
+            let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
+            assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(get_peers_response.token, Some(Vec::from(b"aoeusnth")));
+            if let GetPeersResponseData::Peers(peers) = get_peers_response.data {
+                assert_eq!(
+                    peers,
+                    vec![
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                    ]
+                );
+            } else {
+                panic!("unexpected data type");
+            }
+        } else {
+            panic!("unexpected message type");
+        }
+
+        let bencoded = benc::Element::from_bytes(b"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl12:\x7F\x00\x00\x01\x1A\x0A\x7F\x00\x00\x01\x1E\x61ee1:t2:aa1:y1:re").unwrap();
         let msg = Message::try_from(bencoded).unwrap();
         assert_eq!(msg.transaction_id, Vec::from(b"aa"));
         assert_eq!(msg.version, None);
