@@ -1,7 +1,6 @@
 use super::error::Error;
 use super::u160::U160;
-use crate::utils::benc;
-use bytes::Buf;
+use crate::utils::{benc, ip};
 use derive_more::derive::From;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -535,21 +534,10 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
                 benc::Element::List(peers) => peers
                     .iter()
                     .filter_map(|peer| match peer {
-                        benc::Element::ByteString(bytes) => Some(bytes),
+                        benc::Element::ByteString(bytes) => Some(bytes.as_slice()),
                         _ => None,
                     })
-                    .flat_map(|bytes| {
-                        let mut bytes = bytes.as_slice();
-                        iter::from_fn(move || {
-                            if bytes.remaining() >= 6 {
-                                let octets = bytes.get_u32();
-                                let port = bytes.get_u16();
-                                Some(SocketAddrV4::new(Ipv4Addr::from(octets), port))
-                            } else {
-                                None
-                            }
-                        })
-                    })
+                    .flat_map(ip::SocketAddrV4BytesIter)
                     .collect::<Vec<_>>(),
                 _ => return Err(Error::ParseError("peers not a list")),
             })

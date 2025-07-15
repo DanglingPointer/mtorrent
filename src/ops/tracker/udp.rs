@@ -1,5 +1,5 @@
 use super::utils;
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 use derive_more::Display;
 use local_async_utils::prelude::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -44,7 +44,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(AnnounceRequest::MIN_LENGTH);
-            request_data.encode(self.connection_id, transaction_id, &mut buffer).unwrap();
+            request_data.encode(self.connection_id, transaction_id, &mut buffer);
             buffer
         };
 
@@ -83,7 +83,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(ScrapeRequest::MIN_LENGTH);
-            request_data.encode(self.connection_id, transaction_id, &mut buffer).unwrap();
+            request_data.encode(self.connection_id, transaction_id, &mut buffer);
             buffer
         };
 
@@ -114,7 +114,7 @@ impl UdpTrackerConnection {
         let transaction_id = rand::random::<u32>();
         let request = {
             let mut buffer = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
-            ConnectRequest.encode(0, transaction_id, &mut buffer).unwrap();
+            ConnectRequest.encode(0, transaction_id, &mut buffer);
             buffer
         };
 
@@ -207,15 +207,20 @@ enum AnyResponse {
 }
 
 fn parse_response(
-    src: &[u8],
-    transaction_id: u32,
+    mut src: &[u8],
+    request_transaction_id: u32,
     remote_ip: &IpAddr,
 ) -> Result<AnyResponse, ParseError> {
-    let header = CommonResponseHeader::try_from(src)?;
-    if header.transaction_id != transaction_id {
+    if src.remaining() < CommonResponseHeader::LENGTH {
+        return Err(ParseError::InvalidLength);
+    }
+    let header = CommonResponseHeader {
+        action: src.get_u32(),
+        transaction_id: src.get_u32(),
+    };
+    if header.transaction_id != request_transaction_id {
         return Err(ParseError::InvalidTransaction);
     }
-    let src = unsafe { src.get_unchecked(CommonResponseHeader::LENGTH..) };
     match header.action {
         ACTION_CONNECT => Ok(AnyResponse::Connect(ConnectResponse::try_from(src)?)),
         ACTION_ANNOUNCE => Ok(AnyResponse::Announce(AnnounceResponse::try_from((src, remote_ip))?)),
@@ -233,12 +238,7 @@ const ACTION_ERROR: u32 = 3;
 trait EncodableRequest {
     const MIN_LENGTH: usize;
 
-    fn encode(
-        &self,
-        connection_id: u64,
-        transaction_id: u32,
-        dest: &mut dyn io::Write,
-    ) -> io::Result<()>;
+    fn encode<B: BufMut>(&self, connection_id: u64, transaction_id: u32, dest: B);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -248,16 +248,10 @@ struct ConnectRequest;
 impl EncodableRequest for ConnectRequest {
     const MIN_LENGTH: usize = 16;
 
-    fn encode(
-        &self,
-        _connection_id: u64,
-        transaction_id: u32,
-        dest: &mut dyn io::Write,
-    ) -> io::Result<()> {
-        dest.write_all(&0x41727101980u64.to_be_bytes())?;
-        dest.write_all(&ACTION_CONNECT.to_be_bytes())?;
-        dest.write_all(&transaction_id.to_be_bytes())?;
-        Ok(())
+    fn encode<B: BufMut>(&self, _connection_id: u64, transaction_id: u32, mut dest: B) {
+        dest.put_u64(0x41727101980u64);
+        dest.put_u32(ACTION_CONNECT);
+        dest.put_u32(transaction_id);
     }
 }
 
@@ -286,26 +280,20 @@ pub struct AnnounceRequest {
 impl EncodableRequest for AnnounceRequest {
     const MIN_LENGTH: usize = 98;
 
-    fn encode(
-        &self,
-        connection_id: u64,
-        transaction_id: u32,
-        dest: &mut dyn io::Write,
-    ) -> io::Result<()> {
-        dest.write_all(&connection_id.to_be_bytes())?;
-        dest.write_all(&ACTION_ANNOUNCE.to_be_bytes())?;
-        dest.write_all(&transaction_id.to_be_bytes())?;
-        dest.write_all(&self.info_hash)?;
-        dest.write_all(&self.peer_id)?;
-        dest.write_all(&self.downloaded.to_be_bytes())?;
-        dest.write_all(&self.left.to_be_bytes())?;
-        dest.write_all(&self.uploaded.to_be_bytes())?;
-        dest.write_all(&(self.event as u32).to_be_bytes())?;
-        dest.write_all(&self.ip.unwrap_or(Ipv4Addr::UNSPECIFIED).octets())?;
-        dest.write_all(&self.key.to_be_bytes())?;
-        dest.write_all(&self.num_want.unwrap_or(-1).to_be_bytes())?;
-        dest.write_all(&self.port.to_be_bytes())?;
-        Ok(())
+    fn encode<B: BufMut>(&self, connection_id: u64, transaction_id: u32, mut dest: B) {
+        dest.put_u64(connection_id);
+        dest.put_u32(ACTION_ANNOUNCE);
+        dest.put_u32(transaction_id);
+        dest.put_slice(&self.info_hash);
+        dest.put_slice(&self.peer_id);
+        dest.put_u64(self.downloaded);
+        dest.put_u64(self.left);
+        dest.put_u64(self.uploaded);
+        dest.put_u32(self.event as u32);
+        dest.put_u32(self.ip.unwrap_or(Ipv4Addr::UNSPECIFIED).to_bits());
+        dest.put_u32(self.key);
+        dest.put_i32(self.num_want.unwrap_or(-1));
+        dest.put_u16(self.port);
     }
 }
 
@@ -316,19 +304,13 @@ pub struct ScrapeRequest {
 impl EncodableRequest for ScrapeRequest {
     const MIN_LENGTH: usize = 36;
 
-    fn encode(
-        &self,
-        connection_id: u64,
-        transaction_id: u32,
-        dest: &mut dyn io::Write,
-    ) -> io::Result<()> {
-        dest.write_all(&connection_id.to_be_bytes())?;
-        dest.write_all(&ACTION_SCRAPE.to_be_bytes())?;
-        dest.write_all(&transaction_id.to_be_bytes())?;
-        for hash in &self.info_hashes {
-            dest.write_all(&hash[..])?;
+    fn encode<B: BufMut>(&self, connection_id: u64, transaction_id: u32, mut dest: B) {
+        dest.put_u64(connection_id);
+        dest.put_u32(ACTION_SCRAPE);
+        dest.put_u32(transaction_id);
+        for info_hash in &self.info_hashes {
+            dest.put_slice(info_hash);
         }
-        Ok(())
     }
 }
 
@@ -341,23 +323,6 @@ struct CommonResponseHeader {
 
 impl CommonResponseHeader {
     const LENGTH: usize = 8;
-}
-
-impl TryFrom<&[u8]> for CommonResponseHeader {
-    type Error = ParseError;
-
-    fn try_from(mut src: &[u8]) -> Result<Self, Self::Error> {
-        if src.remaining() < 8 {
-            Err(ParseError::InvalidLength)
-        } else {
-            let action = src.get_u32();
-            let transaction_id = src.get_u32();
-            Ok(CommonResponseHeader {
-                action,
-                transaction_id,
-            })
-        }
-    }
 }
 
 struct ConnectResponse {
@@ -466,7 +431,7 @@ mod tests {
     fn test_serialize_connect_request() {
         let mut request = Vec::with_capacity(ConnectRequest::MIN_LENGTH);
         let cr = ConnectRequest {};
-        cr.encode(0, 15, &mut request).unwrap();
+        cr.encode(0, 15, &mut request);
 
         assert_eq!([0x00, 0x00, 0x04, 0x17, 0x27, 0x10, 0x19, 0x80], request[..8]);
         assert_eq!([0u8; 4], request[8..12]);
@@ -540,7 +505,7 @@ mod tests {
             num_want: Some(256),
             port: 6889u16,
         };
-        ar.encode(10, 15, &mut request).unwrap();
+        ar.encode(10, 15, &mut request);
         assert_eq!(request.len(), 98);
 
         assert_eq!([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a], request[..8]); // connection id
