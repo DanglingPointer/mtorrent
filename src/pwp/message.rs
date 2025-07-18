@@ -1,3 +1,4 @@
+use crate::utils::{benc, ip};
 use bitvec::prelude::*;
 use bytes::BufMut;
 use derive_more::Display;
@@ -5,8 +6,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-
-use crate::utils::benc;
 
 pub type Bitfield = BitVec<u8, Msb0>;
 
@@ -636,49 +635,29 @@ impl PeerExchangeData {
     const MAX_PEERS: usize = 50;
 
     fn decode(payload: &[u8]) -> Option<Self> {
-        use benc::Element;
-        fn parse_socket_addr(src: &[u8]) -> Option<SocketAddr> {
-            match src.len() {
-                6 => {
-                    let (addr_data, port_data) = src.split_at(4);
-                    let mut octets = [0u8; 4];
-                    octets.copy_from_slice(addr_data);
-                    Some(SocketAddr::new(
-                        IpAddr::V4(Ipv4Addr::from(octets)),
-                        u16::from_be_bytes(port_data.try_into().ok()?),
-                    ))
-                }
-                18 => {
-                    let (addr_data, port_data) = src.split_at(16);
-                    let mut octets = [0u8; 16];
-                    octets.copy_from_slice(addr_data);
-                    Some(SocketAddr::new(
-                        IpAddr::V6(Ipv6Addr::from(octets)),
-                        u16::from_be_bytes(port_data.try_into().ok()?),
-                    ))
-                }
-                _ => None,
-            }
+        use benc::Element::{self, *};
+
+        let Dictionary(data) = Element::from_bytes(payload).ok()? else {
+            return None;
+        };
+        let mut root = benc::convert_dictionary(data);
+
+        let mut added = HashSet::new();
+        let mut dropped = HashSet::new();
+
+        if let Some(ByteString(s)) = root.remove(Self::KEY_ADDED_V4) {
+            added.extend(ip::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
         }
-        let content = Element::from_bytes(payload).ok()?;
-        if let Element::Dictionary(mut d) = content {
-            let mut read_ips = |key: &str, dest: &mut HashSet<SocketAddr>, repr_len: usize| {
-                if let Some(Element::ByteString(s)) = d.remove(&Element::from(key)) {
-                    for addr in s.chunks_exact(repr_len).filter_map(parse_socket_addr) {
-                        dest.insert(addr);
-                    }
-                }
-            };
-            let mut added = HashSet::new();
-            let mut dropped = HashSet::new();
-            read_ips(Self::KEY_ADDED_V4, &mut added, 6);
-            read_ips(Self::KEY_ADDED_V6, &mut added, 18);
-            read_ips(Self::KEY_DROPPED_V4, &mut dropped, 6);
-            read_ips(Self::KEY_DROPPED_V6, &mut dropped, 18);
-            Some(PeerExchangeData { added, dropped })
-        } else {
-            None
+        if let Some(ByteString(s)) = root.remove(Self::KEY_ADDED_V6) {
+            added.extend(ip::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
         }
+        if let Some(ByteString(s)) = root.remove(Self::KEY_DROPPED_V4) {
+            dropped.extend(ip::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
+        }
+        if let Some(ByteString(s)) = root.remove(Self::KEY_DROPPED_V6) {
+            dropped.extend(ip::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
+        }
+        Some(PeerExchangeData { added, dropped })
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -1034,6 +1013,35 @@ mod tests {
         assert_eq!(
             Vec::from("d8:msg_typei1e5:piecei0e10:total_sizei34256eexxxxxxxx"),
             msg.encode()
+        );
+    }
+
+    #[test]
+    fn test_pex_is_parsed_correctly() {
+        let payload = vec![
+            100, 53, 58, 97, 100, 100, 101, 100, 49, 50, 58, 1, 2, 3, 4, 48, 57, 5, 6, 7, 8, 212,
+            49, 54, 58, 97, 100, 100, 101, 100, 54, 51, 54, 58, 0, 8, 0, 7, 0, 6, 0, 5, 0, 4, 0, 3,
+            0, 2, 0, 1, 168, 202, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 168, 202, 55, 58,
+            100, 114, 111, 112, 112, 101, 100, 54, 58, 1, 2, 3, 4, 26, 225, 56, 58, 100, 114, 111,
+            112, 112, 101, 100, 54, 49, 56, 58, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8,
+            168, 202, 101,
+        ];
+        let pex = PeerExchangeData::decode(&payload).unwrap();
+        assert_eq!(
+            pex.added,
+            HashSet::from([
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 12345),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(5, 6, 7, 8)), 54321),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8)), 43210),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::new(8, 7, 6, 5, 4, 3, 2, 1)), 43210)
+            ])
+        );
+        assert_eq!(
+            pex.dropped,
+            HashSet::from([
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 6881),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8)), 43210),
+            ])
         );
     }
 }

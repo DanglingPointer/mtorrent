@@ -109,7 +109,7 @@ fn add_http_and_udp_trackers<'a>(
     }
 
     if http_trackers.is_empty() && udp_trackers.is_empty() {
-        log::error!("No trackers available - download will fail");
+        log::warn!("No trackers available");
     }
 }
 
