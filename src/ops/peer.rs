@@ -119,7 +119,7 @@ async fn run_extensions(
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
 
-    const PEX_INTERVAL: Duration = sec!(60);
+    const PEX_INTERVAL: Duration = sec!(30);
     let mut next_pex_time = Instant::now();
     loop {
         if Instant::now() >= next_pex_time {
