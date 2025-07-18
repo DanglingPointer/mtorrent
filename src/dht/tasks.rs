@@ -89,7 +89,7 @@ async fn periodic_ping(
 
     log::debug!(
         "Periodic ping of {addr} starting; node_count = {}",
-        with_rt!(|routing| routing.node_count())
+        with_rt!(|routing| routing.iter().count())
     );
 
     let _sw = trace_stopwatch!("Periodic ping of {addr}");
