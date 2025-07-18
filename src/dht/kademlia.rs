@@ -134,10 +134,6 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         }
     }
 
-    pub fn node_count(&self) -> usize {
-        self.buckets.iter().flat_map(Bucket::iter).count()
-    }
-
     #[expect(dead_code)]
     /// Return all nodes currently in the table sorted from the lowest to the highest distance to `target`.
     pub fn all_nodes_by_dist_asc(&self, target: &U160) -> impl Iterator<Item = &Node> {
@@ -157,7 +153,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         &self,
         target: &U160,
         max_count_hint: usize,
-    ) -> impl Iterator<Item = &Node> {
+    ) -> impl ExactSizeIterator<Item = &Node> {
         let mut closest_nodes = Vec::with_capacity(
             cmp::min(max_count_hint, self.buckets.len() / 2 * Self::BUCKET_SIZE)
                 + 2 * Self::BUCKET_SIZE
@@ -198,7 +194,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
 
 impl<const BUCKET_SIZE: usize> fmt::Display for RoutingTable<BUCKET_SIZE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "RoutingTable local_id={} node_count={}", self.local_id, self.node_count())?;
+        writeln!(f, "RoutingTable local_id={} node_count={}", self.local_id, self.iter().count())?;
         for (i, bucket) in self.buckets.iter().enumerate() {
             writeln!(f, "bucket {i:>3}: {bucket}")?;
         }
@@ -260,14 +256,14 @@ mod tests {
             assert!(rt.insert_node(&bucket_0_id(i as u8), &addr));
         }
         assert!(!rt.insert_node(&bucket_0_id(RoutingTable::BUCKET_SIZE as u8), &addr));
-        assert_eq!(rt.node_count(), RoutingTable::BUCKET_SIZE);
+        assert_eq!(rt.iter().count(), RoutingTable::BUCKET_SIZE);
 
         // fill next furthest bucket
         for i in 0..RoutingTable::BUCKET_SIZE {
             assert!(rt.insert_node(&bucket_1_id(i as u8), &addr));
         }
         assert!(!rt.insert_node(&bucket_1_id(RoutingTable::BUCKET_SIZE as u8), &addr));
-        assert_eq!(rt.node_count(), RoutingTable::BUCKET_SIZE * 2);
+        assert_eq!(rt.iter().count(), RoutingTable::BUCKET_SIZE * 2);
 
         // verify all nodes are still there
         for i in 0..RoutingTable::BUCKET_SIZE {
