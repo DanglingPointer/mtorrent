@@ -168,7 +168,7 @@ impl Processor {
                         .map(|node| node.addr)
                         .collect());
                     for node_addr in closest_nodes {
-                        launch_peer_search(ctx.clone(), node_addr);
+                        launch_peer_search(ctx.clone(), node_addr, 0);
                     }
                 } else {
                     log::warn!("Not starting search as callback channel is closed");

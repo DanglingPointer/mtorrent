@@ -33,6 +33,6 @@ pub async fn run_dht_search(
             }
             peer_sink.send((peer_addr, PeerOrigin::Dht));
         }
-        log::warn!("Restarting DHT search");
+        log::info!("Restarting DHT search");
     }
 }

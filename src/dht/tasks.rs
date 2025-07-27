@@ -126,20 +126,20 @@ pub(super) struct SearchCtx {
     pub(super) discovered_peers: sealed::Set<SocketAddr>,
 }
 
-pub(super) fn launch_peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) {
+pub(super) fn launch_peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr, depth: usize) {
     if ctx.queried_nodes.insert(addr) && !ctx.cmd_result_sender.is_closed() {
         let shutdown_signal = ctx.cnt_ctrl.data().shutdown_signal.clone();
         task::spawn_local(async move {
             select! {
                 biased;
-                _ = peer_search(ctx, addr) => (),
+                _ = peer_search(ctx, addr, depth) => (),
                 _ = shutdown_signal.notified() => (),
             }
         });
     }
 }
 
-async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
+async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr, depth: usize) -> io::Result<()> {
     let mut rt = ctx.cnt_ctrl.data().nodes.clone();
     define!(with_rt, rt);
 
@@ -181,14 +181,14 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
                 // spawn search tasks for the returned nodes
                 for addr in id_addr_pairs.into_iter().map(|(_id, ipv4)| SocketAddr::V4(ipv4)) {
                     if is_valid_addr!(addr) {
-                        launch_peer_search(ctx.clone(), addr);
+                        launch_peer_search(ctx.clone(), addr, depth + 1);
                     }
                 }
                 announce_peer!(response.token);
                 break;
             }
             GetPeersResponseData::Peers(socket_addr_v4s) => {
-                log::debug!("search produced {} peer(s)", socket_addr_v4s.len());
+                log::debug!("search produced {} peer(s) (depth={depth})", socket_addr_v4s.len());
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
                 // report the received peer addresses
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
@@ -204,7 +204,9 @@ async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr) -> io::Result<()> {
     }
     // try insert in the routing table and start periodic ping unless already in progress
     if let Some(permit) = ctx.cnt_ctrl.try_acquire_permit(addr) {
-        periodic_ping(addr, permit, ctx.cnt_ctrl.clone()).await?;
+        let ping_fut = periodic_ping(addr, permit, ctx.cnt_ctrl.clone());
+        drop(ctx); // so that `cmd_result_sender` is closed when the search has finished
+        ping_fut.await?;
     }
     Ok(())
 }
