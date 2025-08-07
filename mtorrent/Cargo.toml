@@ -1,0 +1,31 @@
+[package]
+name = "mtorrent"
+version = "0.3.1"
+edition = "2024"
+
+[dependencies]
+mtorrent-core = { path = "../mtorrent-core" }
+mtorrent-dht = { path = "../mtorrent-dht" }
+mtorrent-utils = { path = "../mtorrent-utils" }
+tokio = { workspace = true }
+log = { workspace = true }
+futures-util = { workspace = true }
+local_async_utils = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+bytes = { workspace = true }
+derive_more = { workspace = true }
+simple_logger = { workspace = true }
+sha1_smol = { workspace = true }
+reqwest = { version = "0.12.22", features = ["gzip"] }
+form_urlencoded = { version = "1.2.1", default-features = false }
+clap = { version = "4.5.40", features = ["derive"] }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+simple_logger = { workspace = true }
+mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }

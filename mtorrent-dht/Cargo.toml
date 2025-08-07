@@ -1,0 +1,25 @@
+[package]
+name = "mtorrent-dht"
+version = "0.3.1"
+edition = "2024"
+
+[dependencies]
+mtorrent-utils = { path = "../mtorrent-utils" }
+derive_more = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bitvec = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+local_async_utils = { workspace = true }
+sha1_smol = { workspace = true }
+pinned-init = { version = "0.0.9", default-features = false, features = [
+    "std",
+] }
+
+[dev-dependencies]
+simple_logger = { workspace = true }
+tokio-test = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "mtorrent-utils"
+version = "0.3.1"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+derive_more = { workspace = true }
+thiserror = { workspace = true }
+local_async_utils = { workspace = true }
+bytes = { workspace = true }
+url = { workspace = true }
+sha1_smol = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+igd-next = { version = "0.16.1", features = ["aio_tokio"] }
+
+[target.'cfg(target_family = "windows")'.dependencies]
+ipconfig = "0.3.2"
+
+[dev-dependencies]
+static_assertions = { workspace = true }
+tokio-test = { workspace = true }
+simple_logger = { workspace = true }

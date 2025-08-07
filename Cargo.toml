@@ -1,23 +1,16 @@
-[package]
-name = "mtorrent"
-version = "0.3.1"
-edition = "2024"
-authors = ["Mikhail Vasilyev"]
-description = "A fast and robust Bittorrent client"
-repository = "https://github.com/DanglingPointer/mtorrent"
-license = "Apache-2.0"
+[workspace]
+resolver = "3"
+members = ["mtorrent", "mtorrent-core", "mtorrent-dht", "mtorrent-utils"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.dev]
+opt-level = 3
 
-[dependencies]
-reqwest = { version = "0.12.22", features = ["gzip"] }
+[workspace.dependencies]
 url = "2.5.4"
-form_urlencoded = { version = "1.2.1", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 futures-channel = { version = "0.3", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
 bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
-igd-next = { version = "0.16.1", features = ["aio_tokio"] }
 log = "0.4.27"
 simple_logger = { version = "5.0.0", features = ["threads"] }
 sha1_smol = "1.0.1"
@@ -31,25 +24,12 @@ tokio = { version = "1.45.1", features = [
     "macros",
 ] }
 tokio-util = "0.7.15"
-clap = { version = "4.5.40", features = ["derive"] }
 derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
 local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.2.0", features = [
     "tokio-time",
 ] }
-pinned-init = { version = "0.0.9", default-features = false, features = [
-    "std",
-] }
 thiserror = "2.0.12"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-
-[target.'cfg(target_family = "windows")'.dependencies]
-ipconfig = "0.3.2"
-
-[dev-dependencies]
-tokio = { version = "1.39.2", features = ["test-util"] }
 static_assertions = "1.1.0"
 tokio-test = "0.4.4"
-
-[profile.dev]
-opt-level = 3
