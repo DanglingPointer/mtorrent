@@ -11,6 +11,7 @@ pub enum UrlParseError {
     UnsupportedScheme(String),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TrackerUrl {
     Http(String),
     Udp(String),

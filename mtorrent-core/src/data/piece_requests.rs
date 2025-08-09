@@ -2,7 +2,7 @@ use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PendingRequests {
     piece_requested_from: HashMap<usize, HashSet<SocketAddr>>,
 }

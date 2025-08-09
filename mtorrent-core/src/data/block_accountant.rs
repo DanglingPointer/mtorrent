@@ -4,6 +4,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+#[derive(Debug)]
 pub struct BlockAccountant {
     pieces: Rc<PieceInfo>,
     blocks_start_end: BTreeMap<usize, usize>,

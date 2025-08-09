@@ -9,13 +9,16 @@ use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
 
-#[derive(Debug)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelError {
+    #[error("timeout")]
     Timeout,
+    #[error("connection closed")]
     ConnectionClosed,
 }
 

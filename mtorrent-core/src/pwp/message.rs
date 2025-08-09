@@ -246,8 +246,7 @@ pub struct BlockInfo {
     pub block_length: usize,
 }
 
-#[cfg_attr(test, derive(Debug))]
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum UploaderMessage {
     Choke,
     Unchoke,
@@ -258,7 +257,7 @@ pub enum UploaderMessage {
     Block(BlockInfo, Vec<u8>),
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum DownloaderMessage {
     Interested,
     NotInterested,
@@ -272,7 +271,7 @@ pub enum Extension {
     PeerExchange,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, Clone, Eq, PartialEq, Debug)]
 pub struct ExtendedHandshake {
     pub extensions: HashMap<Extension, u8>,
     pub listen_port: Option<u16>,
@@ -284,14 +283,14 @@ pub struct ExtendedHandshake {
     pub metadata_size: Option<usize>,
 }
 
-#[derive(Default, PartialEq, Eq, Display)]
+#[derive(Default, Clone, Eq, PartialEq, Debug, Display)]
 #[display("added={added:?} dropped={dropped:?}")]
 pub struct PeerExchangeData {
     pub added: HashSet<SocketAddr>,
     pub dropped: HashSet<SocketAddr>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum ExtendedMessage {
     Handshake(Box<ExtendedHandshake>),
     MetadataRequest {

@@ -15,7 +15,7 @@ pub fn is_extension_protocol_enabled(reserved: &ReservedBits) -> bool {
     reserved[44]
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Handshake {
     pub peer_id: [u8; 20],
     pub info_hash: [u8; 20],

@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 use std::{fmt, io, str};
 use thiserror::Error;
 
-#[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
 pub enum Element {
     Integer(i64),
     ByteString(Vec<u8>),

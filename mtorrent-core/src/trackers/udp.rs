@@ -178,7 +178,7 @@ impl TrackerConnection {
     }
 }
 
-#[derive(Debug, Display, Error)]
+#[derive(Debug, Display, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ParseError {
     InvalidAction,
     InvalidLength,
@@ -254,7 +254,7 @@ impl EncodableRequest for ConnectRequest {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AnnounceEvent {
     None = 0,
     Completed = 1,
@@ -262,7 +262,7 @@ pub enum AnnounceEvent {
     Stopped = 3,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AnnounceRequest {
     pub info_hash: [u8; 20],
     pub peer_id: [u8; 20],
@@ -296,6 +296,7 @@ impl EncodableRequest for AnnounceRequest {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ScrapeRequest {
     pub info_hashes: Vec<[u8; 20]>,
 }
@@ -342,7 +343,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AnnounceResponse {
     pub interval: u32,
     pub leechers: u32,
@@ -374,14 +375,14 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
     pub completed: u32,
     pub leechers: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
 impl TryFrom<&[u8]> for ScrapeResponse {

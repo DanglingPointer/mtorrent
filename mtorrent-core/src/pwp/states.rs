@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tokio::time::Instant;
 
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PeerOrigin {
     Tracker,
     Listener,
@@ -13,8 +13,7 @@ pub enum PeerOrigin {
     Other,
 }
 
-#[derive(Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DownloadState {
     pub am_interested: bool,
     pub peer_choking: bool,
@@ -44,8 +43,7 @@ impl fmt::Display for DownloadState {
     }
 }
 
-#[derive(Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UploadState {
     pub am_choking: bool,
     pub peer_interested: bool,
@@ -75,6 +73,7 @@ impl fmt::Display for UploadState {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PeerState {
     pub download: DownloadState,
     pub upload: UploadState,
@@ -97,7 +96,7 @@ impl Default for PeerState {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PeerStates {
     peers: HashMap<SocketAddr, PeerState>,
     seeders: HashSet<SocketAddr>,

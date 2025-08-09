@@ -1,5 +1,6 @@
 use crate::data::Error;
 
+#[derive(Debug)]
 pub struct PieceInfo {
     pieces: Vec<[u8; 20]>,
     piece_length: usize,

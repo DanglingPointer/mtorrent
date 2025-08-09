@@ -1,4 +1,5 @@
 use crate::pwp;
+use derive_more::Debug;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
@@ -19,6 +20,7 @@ fn available_pieces(bitfield: &pwp::Bitfield) -> impl Iterator<Item = usize> + C
         .filter_map(|(index, bit)| (bit == true).then_some(index))
 }
 
+#[derive(Debug)]
 pub struct PieceTracker {
     piece_index_to_owners: HashMap<PieceIndex, HashSet<SocketAddr>>,
     owners_to_piece_indices: HashMap<SocketAddr, pwp::Bitfield>,
@@ -26,6 +28,7 @@ pub struct PieceTracker {
     owner_count_to_piece_indices: BTreeMap<usize, HashSet<PieceIndex>>,
     piece_count_to_owners: BTreeMap<usize, HashSet<SocketAddr>>,
 
+    #[debug(skip)]
     bitfield_factory: Box<dyn Fn() -> pwp::Bitfield>,
 }
 

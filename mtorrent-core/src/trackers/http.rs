@@ -94,7 +94,7 @@ impl TryFrom<&str> for TrackerRequestBuilder {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnounceEvent {
     Started,
     Stopped,
@@ -188,6 +188,7 @@ impl TrackerRequestBuilder {
 
 // -------------------------------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 pub struct AnnounceResponseContent {
     root: BTreeMap<String, benc::Element>,
 }

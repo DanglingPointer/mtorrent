@@ -3,6 +3,7 @@ use futures_util::FutureExt;
 use std::io;
 use tokio::io::BufWriter;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnyMessage {
     Uploader(UploaderMessage),
     Downloader(DownloaderMessage),
