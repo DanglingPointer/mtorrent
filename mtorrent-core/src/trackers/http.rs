@@ -1,4 +1,4 @@
-use super::utils;
+use super::{parse_binary_ipv4_peers, parse_binary_ipv6_peers};
 use local_async_utils::prelude::*;
 use mtorrent_utils::benc;
 use reqwest::Url;
@@ -28,16 +28,16 @@ impl From<Error> for io::Error {
 const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
-pub struct Client(reqwest::Client);
+pub struct TrackerClient(reqwest::Client);
 
-impl Client {
+impl TrackerClient {
     pub fn new() -> Result<Self, Error> {
         let inner = reqwest::Client::builder()
             .gzip(true)
             .user_agent(APP_USER_AGENT)
             .timeout(sec!(30))
             .build()?;
-        Ok(Client(inner))
+        Ok(TrackerClient(inner))
     }
 
     pub async fn announce(
@@ -61,7 +61,6 @@ impl Client {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn scrape(
         &self,
         request_builder: TrackerRequestBuilder,
@@ -258,7 +257,7 @@ impl AnnounceResponseContent {
                 let mut all_peers = Vec::new();
                 match peers {
                     Some(benc::Element::ByteString(data)) => {
-                        all_peers.extend(utils::parse_binary_ipv4_peers(data));
+                        all_peers.extend(parse_binary_ipv4_peers(data));
                     }
                     Some(benc::Element::List(list)) => {
                         all_peers.extend(dictionary_peers(list));
@@ -266,7 +265,7 @@ impl AnnounceResponseContent {
                     _ => (),
                 }
                 if let Some(benc::Element::ByteString(data)) = ipv6_peers {
-                    all_peers.extend(utils::parse_binary_ipv6_peers(data))
+                    all_peers.extend(parse_binary_ipv6_peers(data))
                 }
                 Some(all_peers)
             }

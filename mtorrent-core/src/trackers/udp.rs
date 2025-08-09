@@ -1,4 +1,4 @@
-use super::utils;
+use super::{parse_binary_ipv4_peers, parse_binary_ipv6_peers};
 use bytes::{Buf, BufMut};
 use derive_more::Display;
 use local_async_utils::prelude::*;
@@ -9,14 +9,14 @@ use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, timeout};
 
-pub struct UdpTrackerConnection {
+pub struct TrackerConnection {
     socket: UdpSocket,
     remote_addr: SocketAddr,
     connection_id: u64,
     connection_eof: Instant,
 }
 
-impl UdpTrackerConnection {
+impl TrackerConnection {
     pub async fn from_connected_socket(socket: UdpSocket) -> io::Result<Self> {
         let remote_addr = socket.peer_addr()?;
         let mut conn = Self {
@@ -71,7 +71,6 @@ impl UdpTrackerConnection {
         .await?
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn do_scrape_request(
         &mut self,
         request_data: ScrapeRequest,
@@ -343,7 +342,6 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: u32,
@@ -363,8 +361,8 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
             let leechers = src.get_u32();
             let seeders = src.get_u32();
             let ips: Vec<_> = match tracker_ip {
-                IpAddr::V4(_) => utils::parse_binary_ipv4_peers(src).collect(),
-                IpAddr::V6(_) => utils::parse_binary_ipv6_peers(src).collect(),
+                IpAddr::V4(_) => parse_binary_ipv4_peers(src).collect(),
+                IpAddr::V6(_) => parse_binary_ipv6_peers(src).collect(),
             };
             Ok(AnnounceResponse {
                 interval,
@@ -376,7 +374,6 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
-#[expect(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
@@ -384,7 +381,6 @@ pub struct ScrapeResponseEntry {
     pub leechers: u32,
 }
 
-#[expect(dead_code)]
 #[derive(Debug)]
 pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
@@ -461,7 +457,7 @@ mod tests {
         client_socket.connect(server_addr).await.unwrap();
 
         let client_fut = async {
-            UdpTrackerConnection::from_connected_socket(client_socket).await.unwrap();
+            TrackerConnection::from_connected_socket(client_socket).await.unwrap();
         };
 
         let server_fut = async {
