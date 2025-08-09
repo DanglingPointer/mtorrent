@@ -1,11 +1,13 @@
-use super::super::ctx;
-use super::{ALL_SUPPORTED_EXTENSIONS, CLIENT_NAME, LOCAL_REQQ};
+use super::super::{ctrl, ctx};
+use super::{CLIENT_NAME, LOCAL_REQQ};
 use local_async_utils::prelude::*;
 use mtorrent_core::{data, pwp};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::{cmp, io};
-use tokio::time::Instant;
+use tokio::select;
+use tokio::time;
 
 type CtxHandle = ctx::Handle<ctx::MainCtx>;
 
@@ -27,11 +29,11 @@ pub async fn new_peer(
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
-    initial_extensions: impl IntoIterator<Item = &pwp::Extension>,
+    enabled_extensions: impl IntoIterator<Item = &pwp::Extension>,
     peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with(|ctx| ctx.metainfo.size());
-    let inner = Box::new(Data {
+    let mut inner = Box::new(Data {
         handle,
         rx,
         tx,
@@ -41,10 +43,23 @@ pub async fn new_peer(
         last_shared_peers: Default::default(),
         peer_discovered_channel,
     });
+    define_with_ctx!(inner.handle);
 
     // send local handshake
-    let Peer(mut inner) = send_handshake(Peer(inner), initial_extensions).await?;
-    define_with_ctx!(inner.handle);
+    let local_handshake = Box::new(pwp::ExtendedHandshake {
+        extensions: enabled_extensions.into_iter().map(|e| (*e, e.local_id())).collect(),
+        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
+        client_type: Some(CLIENT_NAME.to_string()),
+        yourip: Some(inner.rx.remote_ip().ip()),
+        metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
+        request_limit: Some(LOCAL_REQQ),
+        ..Default::default()
+    });
+    log::debug!("Sending extended handshake to {}: {}", inner.rx.remote_ip(), local_handshake);
+    inner
+        .tx
+        .send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0))
+        .await?;
 
     // try wait for remote handshake
     match inner.rx.receive_message_timed(sec!(1)).await {
@@ -60,41 +75,27 @@ pub async fn new_peer(
         Err(pwp::ChannelError::Timeout) => (),
         Err(e) => return Err(e.into()),
     }
-    // don't send local handshake here, because 'upload' needs to send bitfield first
     Ok(Peer(inner))
 }
 
-pub async fn send_handshake(
-    peer: Peer,
-    enabled_extensions: impl IntoIterator<Item = &pwp::Extension>,
-) -> io::Result<Peer> {
-    let mut inner = peer.0;
-    define_with_ctx!(inner.handle);
+pub async fn run(peer: Peer, pex_interval: Duration) -> io::Result<()> {
+    let Peer(mut inner) = peer;
 
-    // set 0 ids for disabled extensions, and local ids for those enabled
-    let mut extensions: HashMap<pwp::Extension, u8> =
-        ALL_SUPPORTED_EXTENSIONS.iter().map(|e| (*e, 0)).collect();
-    extensions.extend(enabled_extensions.into_iter().map(|e| (*e, e.local_id())));
-
-    let local_handshake = Box::new(pwp::ExtendedHandshake {
-        extensions,
-        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
-        client_type: Some(CLIENT_NAME.to_string()),
-        yourip: Some(inner.rx.remote_ip().ip()),
-        metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),
-        request_limit: Some(LOCAL_REQQ),
-        ..Default::default()
-    });
-    log::debug!("Sending extended handshake to {}: {}", inner.rx.remote_ip(), local_handshake);
-    inner
-        .tx
-        .send_message((pwp::ExtendedMessage::Handshake(local_handshake), 0))
-        .await?;
-    Ok(Peer(inner))
+    let mut pex_timer = time::interval(pex_interval);
+    loop {
+        select! {
+            biased;
+            received = inner.rx.receive_message() => {
+                handle_incoming_message(&mut inner, received?).await?;
+            }
+            _ = pex_timer.tick() => {
+                send_pex(&mut inner).await?;
+            }
+        }
+    }
 }
 
-pub async fn share_peers(peer: Peer) -> io::Result<Peer> {
-    let mut inner = peer.0;
+async fn send_pex(inner: &mut Data) -> io::Result<()> {
     define_with_ctx!(inner.handle);
 
     if let Some(&id) = inner.remote_extensions.get(&pwp::Extension::PeerExchange) {
@@ -110,76 +111,72 @@ pub async fn share_peers(peer: Peer) -> io::Result<Peer> {
             inner.last_shared_peers = connected_peers;
         }
     }
-    Ok(Peer(inner))
+    Ok(())
 }
 
-pub async fn handle_incoming(peer: Peer, until: Instant, serve_metadata: bool) -> io::Result<Peer> {
-    let mut inner = peer.0;
+async fn handle_incoming_message(inner: &mut Data, msg: pwp::ExtendedMessage) -> io::Result<()> {
     define_with_ctx!(inner.handle);
 
-    let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
     let remote_ip = *inner.rx.remote_ip();
-    loop {
-        match inner.rx.receive_message_timed(until - Instant::now()).await {
-            Err(pwp::ChannelError::Timeout) => break,
-            Err(e) => return Err(e.into()),
-            Ok(pwp::ExtendedMessage::Handshake(mut hs)) => {
-                log::debug!("Received extended handshake from {remote_ip}: {hs}");
-                // every subsequent handshake contains diff from the previous one
-                for (ext, id) in &hs.extensions {
-                    if id == &0 {
-                        inner.remote_extensions.remove(ext);
-                    } else {
-                        inner.remote_extensions.insert(*ext, *id);
-                    }
-                }
-                hs.extensions.clone_from(&inner.remote_extensions);
-                with_ctx!(|ctx| ctx.peer_states.set_extended_handshake(&remote_ip, hs));
-            }
-            Ok(pwp::ExtendedMessage::PeerExchange(pex)) => {
-                log::debug!("Received PEX message from {remote_ip}: {pex}");
-                if !pex.added.is_empty() {
-                    let connected_peers: HashSet<SocketAddr> =
-                        with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
-                    for peer_addr in pex.added.difference(&connected_peers) {
-                        inner.peer_discovered_channel.send((*peer_addr, pwp::PeerOrigin::Pex));
-                    }
-                };
-            }
-            Ok(pwp::ExtendedMessage::MetadataRequest { piece }) => {
-                if let Some(&id) = inner.remote_extensions.get(&pwp::Extension::Metadata) {
-                    if serve_metadata
-                        && inner.sent_metadata_pieces.get(piece).is_some_and(|sent| !sent)
-                    {
-                        log::debug!("Serving metadata request from {remote_ip}: (piece={piece})");
-                        let global_offset = piece * pwp::MAX_BLOCK_SIZE;
-                        let length = cmp::min(pwp::MAX_BLOCK_SIZE, metadata_len - global_offset);
-                        let data = inner.metadata_storage.read_block(global_offset, length).await?;
-                        inner
-                            .tx
-                            .send_message((
-                                pwp::ExtendedMessage::MetadataBlock {
-                                    piece,
-                                    total_size: metadata_len,
-                                    data,
-                                },
-                                id,
-                            ))
-                            .await?;
-                        inner.sent_metadata_pieces.set(piece, true);
-                    } else {
-                        log::debug!("Rejecting metadata request from {remote_ip}: (piece={piece})");
-                        inner
-                            .tx
-                            .send_message((pwp::ExtendedMessage::MetadataReject { piece }, id))
-                            .await?;
-                    }
+    let serve_metadata = with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx));
+
+    match msg {
+        pwp::ExtendedMessage::Handshake(mut hs) => {
+            log::debug!("Received extended handshake from {remote_ip}: {hs}");
+            // every subsequent handshake contains diff from the previous one
+            for (ext, id) in &hs.extensions {
+                if id == &0 {
+                    inner.remote_extensions.remove(ext);
+                } else {
+                    inner.remote_extensions.insert(*ext, *id);
                 }
             }
-            Ok(msg) => {
-                log::warn!("Unexpected extension message from {remote_ip}: {msg}");
+            hs.extensions.clone_from(&inner.remote_extensions);
+            with_ctx!(|ctx| ctx.peer_states.set_extended_handshake(&remote_ip, hs));
+        }
+        pwp::ExtendedMessage::PeerExchange(pex) => {
+            log::debug!("Received PEX message from {remote_ip}: {pex}");
+            if !pex.added.is_empty() {
+                let connected_peers: HashSet<SocketAddr> =
+                    with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
+                for peer_addr in pex.added.difference(&connected_peers) {
+                    inner.peer_discovered_channel.send((*peer_addr, pwp::PeerOrigin::Pex));
+                }
+            };
+        }
+        pwp::ExtendedMessage::MetadataRequest { piece } => {
+            if let Some(&id) = inner.remote_extensions.get(&pwp::Extension::Metadata) {
+                if serve_metadata && inner.sent_metadata_pieces.get(piece).is_some_and(|sent| !sent)
+                {
+                    log::debug!("Serving metadata request from {remote_ip}: (piece={piece})");
+                    let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
+                    let global_offset = piece * pwp::MAX_BLOCK_SIZE;
+                    let length = cmp::min(pwp::MAX_BLOCK_SIZE, metadata_len - global_offset);
+                    let data = inner.metadata_storage.read_block(global_offset, length).await?;
+                    inner
+                        .tx
+                        .send_message((
+                            pwp::ExtendedMessage::MetadataBlock {
+                                piece,
+                                total_size: metadata_len,
+                                data,
+                            },
+                            id,
+                        ))
+                        .await?;
+                    inner.sent_metadata_pieces.set(piece, true);
+                } else {
+                    log::debug!("Rejecting metadata request from {remote_ip}: (piece={piece})");
+                    inner
+                        .tx
+                        .send_message((pwp::ExtendedMessage::MetadataReject { piece }, id))
+                        .await?;
+                }
             }
         }
+        msg => {
+            log::warn!("Unexpected extension message from {remote_ip}: {msg}");
+        }
     }
-    Ok(Peer(inner))
+    Ok(())
 }

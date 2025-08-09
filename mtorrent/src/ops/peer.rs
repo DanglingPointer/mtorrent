@@ -36,6 +36,8 @@ const CLIENT_NAME: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_V
 
 const LOCAL_REQQ: usize = 1024 * 2;
 
+const PEX_INTERVAL: Duration = sec!(30);
+
 // ------------------------------------------------------------------------------------------------
 
 async fn run_download(
@@ -112,39 +114,11 @@ async fn run_upload(
     }
 }
 
-async fn run_extensions(
-    mut peer: extensions::Peer,
-    remote_ip: SocketAddr,
-    mut ctx_handle: MainHandle,
-) -> io::Result<()> {
-    define_with_ctx!(ctx_handle);
-
-    const PEX_INTERVAL: Duration = sec!(30);
-    let mut next_pex_time = Instant::now();
-    loop {
-        if Instant::now() >= next_pex_time {
-            peer = extensions::share_peers(peer).await?;
-            next_pex_time = Instant::now() + PEX_INTERVAL;
-        }
-        peer = extensions::handle_incoming(
-            peer,
-            next_pex_time,
-            with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx)),
-        )
-        .await?;
+async fn run_optional_extensions(peer: Option<extensions::Peer>) -> io::Result<()> {
+    match peer {
+        Some(peer) => extensions::run(peer, PEX_INTERVAL).await,
+        None => Ok(()),
     }
-}
-
-macro_rules! maybe_run_extensions {
-    ($peer:expr, $remote_ip:expr, $ctx_handle:expr) => {
-        async {
-            if let Some(peer) = $peer {
-                run_extensions(peer, $remote_ip, $ctx_handle.clone()).await
-            } else {
-                Ok(())
-            }
-        }
-    };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -208,7 +182,7 @@ async fn run_peer_connection(
             try_join!(
                 run_download(download.into(), remote_ip, data.ctx_handle.clone()),
                 run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
-                maybe_run_extensions!(extensions, remote_ip, data.ctx_handle),
+                run_optional_extensions(extensions),
                 reporter.run(),
             )
             .map(|_| ())
