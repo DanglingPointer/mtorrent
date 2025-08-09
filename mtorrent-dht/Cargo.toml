@@ -1,7 +1,18 @@
 [package]
 name = "mtorrent-dht"
-version = "0.3.1"
-edition = "2024"
+description = "Asynchronous implementation of Distributed Hash Table (DHT) for the BitTorrent protocol"
+categories = [
+    "asynchronous",
+    "data-structures",
+    "network-programming",
+    "parser-implementations",
+]
+keywords = ["bittorrent", "torrent", "dht", "kademlia", "hash"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
 mtorrent-utils = { path = "../mtorrent-utils" }

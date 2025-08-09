@@ -1,8 +1,13 @@
 [package]
 name = "mtorrent-core"
-version = "0.3.1"
-edition = "2024"
-
+description = "Fundamentals for building asynchronous BitTorrent clients"
+categories = ["asynchronous", "network-programming", "parser-implementations"]
+keywords = ["bittorrent", "torrent", "protocol", "tracker", "p2p"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [features]
 default = []
