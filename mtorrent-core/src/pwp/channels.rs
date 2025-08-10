@@ -2,12 +2,15 @@ use super::MAX_BLOCK_SIZE;
 use super::handshake::*;
 use super::message::*;
 use futures_channel::mpsc;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use std::future::{self, Future};
 use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -88,9 +91,19 @@ pub struct ExtendedChannels(pub ExtendedTxChannel, pub ExtendedRxChannel);
 
 // ------
 
-pub trait ConnectionRunner: Future<Output = io::Result<()>> + Send + 'static {}
+/// Actor that handles a single TCP connection to a peer.
+/// Reads inbound messages from the socket, parses them, and pushes into the appropriate channel (Upload/Download/Extended).
+/// Similarly, reads outbound messages from Upload/Download/Extended channels, serializes them and writes into the socket.
+/// Exits on socket error or if one or more channels have been closed.
+pub struct ConnectionIoDriver(BoxFuture<'static, io::Result<()>>);
 
-impl<T> ConnectionRunner for T where T: Future<Output = io::Result<()>> + Send + 'static {}
+impl Future for ConnectionIoDriver {
+    type Output = io::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.as_mut().poll(cx)
+    }
+}
 
 // ------
 
@@ -102,7 +115,7 @@ pub async fn channels_from_incoming<S>(
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     socket: S,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)>
 where
     S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
@@ -126,7 +139,7 @@ pub async fn channels_from_outgoing<S>(
     remote_addr: SocketAddr,
     socket: S,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)>
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)>
 where
     S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
@@ -176,7 +189,7 @@ fn setup_channels<S>(
     remote_ip: SocketAddr,
     remote_handshake: Handshake,
     extended_protocol_enabled: bool,
-) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, impl ConnectionRunner)
+) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)
 where
     S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
 {
@@ -223,20 +236,24 @@ where
 
     let (ingress, egress) = tokio::io::split(stream);
 
-    let receiver = IngressStream {
-        source: BufReader::with_capacity(BUFFER_SIZE, ingress),
-        remote_ip,
-        ul_msg_sink: remote_uploader_msg_in,
-        dl_msg_sink: remote_downloader_msg_in,
-        ext_msg_sink: remote_extended_msg_in,
-    };
-    let sender = EgressStream {
-        sink: BufWriter::with_capacity(BUFFER_SIZE, egress),
-        remote_ip,
-        dl_msg_source: local_downloader_msg_out,
-        ul_msg_source: local_uploader_msg_out,
-        ext_msg_source: local_extended_msg_out,
-    };
+    let actor_fut = async move {
+        let receiver = IngressStream {
+            source: BufReader::with_capacity(BUFFER_SIZE, ingress),
+            remote_ip,
+            ul_msg_sink: remote_uploader_msg_in,
+            dl_msg_sink: remote_downloader_msg_in,
+            ext_msg_sink: remote_extended_msg_in,
+        };
+        let sender = EgressStream {
+            sink: BufWriter::with_capacity(BUFFER_SIZE, egress),
+            remote_ip,
+            dl_msg_source: local_downloader_msg_out,
+            ul_msg_source: local_uploader_msg_out,
+            ext_msg_source: local_extended_msg_out,
+        };
+        try_join!(receiver.read_messages(), sender.write_messages()).map(|_| ())
+    }
+    .boxed();
 
     let download_rx = DownloadRxChannel {
         inner: remote_uploader_msg_out,
@@ -260,7 +277,7 @@ where
         DownloadChannels(download_tx, download_rx),
         UploadChannels(upload_tx, upload_rx),
         extended_channels,
-        async move { try_join!(receiver.read_messages(), sender.write_messages()).map(|_| ()) },
+        ConnectionIoDriver(actor_fut),
     )
 }
 

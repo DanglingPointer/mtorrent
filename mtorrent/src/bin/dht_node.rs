@@ -32,7 +32,7 @@ struct Args {
 }
 
 /// Example usage:
-/// ```
+/// ```bash
 /// ./target/release/dht_node --duration=30
 /// ./target/release/dht_node --nodes '"router.bittorrent.com:6881" "dht.transmissionbt.com:6881"' --duration=72
 /// ./target/release/dht_node --duration=30 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
