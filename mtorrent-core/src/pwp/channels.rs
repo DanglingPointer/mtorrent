@@ -13,7 +13,10 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
+};
+use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
 
@@ -23,6 +26,11 @@ pub enum ChannelError {
     Timeout,
     #[error("connection closed")]
     ConnectionClosed,
+}
+
+struct PeerInfo {
+    handshake_info: Handshake,
+    remote_addr: SocketAddr,
 }
 
 pub struct PeerChannel<Q> {
@@ -109,16 +117,13 @@ impl Future for ConnectionIoDriver {
 
 const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 
-pub async fn channels_from_incoming<S>(
+pub async fn channels_from_incoming(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
-    socket: S,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)>
-where
-    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
-{
+    socket: TcpStream,
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
@@ -132,17 +137,14 @@ where
     Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
 }
 
-pub async fn channels_from_outgoing<S>(
+pub async fn channels_from_outgoing(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
-    socket: S,
+    socket: TcpStream,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)>
-where
-    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
-{
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
@@ -164,10 +166,14 @@ pub fn channels_from_mock<S>(
     mock_socket: S,
 ) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>)
 where
-    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let (download, upload, extensions, runner) =
-        setup_channels(mock_socket, peer_addr, remote_handshake, extension_protocol_enabled);
+    let (download, upload, extensions, runner) = setup_channels(
+        StreamHolder(mock_socket),
+        peer_addr,
+        remote_handshake,
+        extension_protocol_enabled,
+    );
     tokio::task::spawn(async move {
         let _ = runner.await;
     });
@@ -176,23 +182,51 @@ where
 
 // ------
 
-struct PeerInfo {
-    handshake_info: Handshake,
-    remote_addr: SocketAddr,
+#[cfg(any(feature = "mocks", test))]
+trait GenericStream: AsyncRead + AsyncWrite + Send + Unpin {}
+#[cfg(any(feature = "mocks", test))]
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> GenericStream for T {}
+
+#[cfg(any(feature = "mocks", test))]
+struct StreamHolder<S: GenericStream>(S);
+
+trait IngressStream: AsyncRead + Send + Unpin {}
+impl<T: AsyncRead + Send + Unpin> IngressStream for T {}
+
+trait EgressStream: AsyncWrite + Send + Unpin {}
+impl<T: AsyncWrite + Send + Unpin> EgressStream for T {}
+
+trait SplittableStream: Send + Unpin {
+    fn split(&mut self) -> (impl IngressStream, impl EgressStream);
 }
 
-const MAX_INCOMING_QUEUE: usize = 20;
-const BUFFER_SIZE: usize = MAX_BLOCK_SIZE + 512; // data + some header
+impl SplittableStream for TcpStream {
+    fn split(&mut self) -> (impl IngressStream, impl EgressStream) {
+        TcpStream::split(self)
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+impl<S: GenericStream> SplittableStream for StreamHolder<S> {
+    fn split(&mut self) -> (impl IngressStream, impl EgressStream) {
+        tokio::io::split(&mut self.0)
+    }
+}
+
+// ------
 
 fn setup_channels<S>(
-    stream: S,
+    mut stream: S,
     remote_ip: SocketAddr,
     remote_handshake: Handshake,
     extended_protocol_enabled: bool,
 ) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)
 where
-    S: AsyncReadExt + AsyncWriteExt + Send + Unpin + 'static,
+    S: SplittableStream + 'static,
 {
+    const MAX_INCOMING_QUEUE: usize = 20;
+    const BUFFER_SIZE: usize = MAX_BLOCK_SIZE + 512; // data + some header
+
     let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
     let info = Rc::new(PeerInfo {
@@ -234,17 +268,16 @@ where
             (None, None, None)
         };
 
-    let (ingress, egress) = tokio::io::split(stream);
-
     let actor_fut = async move {
-        let receiver = IngressStream {
+        let (ingress, egress) = stream.split();
+        let receiver = IngressProcessor {
             source: BufReader::with_capacity(BUFFER_SIZE, ingress),
             remote_ip,
             ul_msg_sink: remote_uploader_msg_in,
             dl_msg_sink: remote_downloader_msg_in,
             ext_msg_sink: remote_extended_msg_in,
         };
-        let sender = EgressStream {
+        let sender = EgressProcessor {
             sink: BufWriter::with_capacity(BUFFER_SIZE, egress),
             remote_ip,
             dl_msg_source: local_downloader_msg_out,
@@ -281,7 +314,7 @@ where
     )
 }
 
-struct IngressStream<S: AsyncReadExt + Unpin> {
+struct IngressProcessor<S: AsyncReadExt + Unpin> {
     source: BufReader<S>,
     remote_ip: SocketAddr,
     ul_msg_sink: mpsc::Sender<UploaderMessage>,
@@ -289,7 +322,7 @@ struct IngressStream<S: AsyncReadExt + Unpin> {
     ext_msg_sink: Option<mpsc::Sender<ExtendedMessage>>,
 }
 
-impl<S: AsyncReadExt + Unpin> IngressStream<S> {
+impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
     const RECV_TIMEOUT: Duration = sec!(120);
 
     async fn read_messages(mut self) -> io::Result<()> {
@@ -333,7 +366,7 @@ impl<S: AsyncReadExt + Unpin> IngressStream<S> {
     }
 }
 
-struct EgressStream<S: AsyncWriteExt + Unpin> {
+struct EgressProcessor<S: AsyncWriteExt + Unpin> {
     sink: BufWriter<S>,
     remote_ip: SocketAddr,
     dl_msg_source: mpsc::Receiver<Option<DownloaderMessage>>,
@@ -341,7 +374,7 @@ struct EgressStream<S: AsyncWriteExt + Unpin> {
     ext_msg_source: Option<mpsc::Receiver<Option<(ExtendedMessage, u8)>>>,
 }
 
-impl<S: AsyncWriteExt + Unpin> EgressStream<S> {
+impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
     const PING_INTERVAL: Duration = sec!(30);
 
     async fn write_messages(mut self) -> io::Result<()> {
@@ -483,10 +516,16 @@ mod tests {
         info_hash: [0u8; 20],
     };
 
+    macro_rules! setup_channels {
+        ($stream:expr, $($args:expr),+ $(,)?) => {
+            setup_channels(StreamHolder($stream), $($args),+)
+        };
+    }
+
     #[tokio::test]
     async fn test_read_downloader_message() {
         let socket = MockBuilder::new().read(msgs![PeerMessage::Interested]).build();
-        let (mut download, mut upload, extended, runner) = setup_channels(
+        let (mut download, mut upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -514,7 +553,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_uploader_message() {
         let socket = MockBuilder::new().read(msgs![PeerMessage::Unchoke]).build();
-        let (mut download, mut upload, extended, runner) = setup_channels(
+        let (mut download, mut upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -556,7 +595,7 @@ mod tests {
             ])
             .build();
 
-        let (mut download, mut upload, extended, runner) = setup_channels(
+        let (mut download, mut upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
@@ -612,7 +651,7 @@ mod tests {
                 },
             ])
             .build();
-        let (mut download, mut upload, extended, runner) = setup_channels(
+        let (mut download, mut upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
@@ -653,7 +692,7 @@ mod tests {
         let socket = MockBuilder::new()
             .read_error(io::Error::from(io::ErrorKind::OutOfMemory))
             .build();
-        let (mut download, mut upload, _, runner) = setup_channels(
+        let (mut download, mut upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -682,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_downloader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Interested]).wait(sec!(0)).build();
-        let (mut download, _upload, _, runner) = setup_channels(
+        let (mut download, _upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -700,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_uploader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Unchoke]).wait(sec!(0)).build();
-        let (_download, mut upload, _, runner) = setup_channels(
+        let (_download, mut upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -732,7 +771,7 @@ mod tests {
             ])
             .wait(sec!(0))
             .build();
-        let (_download, _upload, extended, runner) = setup_channels(
+        let (_download, _upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
@@ -763,7 +802,7 @@ mod tests {
         let socket = MockBuilder::new()
             .write_error(io::Error::from(io::ErrorKind::OutOfMemory))
             .build();
-        let (mut download, upload, _, runner) = setup_channels(
+        let (mut download, upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -797,7 +836,7 @@ mod tests {
                 }])
                 .wait(sec!(0))
                 .build();
-            let (mut download, mut upload, _, runner) = setup_channels(
+            let (mut download, mut upload, _, runner) = setup_channels!(
                 socket,
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                 Default::default(),
@@ -842,7 +881,7 @@ mod tests {
                 }])
                 .wait(sec!(0))
                 .build();
-            let (_download, mut upload, extended, runner) = setup_channels(
+            let (_download, mut upload, extended, runner) = setup_channels!(
                 socket,
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                 HANDSHAKE_WITH_BEP10_SUPPORT,
@@ -887,7 +926,7 @@ mod tests {
             .wait(sec!(1))
             .build();
 
-        let (mut download, _upload, _, runner) = setup_channels(
+        let (mut download, _upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -929,7 +968,7 @@ mod tests {
             .wait(sec!(1))
             .build();
 
-        let (_download, mut upload, _, runner) = setup_channels(
+        let (_download, mut upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -976,7 +1015,7 @@ mod tests {
             }])
             .wait(sec!(1))
             .build();
-        let (_download, _upload, extended, runner) = setup_channels(
+        let (_download, _upload, extended, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             HANDSHAKE_WITH_BEP10_SUPPORT,
@@ -1019,7 +1058,7 @@ mod tests {
             .wait(sec!(1))
             .build();
 
-        let (_download, UploadChannels(mut tx, _), _, runner) = setup_channels(
+        let (_download, UploadChannels(mut tx, _), _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -1051,7 +1090,7 @@ mod tests {
                 let mut buf = Vec::<u8>::new();
                 let (writer, mut reader) = mpsc::unbounded::<u8>();
 
-                let (_download, _upload, _, runner) = setup_channels(
+                let (_download, _upload, _, runner) = setup_channels!(
                     FakeSink(writer),
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
@@ -1088,7 +1127,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_receiver_times_out_after_2_min() {
         let (sock1, _sock2) = io::duplex(0);
-        let (_download, _upload, _, runner) = setup_channels(
+        let (_download, _upload, _, runner) = setup_channels!(
             sock1,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),
@@ -1120,7 +1159,7 @@ mod tests {
                 const TIMEOUT: Duration = sec!(10);
 
                 let (sock1, _sock2) = io::duplex(0);
-                let (mut download, mut _upload, _, _runner) = setup_channels(
+                let (mut download, mut _upload, _, _runner) = setup_channels!(
                     sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
@@ -1156,7 +1195,7 @@ mod tests {
                 const TIMEOUT: Duration = sec!(10);
 
                 let (sock1, _sock2) = io::duplex(0);
-                let (mut _download, mut upload, _, _runner) = setup_channels(
+                let (mut _download, mut upload, _, _runner) = setup_channels!(
                     sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
                     Default::default(),
@@ -1194,7 +1233,7 @@ mod tests {
             .wait(sec!(0))
             .build();
 
-        let (mut download, _upload, _, runner) = setup_channels(
+        let (mut download, _upload, _, runner) = setup_channels!(
             socket,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
             Default::default(),

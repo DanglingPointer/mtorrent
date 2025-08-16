@@ -92,6 +92,20 @@
 			],
 			"group": "none",
 			"label": "rust: cargo clippy --release"
+		},
+		{
+			"type": "cargo",
+			"command": "install",
+			"args": [
+				"--bin=mtorrent",
+				"--path=mtorrent",
+				"--profile=release",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "none",
+			"label": "rust: cargo install mtorrent"
 		}
 	],
 	"inputs": [
