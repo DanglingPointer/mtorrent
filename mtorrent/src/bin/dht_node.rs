@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_threads(false)
         .with_level(log::LevelFilter::Info)
-        .with_module_level("mtorrent::dht", log::LevelFilter::Debug)
+        .with_module_level("mtorrent_dht", log::LevelFilter::Debug)
         .with_module_level("mtorrent::app::dht", log::LevelFilter::Debug)
         .with_module_level("dht_node", log::LevelFilter::Debug)
         .init()

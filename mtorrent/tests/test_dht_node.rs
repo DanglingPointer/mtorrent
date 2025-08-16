@@ -1,4 +1,4 @@
-use local_async_utils::{millisec, sec};
+use local_async_utils::sec;
 use serde::Deserialize;
 use std::{fs, path::Path, process};
 
@@ -30,7 +30,7 @@ fn test_bootstrap_dht_node() {
             exit_status = Some(status);
             break;
         }
-        std::thread::sleep(millisec!(500));
+        std::thread::sleep(sec!(1));
     }
     match exit_status {
         None => {

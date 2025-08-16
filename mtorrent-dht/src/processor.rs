@@ -10,6 +10,7 @@ use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_utils::connctrl::ConnectControl;
+use mtorrent_utils::warn_stopwatch;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -75,7 +76,8 @@ impl Processor {
     }
 
     pub async fn run(mut self, mut queries: queries::Server, mut commands: cmds::Server) {
-        // do all DNS resolution first because it's a blocking call
+        // do all DNS resolution first because it will block the current thread
+        let sw = warn_stopwatch!("DNS resolution of bootstrapping nodes");
         let bootstrapping_nodes: Vec<SocketAddr> = self
             .config
             .nodes
@@ -84,9 +86,11 @@ impl Processor {
             .flatten()
             .filter(SocketAddr::is_ipv4)
             .collect();
+        drop(sw);
 
         // do bootstrapping for the next 10 sec
         if !bootstrapping_nodes.is_empty() {
+            log::debug!("Starting bootstrapping");
             let deadline = Instant::now() + sec!(10);
 
             for addr in &bootstrapping_nodes {
