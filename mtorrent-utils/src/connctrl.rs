@@ -1,6 +1,7 @@
 use derive_more::Debug;
 use local_async_utils::prelude::*;
 use std::cell::Cell;
+use std::cmp;
 use std::future::poll_fn;
 use std::net::SocketAddr;
 use std::ops::Deref;
@@ -8,8 +9,8 @@ use std::rc::Rc;
 use std::task::{Poll, Waker};
 
 struct State<D> {
-    budget: Cell<usize>,
-    used_addrs: sealed::Set<SocketAddr>,
+    capacity: usize,
+    connections: sealed::Set<SocketAddr>,
     waker: Cell<Option<Waker>>,
     data: D,
 }
@@ -31,8 +32,7 @@ impl<D> Deref for ConnectPermit<D> {
 
 impl<D> Drop for ConnectPermit<D> {
     fn drop(&mut self) {
-        self.state.budget.set(self.state.budget.get() + 1);
-        self.state.used_addrs.remove(&self.addr);
+        self.state.connections.remove(&self.addr);
         if let Some(waker) = self.state.waker.take() {
             waker.wake();
         }
@@ -44,10 +44,10 @@ pub struct ConnectControl<D> {
 }
 
 impl<D> ConnectControl<D> {
-    pub fn new(connection_limit: usize, connection_data: D) -> Self {
+    pub fn new(max_connections: usize, connection_data: D) -> Self {
         let state = Rc::new(State {
-            budget: Cell::new(connection_limit),
-            used_addrs: Default::default(),
+            capacity: max_connections,
+            connections: sealed::Set::with_capacity(cmp::min(max_connections, 512)),
             waker: Default::default(),
             data: connection_data,
         });
@@ -62,22 +62,21 @@ impl<D> ConnectControl<D> {
     pub async fn acquire_permit(&mut self, addr: SocketAddr) -> Option<ConnectPermit<D>> {
         // must use `&mut self` because we store only 1 waker
         poll_fn(move |cx| {
-            if self.state.used_addrs.contains(&addr) {
-                Poll::Ready(None)
-            } else if self.state.budget.get() == 0 {
+            if self.state.connections.len() == self.state.capacity {
                 let new_waker = match self.state.waker.replace(None) {
                     Some(waker) if waker.will_wake(cx.waker()) => waker,
                     _ => cx.waker().clone(),
                 };
                 self.state.waker.set(Some(new_waker));
                 Poll::Pending
-            } else {
-                self.state.used_addrs.insert(addr);
-                self.state.budget.set(self.state.budget.get() - 1);
+            } else if self.state.connections.insert(addr) {
                 Poll::Ready(Some(ConnectPermit {
                     state: self.state.clone(),
                     addr,
                 }))
+            } else {
+                // addr already in use
+                Poll::Ready(None)
             }
         })
         .await
@@ -85,11 +84,11 @@ impl<D> ConnectControl<D> {
 
     /// Issue immediate permit if a connection slot is available
     pub fn try_acquire_permit(&self, addr: SocketAddr) -> Option<ConnectPermit<D>> {
-        if self.state.budget.get() == 0 || self.state.used_addrs.contains(&addr) {
+        if self.state.connections.len() == self.state.capacity
+            || !self.state.connections.insert(addr)
+        {
             None
         } else {
-            self.state.used_addrs.insert(addr);
-            self.state.budget.set(self.state.budget.get() - 1);
             Some(ConnectPermit {
                 state: self.state.clone(),
                 addr,
