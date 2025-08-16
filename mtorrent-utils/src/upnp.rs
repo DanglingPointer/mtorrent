@@ -1,6 +1,6 @@
 use igd_next::{SearchOptions, aio};
 use local_async_utils::prelude::*;
-use std::net::SocketAddr;
+use std::{mem, net::SocketAddr};
 
 type AsyncGateway = aio::Gateway<aio::tokio::Tokio>;
 type BlockingGateway = igd_next::Gateway;
@@ -79,19 +79,15 @@ impl PortOpener {
     }
 }
 
-fn blocking_gateway(gw: &AsyncGateway) -> BlockingGateway {
-    BlockingGateway {
-        addr: gw.addr,
-        root_url: gw.root_url.clone(),
-        control_url: gw.control_url.clone(),
-        control_schema_url: gw.control_schema_url.clone(),
-        control_schema: gw.control_schema.clone(),
-    }
-}
-
 impl Drop for PortOpener {
     fn drop(&mut self) {
-        let gateway = blocking_gateway(&self.gateway);
+        let gateway = BlockingGateway {
+            addr: self.gateway.addr,
+            root_url: mem::take(&mut self.gateway.root_url),
+            control_url: mem::take(&mut self.gateway.control_url),
+            control_schema_url: mem::take(&mut self.gateway.control_schema_url),
+            control_schema: mem::take(&mut self.gateway.control_schema),
+        };
         match gateway.remove_port(self.proto, self.external_addr.port()) {
             Ok(()) => log::info!(
                 "UPnP: port mapping deleted ({}:{})",
