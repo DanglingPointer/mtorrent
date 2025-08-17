@@ -49,7 +49,7 @@ fn can_retry(e: &io::Error, attempts_left: usize) -> bool {
         )
 }
 
-pub async fn channels_for_outgoing_connection(
+pub async fn new_outbound_connection(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
@@ -72,7 +72,7 @@ pub async fn channels_for_outgoing_connection(
             let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
             let stream = socket.connect(remote_ip).await?;
             let stream = marshal_stream!(stream, pwp_runtime);
-            pwp::channels_from_outgoing(
+            pwp::channels_for_outbound_connection(
                 local_peer_id,
                 info_hash,
                 extension_protocol_enabled,
@@ -112,7 +112,7 @@ pub async fn channels_for_outgoing_connection(
     Ok((download_chans, upload_chans, extended_chans))
 }
 
-pub async fn channels_for_incoming_connection(
+pub async fn new_inbound_connection(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
@@ -121,14 +121,15 @@ pub async fn channels_for_incoming_connection(
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let stream = marshal_stream!(stream, pwp_runtime);
-    let (download_chans, upload_chans, extended_chans, runner) = pwp::channels_from_incoming(
-        local_peer_id,
-        Some(info_hash),
-        extension_protocol_enabled,
-        remote_ip,
-        stream,
-    )
-    .await?;
+    let (download_chans, upload_chans, extended_chans, runner) =
+        pwp::channels_for_inbound_connection(
+            local_peer_id,
+            Some(info_hash),
+            extension_protocol_enabled,
+            remote_ip,
+            stream,
+        )
+        .await?;
     log::info!("Successful incoming connection from {remote_ip}");
 
     pwp_runtime.spawn(async move {

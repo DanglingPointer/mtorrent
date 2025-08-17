@@ -395,15 +395,16 @@ async fn listening_peer<P: Peer>(
             if verify_remote_addr {
                 assert_eq!(remote_addr, expected_remote_addr);
             }
-            let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_from_incoming(
-                &[index + b'0'; 20],
-                None,
-                extensions_enabled,
-                remote_addr,
-                stream,
-            )
-            .await
-            .unwrap();
+            let (download_chans, upload_chans, ext_chans, runner) =
+                pwp::channels_for_inbound_connection(
+                    &[index + b'0'; 20],
+                    None,
+                    extensions_enabled,
+                    remote_addr,
+                    stream,
+                )
+                .await
+                .unwrap();
             P::run(
                 index,
                 download_chans,
@@ -453,7 +454,7 @@ async fn connecting_peer<P: Peer>(
         time::sleep(sec!(1)).await;
     };
     stream.set_nodelay(true).unwrap();
-    let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_from_outgoing(
+    let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_for_outbound_connection(
         &[index + b'0'; 20],
         &info_hash,
         false,

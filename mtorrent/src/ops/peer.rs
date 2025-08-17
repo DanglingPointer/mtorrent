@@ -218,7 +218,7 @@ pub async fn outgoing_pwp_connection(
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        let (download_chans, upload_chans, extended_chans) = tcp::channels_for_outgoing_connection(
+        let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
@@ -259,7 +259,7 @@ pub async fn incoming_pwp_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
 
-    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
         &local_peer_id,
         &info_hash,
         EXTENSION_PROTOCOL_ENABLED,
@@ -378,7 +378,7 @@ pub async fn outgoing_preliminary_connection(
         ctx.const_data.pwp_local_tcp_port(),
     ));
 
-    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_outgoing_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled
@@ -404,7 +404,7 @@ pub async fn incoming_preliminary_connection(
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
 
-    let (download_chans, upload_chans, extended_chans) = tcp::channels_for_incoming_connection(
+    let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
         &local_peer_id,
         &info_hash,
         true, // extension_protocol_enabled

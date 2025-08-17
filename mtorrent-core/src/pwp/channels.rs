@@ -20,6 +20,8 @@ use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
 
+/// Error type for receiving messages from,
+/// or sending them to, a [`PeerChannel`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelError {
     #[error("timeout")]
@@ -33,15 +35,18 @@ struct PeerInfo {
     remote_addr: SocketAddr,
 }
 
+/// Channel for communicating with a single peer.
 pub struct PeerChannel<Q> {
     peer_info: Rc<PeerInfo>,
     inner: Q,
 }
 
 impl<Q> PeerChannel<Q> {
+    /// Address of the peer.
     pub fn remote_ip(&self) -> &SocketAddr {
         &self.peer_info.remote_addr
     }
+    /// Handshake received from the peer upon connecting.
     pub fn remote_info(&self) -> &Handshake {
         &self.peer_info.handshake_info
     }
@@ -60,22 +65,34 @@ type RxChannel<Msg> = PeerChannel<mpsc::Receiver<Msg>>;
 type TxChannel<Msg> = PeerChannel<mpsc::Sender<Option<Msg>>>;
 
 impl<Msg> RxChannel<Msg> {
+    /// Wait for the next message received from the peer.
+    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited.
     pub async fn receive_message(&mut self) -> Result<Msg, ChannelError> {
         self.inner.next().await.ok_or(ChannelError::ConnectionClosed)
     }
 
+    /// Wait up to `deadline` for the next message received from the peer.
+    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited,
+    /// or [`ChannelError::Timeout`] if the deadline has elapsed.
     pub async fn receive_message_timed(&mut self, deadline: Duration) -> Result<Msg, ChannelError> {
         timeout(deadline, self.receive_message()).await.or(Err(ChannelError::Timeout))?
     }
 }
 
 impl<Msg> TxChannel<Msg> {
+    /// Send a single message to the peer. The async call will only return once
+    /// the message has been successfully written to the socket.
+    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited.
     pub async fn send_message(&mut self, msg: Msg) -> Result<(), ChannelError> {
         self.inner.send(Some(msg)).await?;
         self.inner.send(None).await?;
         Ok(())
     }
 
+    /// Send a single message to the peer. The async call will return either once
+    /// the message has been successfully written to the socket, or when `deadline` has elapsed.
+    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited,
+    /// or [`ChannelError::Timeout`] if the deadline has elapsed.
     pub async fn send_message_timed(
         &mut self,
         msg: Msg,
@@ -85,16 +102,25 @@ impl<Msg> TxChannel<Msg> {
     }
 }
 
+/// Channel for sending messages related to us downloading data from the peer.
 pub type DownloadTxChannel = TxChannel<DownloaderMessage>;
+/// Channel for receiving messages related to the peer uploading data to us.
 pub type DownloadRxChannel = RxChannel<UploaderMessage>;
+/// Channels for downloading data from a single peer.
 pub struct DownloadChannels(pub DownloadTxChannel, pub DownloadRxChannel);
 
+/// Channel for sending messages related to us uploading data to the peer.
 pub type UploadTxChannel = TxChannel<UploaderMessage>;
+/// Channel for receiving messages related to the peer downloading data from us.
 pub type UploadRxChannel = RxChannel<DownloaderMessage>;
+/// Channels for uploading data to a single peer.
 pub struct UploadChannels(pub UploadTxChannel, pub UploadRxChannel);
 
+/// Channel for sending extended protocol messages to the peer.
 pub type ExtendedTxChannel = TxChannel<(ExtendedMessage, u8)>;
+/// Channel for receiving extended protocol messages from the peer.
 pub type ExtendedRxChannel = RxChannel<ExtendedMessage>;
+/// Channels for exchanging extended protocol messages with a single peer.
 pub struct ExtendedChannels(pub ExtendedTxChannel, pub ExtendedRxChannel);
 
 // ------
@@ -117,7 +143,8 @@ impl Future for ConnectionIoDriver {
 
 const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 
-pub async fn channels_from_incoming(
+/// Perform handshake on an inbound connection from a peer, and set up [`PeerChannel`]s.
+pub async fn channels_for_inbound_connection(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
@@ -137,7 +164,8 @@ pub async fn channels_from_incoming(
     Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
 }
 
-pub async fn channels_from_outgoing(
+/// Perform handshake on an outbound connection to a peer, and set up [`PeerChannel`]s.
+pub async fn channels_for_outbound_connection(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
@@ -158,6 +186,7 @@ pub async fn channels_from_outgoing(
     Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
 }
 
+/// Set up [`PeerChannel`]s for a fake stream without performing a handshake.
 #[cfg(feature = "mocks")]
 pub fn channels_from_mock<S>(
     peer_addr: SocketAddr,
