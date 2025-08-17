@@ -1,4 +1,4 @@
-//! Trackers file (bencoded dictionary or JSON):
+//! Trackers file (JSON):
 //! ```text
 //! {
 //!     "trackers": [ <tracker1>, <tracker2>, ... ]
@@ -15,86 +15,72 @@ use mtorrent_core::pwp::Bitfield;
 use mtorrent_utils::benc::Element;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Seek;
 use std::path::Path;
 use std::{fs, io};
 
 const FILENAME: &str = ".mtorrent";
-const TRACKERS_KEY: &str = "trackers";
 
 #[derive(Default, Serialize, Deserialize)]
 struct Trackers {
     trackers: BTreeSet<String>,
 }
 
-impl Trackers {
-    fn from_file(filepath: impl AsRef<Path>) -> io::Result<Self> {
-        let buf = fs::read(filepath)?;
-
-        if let Ok(bencode) = Element::from_bytes(&buf) {
-            if let Element::Dictionary(root) = bencode {
-                let mut trackers = BTreeSet::new();
-                for (key, value) in root {
-                    match (key, value) {
-                        (Element::ByteString(key), Element::List(value))
-                            if key == TRACKERS_KEY.as_bytes() =>
-                        {
-                            trackers.extend(value.into_iter().filter_map(
-                                |tracker| match tracker {
-                                    Element::ByteString(tracker) => String::from_utf8(tracker).ok(),
-                                    _ => None,
-                                },
-                            ));
-                        }
-                        _ => (),
-                    }
-                }
-                Ok(Self { trackers })
-            } else {
-                Err(io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))
-            }
-        } else {
-            Ok(serde_json::from_slice(&buf)?)
-        }
-    }
-}
-
+/// Read tracker addresses from the trackers file (JSON).
 pub fn load_trackers(
     config_dir: impl AsRef<Path>,
 ) -> io::Result<impl ExactSizeIterator<Item = String>> {
-    let Trackers { trackers } = Trackers::from_file(config_dir.as_ref().join(FILENAME))?;
+    let file = fs::File::open(config_dir.as_ref().join(FILENAME))?;
+    let Trackers { trackers } = serde_json::from_reader(io::BufReader::new(file))?;
     Ok(trackers.into_iter())
 }
 
+/// Write tracker addresses to the trackers file (JSON).
+/// If the file already exists, the new trackers will be appended.
 pub fn save_trackers<T: Into<String>>(
     config_dir: impl AsRef<Path>,
     trackers: impl IntoIterator<Item = T>,
 ) -> io::Result<()> {
-    let config_path = config_dir.as_ref().join(FILENAME);
-    let mut saved_trackers = Trackers::from_file(&config_path).unwrap_or_default();
+    // r+w mode, open existing or create new
+    let mut file = fs::File::options()
+        .write(true)
+        .read(true)
+        .create(true)
+        .truncate(false)
+        .append(false)
+        .open(config_dir.as_ref().join(FILENAME))?;
+
+    // parse existing content
+    let mut saved_trackers: Trackers =
+        serde_json::from_reader(io::BufReader::new(&file)).unwrap_or_default();
+
+    // append new trackers
     saved_trackers.trackers.extend(trackers.into_iter().map(Into::into));
 
-    let json_bytes = serde_json::to_vec_pretty(&saved_trackers)?;
-    fs::write(config_path, json_bytes)?;
+    // overwrite the file
+    file.seek(io::SeekFrom::Start(0))?;
+    serde_json::to_writer_pretty(io::BufWriter::new(&file), &saved_trackers)?;
     Ok(())
 }
 
+/// Read the bencoded progress file, and get the state of `info_hash`.
 pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
     let buf = fs::read(config_dir.as_ref().join(FILENAME))?;
     let bencode = Element::from_bytes(&buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
 
-    if let Element::Dictionary(mut root) = bencode {
-        let key = Element::ByteString(info_hash.into());
-        if let Some(Element::ByteString(bitfield)) = root.remove(&key) {
-            Ok(Bitfield::from_vec(bitfield))
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "info hash not found"))
-        }
+    let Element::Dictionary(mut root) = bencode else {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected bencoded structure"));
+    };
+    let key = Element::ByteString(info_hash.into());
+    if let Some(Element::ByteString(bitfield)) = root.remove(&key) {
+        Ok(Bitfield::from_vec(bitfield))
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected bencoded structure"))
+        Err(io::Error::new(io::ErrorKind::NotFound, "info hash not found"))
     }
 }
 
+/// Write the state of `info_hash` to the bencoded progress file.
 pub fn save_state(
     config_dir: impl AsRef<Path>,
     info_hash: &[u8; 20],
@@ -115,8 +101,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_write_and_read_config_for_single_torrent() {
-        let dir = "test_write_and_read_config_for_single_torrent";
+    fn test_write_and_read_state_for_single_torrent() {
+        let dir = "test_write_and_read_state_for_single_torrent";
         fs::create_dir_all(dir).unwrap();
 
         let info_hash = [b'a'; 20];
@@ -138,12 +124,17 @@ mod tests {
     }
 
     #[test]
-    fn test_read_bencoded_trackers() {
-        let dir = "test_read_bencoded_trackers";
+    fn test_read_trackers() {
+        let dir = "test_read_trackers";
         fs::create_dir_all(dir).unwrap();
         fs::write(
             Path::new(dir).join(FILENAME),
-            b"d8:trackersl19:http://tracker1.com19:http://tracker2.comee",
+            r#"{
+                "trackers": [
+                    "http://tracker1.com",
+                    "http://tracker2.com"
+                ]
+            }"#,
         )
         .unwrap();
 
@@ -160,8 +151,8 @@ mod tests {
     }
 
     #[test]
-    fn test_write_json_trackers() {
-        let dir = "test_write_json_trackers";
+    fn test_write_trackers() {
+        let dir = "test_write_trackers";
         fs::create_dir_all(dir).unwrap();
 
         save_trackers(dir, ["http://tracker1.com", "http://tracker2.com"]).unwrap();
