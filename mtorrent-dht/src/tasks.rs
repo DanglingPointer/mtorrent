@@ -1,17 +1,17 @@
 use super::U160;
+use super::error::Error;
 use super::msgs::*;
-use super::processor::BoxRoutingTable;
 use super::queries::Client;
+use crate::kademlia::Node;
 use local_async_utils::prelude::*;
-use mtorrent_utils::connctrl::{ConnectPermit, QuickConnectControl};
-use mtorrent_utils::trace_stopwatch;
-use std::io;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::{select, task, time};
+use tokio_util::sync::CancellationToken;
 
 const PING_INTERVAL: Duration = min!(5);
 const GET_PEERS_INTERVAL: Duration = sec!(30);
@@ -22,191 +22,241 @@ macro_rules! is_valid_addr {
     };
 }
 
-pub(super) struct PingCtx {
-    pub(super) nodes: LocalShared<BoxRoutingTable>,
-    pub(super) client: Client,
-    pub(super) shutdown_signal: Rc<Notify>,
+// --------------------
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub enum NodeEvent {
+    Discovered(Node),
+    Connected(Node),
+    Disconnected(Node),
+    Unreachable(SocketAddr),
 }
 
-pub(super) fn launch_periodic_ping(
-    addr: SocketAddr,
-    permit: ConnectPermit<PingCtx>,
-    cnt_ctrl: QuickConnectControl<PingCtx>,
-) {
-    let shutdown_signal = permit.shutdown_signal.clone();
-    task::spawn_local(async move {
-        select! {
-            biased;
-            _ = periodic_ping(addr, permit, cnt_ctrl) => (),
-            _ = shutdown_signal.notified() => (),
-        }
-    });
+pub struct Ctx {
+    pub client: Client,
+    pub event_reporter: mpsc::Sender<NodeEvent>,
+    pub local_id: U160,
 }
 
-async fn periodic_ping(
-    addr: SocketAddr,
-    permit: ConnectPermit<PingCtx>,
-    cnt_ctrl: QuickConnectControl<PingCtx>,
-) -> io::Result<()> {
-    let mut rt = permit.nodes.clone();
-    define!(with_rt, rt);
-
-    let local_id = with_rt!(|rt| *rt.local_id());
-
-    // query nodes close to local ID
-    let response = permit
+pub async fn probe_node(addr: SocketAddr, ctx: Rc<Ctx>) -> Result<()> {
+    let response = match ctx
         .client
         .find_node(
             addr,
             FindNodeArgs {
-                id: local_id,
-                target: local_id,
+                id: ctx.local_id,
+                target: ctx.local_id,
             },
         )
-        .await?;
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            ctx.event_reporter.send(NodeEvent::Unreachable(addr)).await?;
+            return Err(e);
+        }
+    };
 
-    let mut id = response.id;
-
-    // process response
     for (node_id, node_addr) in response.nodes {
-        if is_valid_addr!(node_addr)
-            && node_id != local_id
-            && node_id != id
-            && with_rt!(|rt| rt.can_insert(&node_id))
-        {
-            let node_addr = SocketAddr::V4(node_addr);
-            if let Some(permit) = cnt_ctrl.try_acquire_permit(node_addr) {
-                launch_periodic_ping(node_addr, permit, cnt_ctrl.clone());
-            }
+        if is_valid_addr!(node_addr) && node_id != ctx.local_id && node_id != response.id {
+            ctx.event_reporter
+                .send(NodeEvent::Discovered(Node {
+                    id: node_id,
+                    addr: SocketAddr::V4(node_addr),
+                }))
+                .await?;
         }
     }
 
-    // check if we should ignore this node
-    if !with_rt!(|routing| routing.insert_node(&id, &addr)) {
-        // no capacity in the routing table
-        return Ok(());
-    }
-
-    log::debug!(
-        "Periodic ping of {addr} starting; node_count = {}",
-        with_rt!(|routing| routing.iter().count())
-    );
-
-    let _sw = trace_stopwatch!("Periodic ping of {addr}");
-    while with_rt!(|rt| rt.get_node(&id).is_some()) {
-        // send periodic ping
-        let response =
-            permit.client.ping(addr, PingArgs { id: local_id }).await.inspect_err(|_e| {
-                with_rt!(|routing| routing.remove_node(&id));
-            })?;
-        // handle change of id
-        if response.id != id {
-            let inserted_new_id = with_rt!(|routing| {
-                routing.remove_node(&id);
-                routing.insert_node(&response.id, &addr)
-            });
-            if !inserted_new_id {
-                break;
-            }
-            id = response.id;
-        }
-        // sleep until next ping time
-        time::sleep(PING_INTERVAL + sec!(rand::random::<u64>() % 10)).await;
-    }
+    ctx.event_reporter
+        .send(NodeEvent::Connected(Node {
+            id: response.id,
+            addr,
+        }))
+        .await?;
     Ok(())
 }
 
-pub(super) struct SearchCtx {
-    pub(super) target: U160,
-    pub(super) local_peer_port: u16,
-    pub(super) cmd_result_sender: mpsc::Sender<SocketAddr>,
-    pub(super) peer_sender: local_channel::Sender<(SocketAddr, U160)>,
-    pub(super) cnt_ctrl: QuickConnectControl<PingCtx>,
-    pub(super) queried_nodes: sealed::Set<SocketAddr>,
-    pub(super) discovered_peers: sealed::Set<SocketAddr>,
-}
-
-pub(super) fn launch_peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr, depth: usize) {
-    if ctx.queried_nodes.insert(addr) && !ctx.cmd_result_sender.is_closed() {
-        let shutdown_signal = ctx.cnt_ctrl.data().shutdown_signal.clone();
-        task::spawn_local(async move {
-            select! {
-                biased;
-                _ = peer_search(ctx, addr, depth) => (),
-                _ = shutdown_signal.notified() => (),
+pub async fn keep_alive_node(node: Node, ctx: Rc<Ctx>) -> Result<()> {
+    loop {
+        let response = match ctx.client.ping(node.addr, PingArgs { id: ctx.local_id }).await {
+            Ok(response) => response,
+            Err(e) => {
+                ctx.event_reporter.send(NodeEvent::Disconnected(node)).await?;
+                return Err(e);
             }
-        });
+        };
+
+        if response.id != node.id {
+            let addr = node.addr;
+            ctx.event_reporter.send(NodeEvent::Disconnected(node)).await?;
+            ctx.event_reporter
+                .send(NodeEvent::Discovered(Node {
+                    id: response.id,
+                    addr,
+                }))
+                .await?;
+            return Ok(());
+        }
+
+        // sleep until next ping time
+        time::sleep(PING_INTERVAL + sec!(rand::random::<u64>() % 10)).await;
     }
 }
 
-async fn peer_search(ctx: Rc<SearchCtx>, addr: SocketAddr, depth: usize) -> io::Result<()> {
-    let mut rt = ctx.cnt_ctrl.data().nodes.clone();
-    define!(with_rt, rt);
+// --------------------
 
-    let local_id = with_rt!(|rt| *rt.local_id());
-    let client = &ctx.cnt_ctrl.data().client;
+pub struct SearchTask {
+    target: U160,
+    local_peer_port: u16,
+    ctx: Rc<Ctx>,
 
+    cmd_result_sender: mpsc::Sender<SocketAddr>,
+    peer_sender: local_channel::Sender<(SocketAddr, U160)>,
+}
+
+impl SearchTask {
+    pub fn new(
+        target: U160,
+        local_peer_port: u16,
+        ctx: Rc<Ctx>,
+        cmd_result_sender: mpsc::Sender<SocketAddr>,
+        peer_sender: local_channel::Sender<(SocketAddr, U160)>,
+    ) -> Self {
+        Self {
+            target,
+            local_peer_port,
+            ctx,
+            cmd_result_sender,
+            peer_sender,
+        }
+    }
+
+    pub async fn run(
+        self,
+        initial_nodes: impl ExactSizeIterator<Item = Node>,
+        canceller: CancellationToken,
+    ) -> Result<()> {
+        if initial_nodes.len() == 0 {
+            return Err(Error::ChannelClosed);
+        }
+
+        let (peer_sender, mut peer_receiver) = mpsc::channel(1024);
+        let (node_sender, mut node_receiver) = mpsc::channel(1024);
+
+        for node in initial_nodes {
+            _ = node_sender.try_send(node);
+        }
+
+        let mut queried_nodes = HashSet::new();
+        let mut discovered_peers = HashSet::new();
+
+        loop {
+            select! {
+                biased;
+                _ = self.cmd_result_sender.closed() => {
+                    break;
+                }
+                _ = canceller.cancelled() => {
+                    break;
+                }
+                Some(peer) = peer_receiver.recv() => {
+                    if discovered_peers.insert(peer) {
+                        self.peer_sender.send((peer, self.target));
+                        self.cmd_result_sender.send(peer).await?;
+                    }
+                }
+                Some(node) = node_receiver.recv() => {
+                    if queried_nodes.insert(node.clone()) {
+                        task::spawn_local(canceller.clone().run_until_cancelled_owned(
+                            search_peers(
+                                node,
+                                self.target,
+                                self.local_peer_port,
+                                self.ctx.clone(),
+                                node_sender.clone(),
+                                peer_sender.clone(),
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub async fn search_peers(
+    node: Node,
+    target: U160,
+    local_peer_port: u16,
+    ctx: Rc<Ctx>,
+    node_reporter: mpsc::Sender<Node>,
+    peer_reporter: mpsc::Sender<SocketAddr>,
+) -> Result<()> {
     macro_rules! announce_peer {
         ($token:expr) => {
-            if let Some(token) = $token {
-                let _ = client
-                    .announce_peer(
-                        addr,
-                        AnnouncePeerArgs {
-                            id: local_id,
-                            info_hash: ctx.target,
-                            port: Some(ctx.local_peer_port),
-                            token,
-                        },
-                    )
-                    .await?;
-            }
+            ctx.client.announce_peer(
+                node.addr,
+                AnnouncePeerArgs {
+                    id: ctx.local_id,
+                    info_hash: target,
+                    port: Some(local_peer_port),
+                    token: $token,
+                },
+            )
         };
     }
 
-    while !ctx.cmd_result_sender.is_closed() {
-        let response = client
+    while !node_reporter.is_closed() && !peer_reporter.is_closed() {
+        let response = ctx
+            .client
             .get_peers(
-                addr,
+                node.addr,
                 GetPeersArgs {
-                    id: local_id,
-                    info_hash: ctx.target,
+                    id: ctx.local_id,
+                    info_hash: target,
                 },
             )
             .await?;
 
         match response.data {
             GetPeersResponseData::Nodes(id_addr_pairs) => {
-                log::debug!("search produced {} nodes", id_addr_pairs.len());
-                // spawn search tasks for the returned nodes
-                for addr in id_addr_pairs.into_iter().map(|(_id, ipv4)| SocketAddr::V4(ipv4)) {
+                log::trace!("search produced {} nodes", id_addr_pairs.len());
+
+                for (id, addr) in id_addr_pairs {
                     if is_valid_addr!(addr) {
-                        launch_peer_search(ctx.clone(), addr, depth + 1);
+                        node_reporter
+                            .send(Node {
+                                id,
+                                addr: SocketAddr::V4(addr),
+                            })
+                            .await?;
                     }
                 }
-                announce_peer!(response.token);
+                if let Some(token) = response.token {
+                    announce_peer!(token).await?;
+                }
                 break;
             }
             GetPeersResponseData::Peers(socket_addr_v4s) => {
-                log::debug!("search produced {} peer(s) (depth={depth})", socket_addr_v4s.len());
+                log::debug!("search produced {} peer(s)", socket_addr_v4s.len());
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
-                // report the received peer addresses
+
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
-                    if is_valid_addr!(peer_addr) && ctx.discovered_peers.insert(peer_addr) {
-                        ctx.peer_sender.send((peer_addr, ctx.target));
-                        let _ = ctx.cmd_result_sender.send(peer_addr).await;
+                    if is_valid_addr!(peer_addr) {
+                        peer_reporter.send(peer_addr).await?;
                     }
                 }
-                announce_peer!(response.token);
+                if let Some(token) = response.token {
+                    announce_peer!(token).await?;
+                }
                 time::sleep_until(repeat_at).await;
             }
         }
     }
-    // try insert in the routing table and start periodic ping unless already in progress
-    if let Some(permit) = ctx.cnt_ctrl.try_acquire_permit(addr) {
-        let ping_fut = periodic_ping(addr, permit, ctx.cnt_ctrl.clone());
-        drop(ctx); // so that `cmd_result_sender` is closed when the search has finished
-        ping_fut.await?;
-    }
+    ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
     Ok(())
 }

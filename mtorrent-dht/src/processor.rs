@@ -6,72 +6,67 @@ use super::queries::{self, IncomingQuery};
 use super::tasks::*;
 use super::u160::U160;
 use crate::Config;
+use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use mtorrent_utils::connctrl::ConnectControl;
 use mtorrent_utils::warn_stopwatch;
+use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::rc::Rc;
-use tokio::sync::Notify;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio::{select, time};
-
-macro_rules! define {
-    ($name:ident, $handle:expr) => {
-        macro_rules! $name {
-            ($f:expr) => {
-                $handle.with(
-                    #[inline(always)]
-                    $f,
-                )
-            };
-        }
-    };
-}
+use tokio::{select, task};
+use tokio_util::sync::CancellationToken;
 
 type RoutingTable = kademlia::RoutingTable<16>;
 pub(super) type BoxRoutingTable = Box<RoutingTable>;
 
 pub struct Processor {
-    nodes: LocalShared<BoxRoutingTable>,
+    node_table: BoxRoutingTable,
     peers: PeerTable,
     token_mgr: TokenManager,
+    known_nodes: HashSet<SocketAddr>,
+    task_ctx: Rc<Ctx>,
+
     peer_sender: local_channel::Sender<(SocketAddr, U160)>,
     peer_receiver: local_channel::Receiver<(SocketAddr, U160)>,
-    _client: queries::Client,
-    shutdown_signal: Rc<Notify>,
-    cnt_ctrl: ConnectControl<PingCtx>,
+    node_event_receiver: mpsc::Receiver<NodeEvent>,
+
     config: Config,
     config_dir: PathBuf,
+    canceller: CancellationToken,
 }
 
 impl Processor {
     pub fn new(config_dir: PathBuf, client: queries::Client) -> Self {
+        let (peer_sender, peer_receiver) = local_channel::channel();
+        let (node_event_sender, node_event_receiver) = mpsc::channel(1024);
+
         let config = Config::load(&config_dir).unwrap_or_else(|e| {
             log::info!("Failed to load config ({e}), using defaults");
             Config::default()
         });
-        let nodes = LocalShared::new(RoutingTable::new_boxed(config.local_id));
-        let shutdown_signal = Rc::new(Notify::const_new());
-        let ctx = PingCtx {
-            nodes: nodes.clone(),
+        let node_ctx = Rc::new(Ctx {
             client: client.clone(),
-            shutdown_signal: shutdown_signal.clone(),
-        };
-        let (peer_sender, peer_receiver) = local_channel::channel();
+            event_reporter: node_event_sender,
+            local_id: config.local_id,
+        });
+        let node_table = RoutingTable::new_boxed(config.local_id);
+
         Self {
-            nodes,
             peers: PeerTable::new(),
             token_mgr: TokenManager::new(),
             peer_sender,
             peer_receiver,
-            _client: client,
-            shutdown_signal,
-            cnt_ctrl: ConnectControl::new(usize::MAX, ctx),
             config,
             config_dir,
+            task_ctx: node_ctx,
+            node_event_receiver,
+            node_table,
+            known_nodes: HashSet::with_capacity(512),
+            canceller: CancellationToken::new(),
         }
     }
 
@@ -91,28 +86,28 @@ impl Processor {
         // do bootstrapping for the next 10 sec
         if !bootstrapping_nodes.is_empty() {
             log::debug!("Starting bootstrapping");
-            let deadline = Instant::now() + sec!(10);
 
-            for addr in &bootstrapping_nodes {
-                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(*addr) {
-                    launch_periodic_ping(*addr, permit, self.cnt_ctrl.split_off());
+            for addr in bootstrapping_nodes {
+                if self.known_nodes.insert(addr) {
+                    task::spawn_local(
+                        self.canceller
+                            .clone()
+                            .run_until_cancelled_owned(probe_node(addr, self.task_ctx.clone())),
+                    );
                 }
             }
-
-            let _ = time::timeout_at(deadline, async {
-                while let Some(incoming_query) = queries.0.next().await {
-                    self.handle_query(incoming_query);
-                }
-            })
-            .await;
         }
 
-        // now we can handle commands
+        let start = Instant::now();
         loop {
             select! {
                 biased;
-                cmd = commands.next() => match cmd {
+                cmd = commands.next(), if start.elapsed() > sec!(10) => match cmd {
                     Some(cmd) => self.handle_command(cmd),
+                    None => break,
+                },
+                event = self.node_event_receiver.recv() => match event {
+                    Some(event) => self.handle_node_event(event),
                     None => break,
                 },
                 query = queries.0.next() => match query {
@@ -127,24 +122,143 @@ impl Processor {
         }
     }
 
+    fn handle_node_event(&mut self, event: NodeEvent) {
+        match event {
+            NodeEvent::Discovered(node) => {
+                if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
+                    task::spawn_local(
+                        self.canceller.clone().run_until_cancelled_owned(probe_node(
+                            node.addr,
+                            self.task_ctx.clone(),
+                        )),
+                    );
+                }
+            }
+            NodeEvent::Connected(node) => {
+                if self.node_table.insert_node(&node.id, &node.addr) {
+                    task::spawn_local(
+                        self.canceller.clone().run_until_cancelled_owned(keep_alive_node(
+                            node,
+                            self.task_ctx.clone(),
+                        )),
+                    );
+                } else {
+                    self.known_nodes.remove(&node.addr);
+                }
+            }
+            NodeEvent::Disconnected(node) => {
+                self.known_nodes.remove(&node.addr);
+                self.node_table.remove_node(&node.id);
+            }
+            NodeEvent::Unreachable(addr) => {
+                self.known_nodes.remove(&addr);
+            }
+        }
+    }
+
     fn handle_query(&mut self, query: IncomingQuery) {
-        define!(with_ctx, self.nodes);
+        let node = Node {
+            id: *query.node_id(),
+            addr: *query.source_addr(),
+        };
 
-        let addr = *query.source_addr();
-        with_ctx!(|rt| respond_to_incoming_query(rt, &mut self.peers, &mut self.token_mgr, query));
+        let result = match query {
+            IncomingQuery::Ping(ping) => ping.respond(PingResponse {
+                id: self.task_ctx.local_id,
+            }),
+            IncomingQuery::FindNode(find_node) => {
+                let mut nodes: Vec<_> = self
+                    .node_table
+                    .get_closest_nodes(&find_node.args().target, 8)
+                    .filter_map(|node| match node.addr {
+                        SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
+                        SocketAddr::V6(_) => None,
+                    })
+                    .take(8)
+                    .collect();
+                if let Some(&exact_match) =
+                    nodes.iter().find(|(id, _)| *id == find_node.args().target)
+                {
+                    nodes.clear();
+                    nodes.push(exact_match);
+                }
+                find_node.respond(FindNodeResponse {
+                    id: self.task_ctx.local_id,
+                    nodes,
+                })
+            }
+            IncomingQuery::GetPeers(get_peers) => {
+                let token = self.token_mgr.generate_token_for(get_peers.source_addr());
+                let peer_addrs: Vec<_> = self
+                    .peers
+                    .get_ipv4_peers(get_peers.args().info_hash)
+                    .take(128) // apprx to fit MTU
+                    .cloned()
+                    .collect();
+                let response_data = if !peer_addrs.is_empty() {
+                    GetPeersResponseData::Peers(peer_addrs)
+                } else {
+                    GetPeersResponseData::Nodes(
+                        self.node_table
+                            .get_closest_nodes(&get_peers.args().info_hash, 8)
+                            .filter_map(|node| match node.addr {
+                                SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
+                                SocketAddr::V6(_) => None,
+                            })
+                            .take(8)
+                            .collect(),
+                    )
+                };
+                get_peers.respond(GetPeersResponse {
+                    id: self.task_ctx.local_id,
+                    token: Some(token),
+                    data: response_data,
+                })
+            }
+            IncomingQuery::AnnouncePeer(announce_peer) => {
+                if !self
+                    .token_mgr
+                    .validate_token_from(announce_peer.source_addr(), &announce_peer.args().token)
+                {
+                    announce_peer.respond_error(ErrorMsg {
+                        error_code: ErrorCode::Generic,
+                        error_msg: "Invalid token".to_owned(),
+                    })
+                } else {
+                    let mut peer_addr = *announce_peer.source_addr();
+                    if let Some(port) = announce_peer.args().port {
+                        peer_addr.set_port(port);
+                    }
+                    self.peers.add_record(announce_peer.args().info_hash, peer_addr);
+                    announce_peer.respond(AnnouncePeerResponse {
+                        id: self.task_ctx.local_id,
+                    })
+                }
+            }
+        };
+        if let Err(e) = result {
+            log::warn!("Failed to respond to query: {e}");
+        }
 
-        if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
-            launch_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
+        if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
+            task::spawn_local(
+                self.canceller
+                    .clone()
+                    .run_until_cancelled_owned(probe_node(node.addr, self.task_ctx.clone())),
+            );
         }
     }
 
     fn handle_command(&mut self, cmd: Command) {
-        define!(with_rt, self.nodes);
         log::info!("Processing command: {cmd:?}");
         match cmd {
             Command::AddNode { addr } => {
-                if let Some(permit) = self.cnt_ctrl.try_acquire_permit(addr) {
-                    launch_periodic_ping(addr, permit, self.cnt_ctrl.split_off());
+                if self.known_nodes.insert(addr) {
+                    task::spawn_local(
+                        self.canceller
+                            .clone()
+                            .run_until_cancelled_owned(probe_node(addr, self.task_ctx.clone())),
+                    );
                 }
             }
             Command::FindPeers {
@@ -156,27 +270,26 @@ impl Processor {
                     .peers
                     .get_peers(info_hash)
                     .try_for_each(|addr| callback.try_send(*addr))
-                    .is_ok()
+                    .is_err()
                 {
-                    let ctx = Rc::new(SearchCtx {
-                        target: info_hash,
-                        local_peer_port,
-                        cmd_result_sender: callback,
-                        peer_sender: self.peer_sender.clone(),
-                        cnt_ctrl: self.cnt_ctrl.split_off(),
-                        queried_nodes: sealed::Set::new(),
-                        discovered_peers: sealed::Set::new(),
-                    });
-                    let closest_nodes: Vec<_> = with_rt!(|rt| rt
-                        .get_closest_nodes(&info_hash, RoutingTable::BUCKET_SIZE * 3)
-                        .map(|node| node.addr)
-                        .collect());
-                    for node_addr in closest_nodes {
-                        launch_peer_search(ctx.clone(), node_addr, 0);
-                    }
-                } else {
                     log::warn!("Not starting search as callback channel is closed");
+                    return;
                 }
+                let search = SearchTask::new(
+                    info_hash,
+                    local_peer_port,
+                    self.task_ctx.clone(),
+                    callback,
+                    self.peer_sender.clone(),
+                );
+                let initial_nodes: Vec<Node> = self
+                    .node_table
+                    .get_closest_nodes(&info_hash, RoutingTable::BUCKET_SIZE * 3)
+                    .cloned()
+                    .collect();
+                task::spawn_local(
+                    search.run(initial_nodes.into_iter(), self.canceller.child_token()),
+                );
             }
         }
     }
@@ -185,7 +298,7 @@ impl Processor {
 impl Drop for Processor {
     fn drop(&mut self) {
         let connected_nodes: Vec<String> =
-            self.nodes.with(|rt| rt.iter().map(|node| node.addr.to_string()).collect());
+            self.node_table.iter().map(|node| node.addr.to_string()).collect();
 
         log::info!("Processor shutting down, node_count = {}", connected_nodes.len());
 
@@ -197,82 +310,6 @@ impl Drop for Processor {
             log::error!("Failed to save config: {e}");
         }
 
-        self.shutdown_signal.notify_waiters();
-    }
-}
-
-fn respond_to_incoming_query(
-    rt: &BoxRoutingTable,
-    peers: &mut PeerTable,
-    token_mgr: &mut TokenManager,
-    query: IncomingQuery,
-) {
-    let result = match query {
-        IncomingQuery::Ping(ping) => ping.respond(PingResponse { id: *rt.local_id() }),
-        IncomingQuery::FindNode(find_node) => {
-            let mut nodes: Vec<_> = rt
-                .get_closest_nodes(&find_node.args().target, 8)
-                .filter_map(|node| match node.addr {
-                    SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
-                    SocketAddr::V6(_) => None,
-                })
-                .take(8)
-                .collect();
-            if let Some(&exact_match) = nodes.iter().find(|(id, _)| *id == find_node.args().target)
-            {
-                nodes.clear();
-                nodes.push(exact_match);
-            }
-            find_node.respond(FindNodeResponse {
-                id: *rt.local_id(),
-                nodes,
-            })
-        }
-        IncomingQuery::GetPeers(get_peers) => {
-            let token = token_mgr.generate_token_for(get_peers.source_addr());
-            let peer_addrs: Vec<_> = peers
-                .get_ipv4_peers(get_peers.args().info_hash)
-                .take(128) // apprx to fit MTU
-                .cloned()
-                .collect();
-            let response_data = if !peer_addrs.is_empty() {
-                GetPeersResponseData::Peers(peer_addrs)
-            } else {
-                GetPeersResponseData::Nodes(
-                    rt.get_closest_nodes(&get_peers.args().info_hash, 8)
-                        .filter_map(|node| match node.addr {
-                            SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
-                            SocketAddr::V6(_) => None,
-                        })
-                        .take(8)
-                        .collect(),
-                )
-            };
-            get_peers.respond(GetPeersResponse {
-                id: *rt.local_id(),
-                token: Some(token),
-                data: response_data,
-            })
-        }
-        IncomingQuery::AnnouncePeer(announce_peer) => {
-            if !token_mgr
-                .validate_token_from(announce_peer.source_addr(), &announce_peer.args().token)
-            {
-                announce_peer.respond_error(ErrorMsg {
-                    error_code: ErrorCode::Generic,
-                    error_msg: "Invalid token".to_owned(),
-                })
-            } else {
-                let mut peer_addr = *announce_peer.source_addr();
-                if let Some(port) = announce_peer.args().port {
-                    peer_addr.set_port(port);
-                }
-                peers.add_record(announce_peer.args().info_hash, peer_addr);
-                announce_peer.respond(AnnouncePeerResponse { id: *rt.local_id() })
-            }
-        }
-    };
-    if let Err(e) = result {
-        log::warn!("Failed to respond to query: {e}");
+        self.canceller.cancel();
     }
 }

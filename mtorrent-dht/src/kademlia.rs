@@ -7,7 +7,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::{array, cmp, fmt};
 
-#[derive(Display, Debug)]
+#[derive(Display, Debug, PartialEq, Eq, Hash, Clone)]
 #[display("({id} {addr})")]
 #[debug("{self}")]
 pub struct Node {
@@ -91,6 +91,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         .expect("failed to allocate RoutingTable")
     }
 
+    #[expect(dead_code)]
     pub fn local_id(&self) -> &U160 {
         &self.local_id
     }
@@ -120,11 +121,13 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         let U160(distance) = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {
             self.buckets[bucket_index].has_space()
+                && !self.buckets[bucket_index].iter().any(|node| node.id == *id)
         } else {
             false
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn get_node(&self, id: &U160) -> Option<&Node> {
         let U160(distance) = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {

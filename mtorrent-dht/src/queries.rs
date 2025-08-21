@@ -221,7 +221,6 @@ impl IncomingQuery {
         }
     }
 
-    #[expect(dead_code)]
     pub(super) fn node_id(&self) -> &U160 {
         match self {
             IncomingQuery::Ping(q) => &q.args().id,
