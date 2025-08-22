@@ -91,7 +91,8 @@ impl Client {
 /// Server for receiving incoming queries from different nodes.
 pub struct Server(pub(super) local_channel::Receiver<IncomingQuery>);
 
-/// Actor that routes queries between app layer and network layer.
+/// Actor that routes queries between app layer and network layer,
+/// performs retries and matches requests and responses.
 pub struct Runner {
     queries: QueryManager,
     outgoing_queries_source: local_channel::Receiver<OutgoingQuery>,

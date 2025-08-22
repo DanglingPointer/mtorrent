@@ -57,7 +57,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
-    - uses: cargo-bins/cargo-binstall@main
-    - run: cargo binstall cargo-nextest --secure -y
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest
     - run: cargo nextest run --no-run
     - run: cargo nextest run --all-targets --all-features --failure-output=immediate-final
