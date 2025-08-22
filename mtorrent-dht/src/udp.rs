@@ -98,7 +98,7 @@ impl<'s> Future for Ingress<'s> {
                 .inspect_err(|e| log::error!("Failed to receive UDP packet: {e}"))?;
             let message = match parse_msg(buffer.filled()) {
                 Err(e) => {
-                    log::debug!("Failed to parse message from {src_addr}: {e:?}");
+                    log::debug!("Failed to parse message from {src_addr}: {e}");
                     continue;
                 }
                 Ok(msg) => msg,

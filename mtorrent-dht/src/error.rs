@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 pub enum Error {
     #[error("parsing failed ({0})")]
     ParseError(&'static str),
-    #[error(transparent)]
+    #[error("malformed bencode ({0})")]
     BencodeError(#[from] benc::ParseError),
     #[error("error response ({0:?})")]
     ErrorResponse(msgs::ErrorMsg),
@@ -21,6 +21,8 @@ pub enum Error {
     ChannelFull,
     #[error("timeout")]
     Timeout,
+    #[error("no nodes")]
+    NoNodes,
 }
 
 impl From<msgs::ErrorMsg> for Error {
@@ -48,6 +50,7 @@ impl From<Error> for io::Error {
             Error::ChannelClosed => io::ErrorKind::BrokenPipe,
             Error::ChannelFull => io::ErrorKind::WouldBlock,
             Error::Timeout => io::ErrorKind::TimedOut,
+            Error::NoNodes => io::ErrorKind::InvalidInput,
             Error::BencodeError(_) | Error::ParseError(_) | Error::UnexpectedResponseType => {
                 io::ErrorKind::InvalidData
             }

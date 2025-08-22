@@ -139,7 +139,8 @@ impl SearchTask {
         canceller: CancellationToken,
     ) -> Result<()> {
         if initial_nodes.len() == 0 {
-            return Err(Error::ChannelClosed);
+            log::error!("Search can't proceed - no initial nodes");
+            return Err(Error::NoNodes);
         }
 
         let (peer_sender, mut peer_receiver) = mpsc::channel(1024);

@@ -96,11 +96,13 @@ impl fmt::Display for Element {
 #[derive(Debug, Error, Display)]
 pub enum ParseError {
     EmptySource,
-    InvalidPrefix,
+    #[display("invalid prefix ({_0})")]
+    InvalidPrefix(u8),
     NoIntegerPrefix,
     NoIntegerEnd,
     NoStringDelimeter,
-    InvalidStringLength,
+    #[display("invalid string length ({_0})")]
+    InvalidStringLength(usize),
     NoListPrefix,
     NoDictionaryPrefix,
     #[display("{_0}")]
@@ -182,7 +184,7 @@ fn read_element(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
         PREFIX_INTEGER => read_integer(src),
         PREFIX_LIST => read_list(src),
         PREFIX_DICTIONARY => read_dictionary(src),
-        _ => Err(ParseError::InvalidPrefix),
+        prefix => Err(ParseError::InvalidPrefix(prefix)),
     }
 }
 
@@ -214,7 +216,7 @@ fn read_string(src: &[u8]) -> Result<(Element, &[u8]), ParseError> {
     let size_text = str::from_utf8(size_data)?;
     let size = size_text.parse::<usize>()?;
 
-    let data = rest.get(..size).ok_or(ParseError::InvalidStringLength)?;
+    let data = rest.get(..size).ok_or(ParseError::InvalidStringLength(size))?;
     let rest = unsafe { rest.get_unchecked(size..) };
 
     Ok((Element::ByteString(Vec::from(data)), rest))
@@ -343,7 +345,7 @@ mod tests {
 
         let parsed = read_string(&input);
         assert!(parsed.is_err());
-        assert!(matches!(parsed.err().unwrap(), ParseError::InvalidStringLength));
+        assert!(matches!(parsed.err().unwrap(), ParseError::InvalidStringLength(_)));
     }
 
     #[test]

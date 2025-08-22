@@ -96,7 +96,7 @@ fn main() -> io::Result<()> {
 
     if let Some(mut channel) = search_results_channel {
         let discovered_peers: Vec<_> = iter::from_fn(move || channel.try_recv().ok()).collect();
-        log::info!("Discovered peers: {discovered_peers:?}");
+        log::info!("Discovered peers ({}): {discovered_peers:?}", discovered_peers.len());
     }
 
     Ok(())

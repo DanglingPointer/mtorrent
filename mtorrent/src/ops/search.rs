@@ -1,6 +1,7 @@
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_dht as dht;
+use mtorrent_utils::debug_stopwatch;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 
@@ -14,6 +15,7 @@ pub async fn run_dht_search(
     peer_sink: local_channel::Sender<(SocketAddr, PeerOrigin)>,
     pwp_listener_port: u16,
 ) {
+    let _sw = debug_stopwatch!("DHT search operation");
     loop {
         let (sender, mut result_receiver) = mpsc::channel(1024);
         if let Err(e) = dht_cmds
