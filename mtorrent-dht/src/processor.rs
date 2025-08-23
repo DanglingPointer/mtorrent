@@ -10,14 +10,15 @@ use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use mtorrent_utils::warn_stopwatch;
+use mtorrent_utils::{debug_stopwatch, warn_stopwatch};
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::ops::ControlFlow::*;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
-use tokio::{select, task};
+use tokio::{select, task, time};
 use tokio_util::sync::CancellationToken;
 
 type RoutingTable = kademlia::RoutingTable<16>;
@@ -71,6 +72,33 @@ impl Processor {
     }
 
     pub async fn run(mut self, mut queries: queries::Server, mut commands: cmds::Server) {
+        macro_rules! handle_next_event {
+            ($queries:expr $(,$commands:expr)?) => {
+                select! {
+                    biased;
+                    $(cmd = $commands.next() => match cmd {
+                        Some(cmd) => Continue(self.handle_command(cmd)),
+                        None => Break(()),
+                    },)?
+                    event = self.node_event_receiver.recv() => match event {
+                        Some(event) => Continue(self.handle_node_event(event)),
+                        None => Break(()),
+                    },
+                    query = $queries.0.next() => match query {
+                        Some(query) => Continue(self.handle_query(query)),
+                        None => Break(()),
+                    },
+                    peer_target = self.peer_receiver.next() => match peer_target {
+                        Some((peer, target)) => Continue(self.peers.add_record(target, peer)),
+                        None => unreachable!(),
+                    },
+                }
+            };
+        }
+
+        const BOOTSTRAP_TIMEOUT: Duration = sec!(10);
+        const BOOTSTRAP_TARGET: usize = 200;
+
         // do all DNS resolution first because it will block the current thread
         let sw = warn_stopwatch!("DNS resolution of bootstrapping nodes");
         let bootstrapping_nodes: Vec<SocketAddr> = self
@@ -85,7 +113,7 @@ impl Processor {
 
         // do bootstrapping for the next 10 sec
         if !bootstrapping_nodes.is_empty() {
-            log::debug!("Starting bootstrapping");
+            let _sw = debug_stopwatch!("Bootstrapping");
 
             for addr in bootstrapping_nodes {
                 if self.known_nodes.insert(addr) {
@@ -96,30 +124,16 @@ impl Processor {
                     );
                 }
             }
+
+            _ = time::timeout(BOOTSTRAP_TIMEOUT, async {
+                while self.node_table.iter().count() < BOOTSTRAP_TARGET
+                    && handle_next_event!(queries).is_continue()
+                {}
+            })
+            .await;
         }
 
-        let start = Instant::now();
-        loop {
-            select! {
-                biased;
-                cmd = commands.next(), if start.elapsed() > sec!(10) => match cmd {
-                    Some(cmd) => self.handle_command(cmd),
-                    None => break,
-                },
-                event = self.node_event_receiver.recv() => match event {
-                    Some(event) => self.handle_node_event(event),
-                    None => break,
-                },
-                query = queries.0.next() => match query {
-                    Some(query) => self.handle_query(query),
-                    None => break,
-                },
-                peer_target = self.peer_receiver.next() => match peer_target {
-                    Some((peer, target)) => self.peers.add_record(target, peer),
-                    None => unreachable!(),
-                }
-            }
-        }
+        while handle_next_event!(queries, commands).is_continue() {}
     }
 
     fn handle_node_event(&mut self, event: NodeEvent) {
