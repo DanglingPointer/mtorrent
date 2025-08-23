@@ -2,11 +2,11 @@ use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_dht as dht;
 use mtorrent_utils::debug_stopwatch;
-use std::net::SocketAddr;
-use tokio::sync::mpsc;
+use std::{net::SocketAddr, time::Duration};
+use tokio::{select, sync::mpsc, time};
 
 /// Start dht search of `info_hash` and relay results into `peer_sink`.
-/// Repeat search once/if it finishes.
+/// Restart search every minute, exit if the search terminates by itself.
 /// When `peer_sink` no longer has a receiver, this will eventually stop,
 /// but not immmediately after the channel has been closed.
 pub async fn run_dht_search(
@@ -15,12 +15,20 @@ pub async fn run_dht_search(
     peer_sink: local_channel::Sender<(SocketAddr, PeerOrigin)>,
     pwp_listener_port: u16,
 ) {
+    const SEARCH_RESTART_INTERVAL: Duration = sec!(60);
+
     let _sw = debug_stopwatch!("DHT search operation");
-    loop {
+
+    async fn do_search(
+        info_hash: &[u8; 20],
+        dht_cmds: &dht::CmdSender,
+        peer_sink: &local_channel::Sender<(SocketAddr, PeerOrigin)>,
+        pwp_listener_port: u16,
+    ) {
         let (sender, mut result_receiver) = mpsc::channel(1024);
         if let Err(e) = dht_cmds
             .send(dht::Command::FindPeers {
-                info_hash: info_hash.into(),
+                info_hash: dht::U160::from(*info_hash),
                 callback: sender,
                 local_peer_port: pwp_listener_port,
             })
@@ -36,6 +44,13 @@ pub async fn run_dht_search(
             }
             peer_sink.send((peer_addr, PeerOrigin::Dht));
         }
-        log::info!("Restarting DHT search");
+    }
+
+    loop {
+        select! {
+            biased;
+            _ = do_search(&info_hash, &dht_cmds, &peer_sink, pwp_listener_port) => break,
+            _ = time::sleep(SEARCH_RESTART_INTERVAL) => (),
+        }
     }
 }

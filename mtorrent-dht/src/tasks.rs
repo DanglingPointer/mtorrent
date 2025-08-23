@@ -133,6 +133,7 @@ impl SearchTask {
         }
     }
 
+    /// `canceller` must be a child canceller
     pub async fn run(
         self,
         initial_nodes: impl ExactSizeIterator<Item = Node>,
@@ -157,9 +158,15 @@ impl SearchTask {
             select! {
                 biased;
                 _ = self.cmd_result_sender.closed() => {
+                    // this search has been terminated. Stop all subtasks and try insert nodes in the routing table
+                    canceller.cancel();
+                    for node in queried_nodes {
+                        self.ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
+                    }
                     break;
                 }
                 _ = canceller.cancelled() => {
+                    // DHT shutting down
                     break;
                 }
                 Some(peer) = peer_receiver.recv() => {
