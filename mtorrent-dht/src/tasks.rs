@@ -219,7 +219,7 @@ pub async fn search_peers(
     }
 
     while !node_reporter.is_closed() && !peer_reporter.is_closed() {
-        let response = ctx
+        let get_peers_response = ctx
             .client
             .get_peers(
                 node.addr,
@@ -230,7 +230,7 @@ pub async fn search_peers(
             )
             .await?;
 
-        match response.data {
+        match get_peers_response.data {
             GetPeersResponseData::Nodes(id_addr_pairs) => {
                 log::trace!("search produced {} nodes", id_addr_pairs.len());
 
@@ -244,7 +244,7 @@ pub async fn search_peers(
                             .await?;
                     }
                 }
-                if let Some(token) = response.token {
+                if let Some(token) = get_peers_response.token {
                     announce_peer!(token).await?;
                 }
                 break;
@@ -258,9 +258,31 @@ pub async fn search_peers(
                         peer_reporter.send(peer_addr).await?;
                     }
                 }
-                if let Some(token) = response.token {
+                if let Some(token) = get_peers_response.token {
                     announce_peer!(token).await?;
                 }
+
+                let find_nodes_response = ctx
+                    .client
+                    .find_node(
+                        node.addr,
+                        FindNodeArgs {
+                            id: ctx.local_id,
+                            target,
+                        },
+                    )
+                    .await?;
+                for (node_id, node_addr) in find_nodes_response.nodes {
+                    if is_valid_addr!(node_addr) {
+                        node_reporter
+                            .send(Node {
+                                id: node_id,
+                                addr: SocketAddr::V4(node_addr),
+                            })
+                            .await?;
+                    }
+                }
+
                 time::sleep_until(repeat_at).await;
             }
         }
