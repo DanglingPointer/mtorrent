@@ -45,7 +45,7 @@ impl Runner {
         let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
             socket: &self.socket,
-            buffer: [MaybeUninit::uninit(); 1500],
+            buffer: Box::new_uninit_slice(RX_BUFFER_SIZE),
             sink: self.ingress_sender,
         };
         let egress = Egress {
@@ -61,9 +61,12 @@ impl Runner {
     }
 }
 
+// Testing shows that we sometimes receive messages around 32 KiB in size.
+const RX_BUFFER_SIZE: usize = 32 * 1024;
+
 struct Ingress<'s> {
     socket: &'s UdpSocket,
-    buffer: [MaybeUninit<u8>; 1500],
+    buffer: Box<[MaybeUninit<u8>]>,
     sink: mpsc::Sender<(Message, SocketAddr)>,
 }
 
