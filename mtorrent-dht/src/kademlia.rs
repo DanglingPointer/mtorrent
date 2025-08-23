@@ -164,27 +164,27 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         );
 
         let U160(distance) = *target ^ self.local_id;
-        if let Some(initial_index) = distance.first_one() {
-            assert!(initial_index < self.buckets.len());
-            closest_nodes.extend(self.buckets[initial_index].iter());
+        let initial_index = distance.first_one().unwrap_or(BUCKET_COUNT - 1);
 
-            let mut delta = 1;
-            let mut progress_made = true;
-            while closest_nodes.len() < max_count_hint && progress_made {
-                progress_made = false;
+        assert!(initial_index < self.buckets.len());
+        closest_nodes.extend(self.buckets[initial_index].iter());
 
-                if let Some(right_bucket) = self.buckets.get(initial_index + delta) {
-                    progress_made = true;
-                    closest_nodes.extend(right_bucket.iter());
-                }
+        let mut delta = 1;
+        let mut progress_made = true;
+        while closest_nodes.len() < max_count_hint && progress_made {
+            progress_made = false;
 
-                if let Some(left_index) = initial_index.checked_sub(delta) {
-                    progress_made = true;
-                    closest_nodes.extend(self.buckets[left_index].iter());
-                }
-
-                delta += 1;
+            if let Some(right_bucket) = self.buckets.get(initial_index + delta) {
+                progress_made = true;
+                closest_nodes.extend(right_bucket.iter());
             }
+
+            if let Some(left_index) = initial_index.checked_sub(delta) {
+                progress_made = true;
+                closest_nodes.extend(self.buckets[left_index].iter());
+            }
+
+            delta += 1;
         }
 
         closest_nodes.into_iter()
@@ -355,5 +355,24 @@ mod tests {
         let closest_nodes: Vec<U160> =
             rt.get_closest_nodes(&target, 1).map(|node| node.id).collect();
         assert_eq!(closest_nodes, Vec::from([bucket_k_id(42, 3), bucket_k_id(42, 1)]));
+    }
+
+    #[test]
+    fn test_get_closest_nodes_to_local_id() {
+        // given
+        let local_id = U160::from([0b0001_0000; 20]);
+        let mut rt = RoutingTable::new(local_id);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 6666);
+
+        // when
+        assert!(rt.insert_node(&U160::from([0b0001_0001; 20]), &addr));
+        assert!(rt.insert_node(&U160::from([0b0001_0010; 20]), &addr));
+        assert!(rt.insert_node(&U160::from([0b0001_0100; 20]), &addr));
+
+        // then
+        let mut closest_nodes_it = rt.get_closest_nodes(&local_id, usize::MAX).map(|node| node.id);
+        assert_eq!(closest_nodes_it.next(), Some(U160::from([0b0001_0001; 20])));
+        assert_eq!(closest_nodes_it.next(), Some(U160::from([0b0001_0010; 20])));
+        assert_eq!(closest_nodes_it.next(), Some(U160::from([0b0001_0100; 20])));
     }
 }
