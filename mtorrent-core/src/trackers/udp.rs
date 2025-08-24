@@ -1,7 +1,7 @@
-use super::{parse_binary_ipv4_peers, parse_binary_ipv6_peers};
 use bytes::{Buf, BufMut};
 use derive_more::Display;
 use local_async_utils::prelude::*;
+use mtorrent_utils::ip;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::{io, str};
@@ -29,6 +29,7 @@ impl TrackerConnection {
         Ok(conn)
     }
 
+    #[expect(dead_code)]
     pub fn remote_addr(&self) -> &SocketAddr {
         &self.remote_addr
     }
@@ -71,6 +72,7 @@ impl TrackerConnection {
         .await?
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn do_scrape_request(
         &mut self,
         request_data: ScrapeRequest,
@@ -343,6 +345,7 @@ impl TryFrom<&[u8]> for ConnectResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AnnounceResponse {
     pub interval: u32,
@@ -362,8 +365,8 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
             let leechers = src.get_u32();
             let seeders = src.get_u32();
             let ips: Vec<_> = match tracker_ip {
-                IpAddr::V4(_) => parse_binary_ipv4_peers(src).collect(),
-                IpAddr::V6(_) => parse_binary_ipv6_peers(src).collect(),
+                IpAddr::V4(_) => ip::SocketAddrV4BytesIter(src).map(SocketAddr::V4).collect(),
+                IpAddr::V6(_) => ip::SocketAddrV6BytesIter(src).map(SocketAddr::V6).collect(),
             };
             Ok(AnnounceResponse {
                 interval,
@@ -375,6 +378,7 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ScrapeResponseEntry {
     pub seeders: u32,
@@ -382,6 +386,7 @@ pub struct ScrapeResponseEntry {
     pub leechers: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
@@ -421,7 +426,9 @@ impl TryFrom<&[u8]> for ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv6Addr;
+    use crate::trackers::TrackerUrl;
+    use std::net::{Ipv6Addr, SocketAddrV4};
+    use std::{cell::Cell, rc::Rc};
     use tokio::join;
 
     #[test]
@@ -600,5 +607,113 @@ mod tests {
             _ => panic!("Wrong message type"),
         };
         assert_eq!("Invalid", parsed.message);
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_udp_announce() {
+        let udp_tracker_addrs = [
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+        ]
+        .into_iter()
+        .map(|url| match url.parse::<TrackerUrl>() {
+            Ok(TrackerUrl::Udp(url)) => url,
+            _ => panic!("invalid tracker uri"),
+        });
+
+        let local_ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 6666));
+
+        let announce_request = AnnounceRequest {
+            info_hash: [
+                30, 189, 61, 191, 187, 37, 193, 51, 63, 81, 201, 156, 126, 230, 112, 252, 42, 23,
+                39, 201,
+            ],
+            peer_id: [b'm'; 20],
+            downloaded: 0,
+            left: 200,
+            uploaded: 0,
+            event: AnnounceEvent::None,
+            ip: None,
+            key: 0,
+            num_want: Some(5),
+            port: local_ip.port(),
+        };
+
+        for tracker_addr in udp_tracker_addrs {
+            let client_socket = UdpSocket::bind(local_ip).await.unwrap();
+            client_socket
+                .connect(&tracker_addr)
+                .await
+                .unwrap_or_else(|e| panic!("Failed to connect to {}: {}", &tracker_addr, e));
+
+            let mut client = TrackerConnection::from_connected_socket(client_socket).await.unwrap();
+
+            let response = client
+                .do_announce_request(announce_request.clone())
+                .await
+                .unwrap_or_else(|e| panic!("Announce error: {e}"));
+
+            println!("Announce response: {response:?}");
+            assert!(response.interval > 0);
+            assert!(response.leechers > 0 || response.seeders > 0 || response.ips.is_empty());
+        }
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_udp_scrape() {
+        let udp_tracker_addrs = [
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+        ];
+
+        let success_count = Rc::new(Cell::new(0usize));
+        let local_set = tokio::task::LocalSet::new();
+
+        for (i, tracker_addr) in udp_tracker_addrs
+            .iter()
+            .map(|uri| match uri.parse::<TrackerUrl>() {
+                Ok(TrackerUrl::Udp(addr)) => addr,
+                _ => panic!("invalid tracker uri"),
+            })
+            .enumerate()
+        {
+            let success_count = success_count.clone();
+            local_set.spawn_local(async move {
+                let bind_addr =
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 6666 + i as u16));
+                let socket = UdpSocket::bind(bind_addr).await.unwrap();
+                if socket.connect(&tracker_addr).await.is_err() {
+                    return;
+                }
+
+                match tokio::time::timeout(
+                    sec!(10),
+                    TrackerConnection::from_connected_socket(socket),
+                )
+                .await
+                {
+                    Ok(Ok(mut client)) => {
+                        let response = client
+                            .do_scrape_request(ScrapeRequest {
+                                info_hashes: vec![[
+                                    30, 189, 61, 191, 187, 37, 193, 51, 63, 81, 201, 156, 126, 230,
+                                    112, 252, 42, 23, 39, 201,
+                                ]],
+                            })
+                            .await
+                            .unwrap();
+                        println!("Response from {tracker_addr}: {response:?}");
+                        success_count.set(success_count.get() + 1);
+                    }
+                    _ => {
+                        eprintln!("Failed to connect to {tracker_addr}");
+                    }
+                }
+            });
+        }
+        local_set.await;
+        assert!(success_count.get() > 0);
     }
 }

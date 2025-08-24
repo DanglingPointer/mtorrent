@@ -2,7 +2,7 @@ use core::fmt;
 use rand::Rng;
 use std::ops::Deref;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct PeerId([u8; 20]); // immutable wrapper
 
 impl PeerId {

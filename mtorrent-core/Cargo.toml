@@ -19,6 +19,7 @@ futures-channel = { workspace = true }
 futures-util = { workspace = true }
 local_async_utils = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 log = { workspace = true }
 bitvec = { workspace = true }
 derive_more = { workspace = true }
@@ -32,3 +33,4 @@ form_urlencoded = { version = "1.2.1", default-features = false }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+mockito = { workspace = true }

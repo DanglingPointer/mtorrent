@@ -34,6 +34,15 @@ impl FromStr for TrackerUrl {
     }
 }
 
+impl From<TrackerUrl> for String {
+    fn from(url: TrackerUrl) -> Self {
+        match url {
+            TrackerUrl::Http(url) => url,
+            TrackerUrl::Udp(addr) => format!("udp://{addr}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

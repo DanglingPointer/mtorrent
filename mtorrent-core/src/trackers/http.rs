@@ -1,6 +1,5 @@
-use super::{parse_binary_ipv4_peers, parse_binary_ipv6_peers};
 use local_async_utils::prelude::*;
-use mtorrent_utils::benc;
+use mtorrent_utils::{benc, ip};
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -21,7 +20,12 @@ pub enum Error {
 
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
-        io::Error::other(format!("{e}"))
+        match e {
+            Error::Http(e) => io::Error::new(io::ErrorKind::UnexpectedEof, e),
+            Error::Benc(e) => io::Error::new(io::ErrorKind::InvalidData, e),
+            Error::Response(s) => io::Error::other(s),
+            Error::Unsupported => io::Error::from(io::ErrorKind::Unsupported),
+        }
     }
 }
 
@@ -61,6 +65,7 @@ impl TrackerClient {
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn scrape(
         &self,
         request_builder: TrackerRequestBuilder,
@@ -258,7 +263,7 @@ impl AnnounceResponseContent {
                 let mut all_peers = Vec::new();
                 match peers {
                     Some(benc::Element::ByteString(data)) => {
-                        all_peers.extend(parse_binary_ipv4_peers(data));
+                        all_peers.extend(ip::SocketAddrV4BytesIter(data).map(SocketAddr::V4));
                     }
                     Some(benc::Element::List(list)) => {
                         all_peers.extend(dictionary_peers(list));
@@ -266,7 +271,7 @@ impl AnnounceResponseContent {
                     _ => (),
                 }
                 if let Some(benc::Element::ByteString(data)) = ipv6_peers {
-                    all_peers.extend(parse_binary_ipv6_peers(data))
+                    all_peers.extend(ip::SocketAddrV6BytesIter(data).map(SocketAddr::V6))
                 }
                 Some(all_peers)
             }
@@ -346,16 +351,19 @@ mod tests {
 
     #[test]
     fn test_scrape_uri() {
-        let hash =
+        let hash1 =
             b"\x12\x34\x56\x78\x9a\xbc\xde\xf1\x23\x45\x67\x89\xab\xcd\xef\x12\x34\x56\x78\x9a";
+        let hash2 =
+            b"\x12\x34\x56\x78\x9a\xbc\xde\xf1\x23\x45\x67\x89\xab\xcd\xef\x12\x34\x56\x78\x9b";
         let url_base = "http://example.com/announce";
 
         let mut builder = TrackerRequestBuilder::try_from(url_base).unwrap();
-        builder.info_hash(hash);
+        builder.info_hash(hash1);
+        builder.info_hash(hash2);
         let uri = builder.build_scrape();
 
         assert_eq!(
-            "http://example.com/scrape?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A",
+            "http://example.com/scrape?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A&info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9B",
             uri.unwrap().as_str()
         );
     }
@@ -401,5 +409,50 @@ mod tests {
 
         let ipv6 = *peers.iter().find(|addr| addr.is_ipv6()).expect("no ipv6 peer");
         assert_eq!(ipv6, "[6164:6472:6164:6472:6164:6472:6164:6472]:28782".parse().unwrap());
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_https_scrape_and_announce() {
+        let tracker_url = "https://torrent.ubuntu.com/announce";
+        let client = TrackerClient::new().unwrap();
+
+        let request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
+        let response = client.scrape(request).await.unwrap_or_else(|e| panic!("Scrape error: {e}"));
+
+        if let benc::Element::Dictionary(root) = response {
+            for (key, files) in root {
+                if let benc::Element::Dictionary(torrents) = files {
+                    for (info_hash_bytes, info) in torrents {
+                        if let benc::Element::ByteString(info_hash) = info_hash_bytes {
+                            println!("Announce for torrent: {info}");
+                            let mut request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
+                            request
+                                .info_hash(&info_hash)
+                                .peer_id(&[b'm'; 20])
+                                .bytes_left(0)
+                                .bytes_uploaded(0)
+                                .bytes_downloaded(0)
+                                // .compact_support()
+                                .port(6666);
+
+                            let response = client
+                                .announce(request)
+                                .await
+                                .unwrap_or_else(|e| panic!("Announce error: {e}"));
+
+                            let peer_count = response.peers().unwrap().len();
+                            let seeders = response.complete().unwrap();
+                            let leechers = response.incomplete().unwrap();
+                            assert!(peer_count <= seeders + leechers);
+                        }
+                    }
+                } else {
+                    panic!("'{key}' value is not a dictionary");
+                }
+            }
+        } else {
+            panic!("Scrape response is not a dictionary");
+        }
     }
 }

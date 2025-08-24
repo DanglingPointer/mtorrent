@@ -3,6 +3,7 @@ use crate::utils::startup;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_core::trackers;
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{ip, magnet, upnp};
@@ -135,6 +136,9 @@ async fn preliminary_stage(
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
 
+    let (tracker_client, trackers_mgr) = trackers::init();
+    pwp_runtime.spawn(trackers_mgr.run());
+
     let mut tasks = task::JoinSet::new();
 
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
@@ -208,6 +212,7 @@ async fn preliminary_stage(
 
     tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
+        tracker_client,
         PathBuf::from(config_dir.as_ref()),
         peer_discovered_sink,
     ));
@@ -245,6 +250,9 @@ async fn main_stage(
     let (metainfo_storage, metainfo_storage_server) =
         startup::create_metainfo_storage(&metainfo_filepath)?;
     storage_runtime.spawn(metainfo_storage_server.run());
+
+    let (tracker_client, trackers_mgr) = trackers::init();
+    pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
 
@@ -314,6 +322,7 @@ async fn main_stage(
 
     tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
+        tracker_client,
         PathBuf::from(output_dir.as_ref()),
         peer_discovered_sink,
     ));
