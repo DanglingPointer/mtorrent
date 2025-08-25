@@ -236,12 +236,8 @@ impl PeerBuilder {
             local_addr.port(),
         );
 
-        let ctx_handle_clone = ctx_handle.clone();
-        let run_future = async move {
-            let canceller = CancellationToken::new();
-            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle_clone, &canceller)
-                .await
-        };
+        let run_future =
+            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone());
 
         (ctx_handle, Box::pin(run_future))
     }

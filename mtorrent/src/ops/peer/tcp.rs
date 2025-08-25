@@ -55,7 +55,7 @@ pub async fn new_outbound_connection(
     extension_protocol_enabled: bool,
     remote_ip: SocketAddr,
     local_port: u16,
-    pwp_runtime: runtime::Handle,
+    pwp_runtime: &runtime::Handle,
     quick: bool,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
@@ -118,7 +118,7 @@ pub async fn new_inbound_connection(
     extension_protocol_enabled: bool,
     remote_ip: SocketAddr,
     stream: TcpStream,
-    pwp_runtime: runtime::Handle,
+    pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let stream = marshal_stream!(stream, pwp_runtime);
     let (download_chans, upload_chans, extended_chans, runner) =

@@ -224,7 +224,7 @@ pub async fn outgoing_pwp_connection(
             EXTENSION_PROTOCOL_ENABLED,
             remote_ip,
             local_port,
-            permit.0.pwp_worker_handle.clone(),
+            &permit.0.pwp_worker_handle,
             false,
         )
         .await?;
@@ -265,7 +265,7 @@ pub async fn incoming_pwp_connection(
         EXTENSION_PROTOCOL_ENABLED,
         remote_ip,
         stream,
-        permit.0.pwp_worker_handle.clone(),
+        &permit.0.pwp_worker_handle,
     )
     .await?;
 
@@ -301,7 +301,6 @@ async fn run_metadata_download(
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
     mut ctx_handle: PreliminaryHandle,
-    canceller: &CancellationToken,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
 
@@ -345,17 +344,11 @@ async fn run_metadata_download(
         }
         Ok(())
     }
-    canceller
-        .run_until_cancelled(async {
-            try_join!(
-                handle_download(download_chans),
-                handle_upload(upload_chans),
-                handle_metadata(extended_chans, ctx_handle),
-            )
-            .map(|_| ())
-        })
-        .await
-        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
+    try_join!(
+        handle_download(download_chans),
+        handle_upload(upload_chans),
+        handle_metadata(extended_chans, ctx_handle),
+    )?;
     Ok(())
 }
 
@@ -369,7 +362,8 @@ pub async fn outgoing_preliminary_connection(
     remote_ip: SocketAddr,
     permit: OutgoingConnectionPermit<PreliminaryConnectionData>,
 ) -> io::Result<()> {
-    let mut handle = permit.0.ctx_handle.clone();
+    let OutgoingConnectionPermit(permit) = permit;
+    let mut handle = permit.ctx_handle.clone();
     define_with_ctx!(handle);
 
     let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
@@ -378,19 +372,23 @@ pub async fn outgoing_preliminary_connection(
         ctx.const_data.pwp_local_tcp_port(),
     ));
 
-    let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
-        &local_peer_id,
-        &info_hash,
-        true, // extension_protocol_enabled
-        remote_ip,
-        local_port,
-        permit.0.pwp_worker_handle.clone(),
-        true,
-    )
-    .await?;
-
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+    permit
+        .canceller
+        .run_until_cancelled(async {
+            let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
+                &local_peer_id,
+                &info_hash,
+                true, // extension_protocol_enabled
+                remote_ip,
+                local_port,
+                &permit.pwp_worker_handle,
+                true,
+            )
+            .await?;
+            run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+        })
         .await
+        .unwrap_or(Ok(()))
 }
 
 pub async fn incoming_preliminary_connection(
@@ -398,22 +396,27 @@ pub async fn incoming_preliminary_connection(
     remote_ip: SocketAddr,
     permit: IncomingConnectionPermit<PreliminaryConnectionData>,
 ) -> io::Result<()> {
-    let mut handle = permit.0.ctx_handle.clone();
+    let IncomingConnectionPermit(permit) = permit;
+    let mut handle = permit.ctx_handle.clone();
     define_with_ctx!(handle);
 
     let (info_hash, local_peer_id) =
         with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
 
-    let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
-        &local_peer_id,
-        &info_hash,
-        true, // extension_protocol_enabled
-        remote_ip,
-        stream,
-        permit.0.pwp_worker_handle.clone(),
-    )
-    .await?;
-
-    run_metadata_download(download_chans, upload_chans, extended_chans, handle, &permit.0.canceller)
+    permit
+        .canceller
+        .run_until_cancelled(async {
+            let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
+                &local_peer_id,
+                &info_hash,
+                true, // extension_protocol_enabled
+                remote_ip,
+                stream,
+                &permit.pwp_worker_handle,
+            )
+            .await?;
+            run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
+        })
         .await
+        .unwrap_or(Ok(()))
 }

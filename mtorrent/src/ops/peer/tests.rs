@@ -36,7 +36,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
             true,
             remote_ip,
             0u16,
-            runtime::Handle::current(),
+            &runtime::Handle::current(),
             false,
         )
         .await
