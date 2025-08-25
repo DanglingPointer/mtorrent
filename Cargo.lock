@@ -1024,6 +1024,7 @@ dependencies = [
  "mtorrent-utils",
  "rand",
  "reqwest",
+ "serde",
  "sha1_smol",
  "thiserror",
  "tokio",

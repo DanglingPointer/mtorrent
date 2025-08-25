@@ -23,6 +23,7 @@ tokio-util = { workspace = true }
 log = { workspace = true }
 bitvec = { workspace = true }
 derive_more = { workspace = true }
+serde = { workspace = true }
 bytes = { workspace = true }
 sha1_smol = { workspace = true }
 thiserror = { workspace = true }

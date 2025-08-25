@@ -426,7 +426,6 @@ impl TryFrom<&[u8]> for ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trackers::TrackerUrl;
     use std::net::{Ipv6Addr, SocketAddrV4};
     use std::{cell::Cell, rc::Rc};
     use tokio::join;
@@ -612,15 +611,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_udp_announce() {
-        let udp_tracker_addrs = [
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.opentrackr.org:1337/announce",
-        ]
-        .into_iter()
-        .map(|url| match url.parse::<TrackerUrl>() {
-            Ok(TrackerUrl::Udp(url)) => url,
-            _ => panic!("invalid tracker uri"),
-        });
+        let udp_tracker_addrs = ["open.stealth.si:80", "tracker.opentrackr.org:1337"];
 
         let local_ip = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 6666));
 
@@ -663,22 +654,12 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_udp_scrape() {
-        let udp_tracker_addrs = [
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.opentrackr.org:1337/announce",
-        ];
+        let udp_tracker_addrs = ["open.stealth.si:80", "tracker.opentrackr.org:1337"];
 
         let success_count = Rc::new(Cell::new(0usize));
         let local_set = tokio::task::LocalSet::new();
 
-        for (i, tracker_addr) in udp_tracker_addrs
-            .iter()
-            .map(|uri| match uri.parse::<TrackerUrl>() {
-                Ok(TrackerUrl::Udp(addr)) => addr,
-                _ => panic!("invalid tracker uri"),
-            })
-            .enumerate()
-        {
+        for (i, tracker_addr) in udp_tracker_addrs.iter().map(ToOwned::to_owned).enumerate() {
             let success_count = success_count.clone();
             local_set.spawn_local(async move {
                 let bind_addr =

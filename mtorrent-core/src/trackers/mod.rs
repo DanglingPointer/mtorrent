@@ -4,16 +4,16 @@ mod url;
 
 use futures_util::TryFutureExt;
 use local_async_utils::sec;
-use tokio::net::{self, UdpSocket};
-use tokio::task;
-use tokio_util::sync::CancellationToken;
-pub use url::{TrackerUrl, UrlParseError};
-
 use mtorrent_utils::peer_id::PeerId;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use std::{io, net::SocketAddr};
+use tokio::net::{self, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task;
+use tokio_util::sync::CancellationToken;
+
+pub use url::TrackerUrl;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AnnounceEvent {

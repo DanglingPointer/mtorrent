@@ -12,6 +12,7 @@
 //! }
 //! ```
 use mtorrent_core::pwp::Bitfield;
+use mtorrent_core::trackers::TrackerUrl;
 use mtorrent_utils::benc::Element;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,13 +24,13 @@ const FILENAME: &str = ".mtorrent";
 
 #[derive(Default, Serialize, Deserialize)]
 struct Trackers {
-    trackers: BTreeSet<String>,
+    trackers: BTreeSet<TrackerUrl>,
 }
 
 /// Read tracker addresses from the trackers file (JSON).
 pub fn load_trackers(
     config_dir: impl AsRef<Path>,
-) -> io::Result<impl ExactSizeIterator<Item = String>> {
+) -> io::Result<impl ExactSizeIterator<Item = TrackerUrl>> {
     let file = fs::File::open(config_dir.as_ref().join(FILENAME))?;
     let Trackers { trackers } = serde_json::from_reader(io::BufReader::new(file))?;
     Ok(trackers.into_iter())
@@ -37,9 +38,9 @@ pub fn load_trackers(
 
 /// Write tracker addresses to the trackers file (JSON).
 /// If the file already exists, the new trackers will be appended.
-pub fn save_trackers<T: Into<String>>(
+pub fn save_trackers(
     config_dir: impl AsRef<Path>,
-    trackers: impl IntoIterator<Item = T>,
+    trackers: impl IntoIterator<Item = TrackerUrl>,
 ) -> io::Result<()> {
     // r+w mode, open existing or create new
     let mut file = fs::File::options()
@@ -55,10 +56,32 @@ pub fn save_trackers<T: Into<String>>(
         serde_json::from_reader(io::BufReader::new(&file)).unwrap_or_default();
 
     // append new trackers
-    saved_trackers.trackers.extend(trackers.into_iter().map(Into::into));
+    saved_trackers.trackers.extend(trackers);
 
     // overwrite the file
     file.seek(io::SeekFrom::Start(0))?;
+    serde_json::to_writer_pretty(io::BufWriter::new(&file), &saved_trackers)?;
+    Ok(())
+}
+
+/// Remove a single tracker address from the trackers file (JSON).
+pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io::Result<()> {
+    let mut file = fs::File::options()
+        .write(true)
+        .read(true)
+        .open(config_dir.as_ref().join(FILENAME))?;
+
+    let mut saved_trackers: Trackers = serde_json::from_reader(io::BufReader::new(&file))?;
+    if !saved_trackers.trackers.remove(tracker) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("tracker {tracker:?} not found in config"),
+        ));
+    }
+
+    // overwrite the file
+    file.seek(io::SeekFrom::Start(0))?;
+    file.set_len(0)?;
     serde_json::to_writer_pretty(io::BufWriter::new(&file), &saved_trackers)?;
     Ok(())
 }
@@ -142,7 +165,7 @@ mod tests {
         assert_eq!(
             ["http://tracker1.com", "http://tracker2.com"]
                 .into_iter()
-                .map(ToString::to_string)
+                .map(|s| TrackerUrl::Http(s.to_owned()))
                 .collect::<BTreeSet<_>>(),
             loaded_trackers.collect::<BTreeSet<_>>(),
         );
@@ -155,7 +178,13 @@ mod tests {
         let dir = "test_write_trackers";
         fs::create_dir_all(dir).unwrap();
 
-        save_trackers(dir, ["http://tracker1.com", "http://tracker2.com"]).unwrap();
+        save_trackers(
+            dir,
+            ["http://tracker1.com", "http://tracker2.com"]
+                .into_iter()
+                .map(|s| TrackerUrl::Http(s.to_owned())),
+        )
+        .unwrap();
 
         let content = fs::read_to_string(Path::new(dir).join(FILENAME)).unwrap();
         assert_eq!(
@@ -172,34 +201,74 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_tracker() {
+        let dir = "test_remove_tracker";
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            Path::new(dir).join(FILENAME),
+            r#"{
+                "trackers": [
+                    "http://tracker1.com",
+                    "http://tracker2.com"
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        remove_tracker(dir, &TrackerUrl::Http("http://tracker1.com".to_string())).unwrap();
+
+        let content = fs::read_to_string(Path::new(dir).join(FILENAME)).unwrap();
+        assert_eq!(
+            content,
+            r#"{
+  "trackers": [
+    "http://tracker2.com"
+  ]
+}"#,
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_write_and_read_and_modify_trackers() {
         let dir = "test_write_and_read_and_modify_trackers";
         fs::create_dir_all(dir).unwrap();
 
         assert!(matches!(load_trackers(dir), Err(e) if e.kind() == io::ErrorKind::NotFound));
 
-        let trackers = ["http://tracker1.com", "http://tracker2.com"];
-        save_trackers(dir, trackers).unwrap();
+        // create config with trackers
+        let initial_trackers = ["http://tracker1.com", "http://tracker2.com"]
+            .into_iter()
+            .map(|s| TrackerUrl::Http(s.to_owned()));
+        save_trackers(dir, initial_trackers.clone()).unwrap();
         assert!(Path::new(dir).join(FILENAME).is_file());
 
         let loaded_trackers = load_trackers(dir).unwrap();
         assert_eq!(
-            trackers.into_iter().map(ToString::to_string).collect::<BTreeSet<_>>(),
+            initial_trackers.clone().collect::<BTreeSet<_>>(),
             loaded_trackers.collect::<BTreeSet<_>>(),
         );
 
-        let new_trackers = ["http://tracker3.com", "http://tracker4.com"];
-        save_trackers(dir, new_trackers).unwrap();
+        // add new trackers
+        let new_trackers = ["http://tracker3.com", "http://tracker4.com"]
+            .into_iter()
+            .map(|s| TrackerUrl::Http(s.to_owned()));
+        save_trackers(dir, new_trackers.clone()).unwrap();
 
         let loaded_trackers = load_trackers(dir).unwrap();
         assert_eq!(
-            [trackers, new_trackers]
-                .into_iter()
-                .flatten()
-                .map(ToString::to_string)
-                .collect::<BTreeSet<_>>(),
+            initial_trackers.clone().chain(new_trackers.clone()).collect::<BTreeSet<_>>(),
             loaded_trackers.collect::<BTreeSet<_>>(),
         );
+
+        // remove old trackers
+        for tracker in initial_trackers {
+            remove_tracker(dir, &tracker).unwrap();
+        }
+
+        let loaded_trackers = load_trackers(dir).unwrap();
+        assert_eq!(new_trackers.collect::<BTreeSet<_>>(), loaded_trackers.collect::<BTreeSet<_>>(),);
 
         fs::remove_dir_all(dir).unwrap();
     }

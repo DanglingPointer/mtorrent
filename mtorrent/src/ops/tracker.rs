@@ -18,8 +18,8 @@ pub async fn make_periodic_announces(
 ) {
     define_with_ctx!(ctx_handle);
     let tracker_urls =
-        with_ctx!(|ctx| update_tracker_urls(trackers_from_metainfo(&ctx.metainfo), config_dir));
-    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel).await;
+        with_ctx!(|ctx| update_tracker_urls(trackers_from_metainfo(&ctx.metainfo), &config_dir));
+    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel, &config_dir).await;
 }
 
 pub async fn make_preliminary_announces(
@@ -29,8 +29,8 @@ pub async fn make_preliminary_announces(
     cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
 ) {
     define_with_ctx!(ctx_handle);
-    let tracker_urls = with_ctx!(|ctx| update_tracker_urls(ctx.magnet.trackers(), config_dir));
-    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel).await;
+    let tracker_urls = with_ctx!(|ctx| update_tracker_urls(ctx.magnet.trackers(), &config_dir));
+    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel, &config_dir).await;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -46,14 +46,15 @@ fn update_tracker_urls<'a>(
 
     match config::load_trackers(&config_dir) {
         Ok(loaded_trackers) => {
-            all_trackers.extend(loaded_trackers.filter_map(|s| s.parse::<TrackerUrl>().ok()));
+            all_trackers.extend(loaded_trackers);
         }
         Err(e) => {
             log::warn!("Failed to load trackers from file: {e}");
         }
     }
+
     // note that when saving trackers below, the '/announce' suffix disappears for udp urls
-    match config::save_trackers(&config_dir, all_trackers.iter().cloned()) {
+    match config::save_trackers(&config_dir, all_trackers.clone()) {
         Ok(()) => (),
         Err(e) => log::warn!("Failed to save trackers to file: {e}"),
     }
@@ -65,9 +66,16 @@ async fn launch_announces(
     handler: impl AnnounceHandler + Clone,
     tracker_urls: impl IntoIterator<Item = TrackerUrl>,
     cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    config_dir: impl AsRef<Path>,
 ) {
     future::join_all(tracker_urls.into_iter().map(|url| {
-        announce_periodically(trackers_handle, url, handler.clone(), cb_channel.clone())
+        announce_periodically(
+            trackers_handle,
+            url,
+            handler.clone(),
+            cb_channel.clone(),
+            config_dir.as_ref(),
+        )
     }))
     .await;
 }
@@ -77,6 +85,7 @@ async fn announce_periodically(
     url: TrackerUrl,
     mut handler: impl AnnounceHandler,
     cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    config_dir: impl AsRef<Path>,
 ) {
     loop {
         let request = handler.generate_request();
@@ -92,6 +101,8 @@ async fn announce_periodically(
             }
             Err(e) => {
                 log::error!("Announce to {url:?} failed: {e}");
+                _ = config::remove_tracker(config_dir, &url)
+                    .inspect_err(|e| log::error!("Failed to remove tracker: {e}"));
                 return;
             }
         }
@@ -255,6 +266,20 @@ mod tests {
                     TrackerUrl::Udp("tracker.tiny-vps.com:6969".to_owned()),
                     TrackerUrl::Http("https://example.com".to_owned()),
                     TrackerUrl::Udp("open.stealth.si:80".to_owned()),
+                ]
+            );
+        }
+
+        {
+            let updated_trackers = update_tracker_urls(iter::empty(), config_dir);
+
+            assert_eq!(
+                updated_trackers,
+                vec![
+                    TrackerUrl::Http("http://tracker1.com".to_owned()),
+                    TrackerUrl::Http("https://example.com".to_owned()),
+                    TrackerUrl::Udp("open.stealth.si:80".to_owned()),
+                    TrackerUrl::Udp("tracker.tiny-vps.com:6969".to_owned()),
                 ]
             );
         }
