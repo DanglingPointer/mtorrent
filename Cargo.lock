@@ -993,6 +993,7 @@ dependencies = [
  "futures-util",
  "local_async_utils",
  "log",
+ "mockito",
  "mtorrent-core",
  "mtorrent-dht",
  "mtorrent-utils",

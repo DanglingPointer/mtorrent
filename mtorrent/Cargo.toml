@@ -37,4 +37,5 @@ clap = { version = "4.5.40", features = ["derive"] }
 [dev-dependencies]
 tokio-test = { workspace = true }
 simple_logger = { workspace = true }
+mockito = { workspace = true }
 mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }

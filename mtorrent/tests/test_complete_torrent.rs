@@ -1,4 +1,3 @@
-#![expect(clippy::zombie_processes)]
 use futures_util::future;
 use local_async_utils::prelude::*;
 use mtorrent::utils::startup;
@@ -11,7 +10,7 @@ use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::{cmp, process};
 use std::{fs, io, iter};
@@ -544,12 +543,10 @@ async fn launch_peers<P: Peer>(
     }
 }
 
-#[must_use]
-fn start_tracker<'a>(
-    dir: &str,
+async fn start_tracker<'a>(
     port: u16,
     peers: impl Iterator<Item = &'a SocketAddr>,
-) -> process::Child {
+) -> (mockito::Server, mockito::Mock) {
     fn get_peers_entry(addr: &SocketAddr) -> benc::Element {
         let ip_key = benc::Element::from("ip");
         let ip_value = benc::Element::from(addr.ip().to_string().as_str());
@@ -571,19 +568,24 @@ fn start_tracker<'a>(
         let mut root = BTreeMap::new();
         root.insert(peers_key, peers_value);
         root.insert(interval_key, interval_value);
-        benc::Element::Dictionary(root)
+        benc::Element::Dictionary(root).to_bytes()
     };
 
-    let _ = fs::create_dir(dir);
+    let mut server = mockito::Server::new_with_opts_async(mockito::ServerOpts {
+        port,
+        ..Default::default()
+    })
+    .await;
 
-    let announce_path: PathBuf = [dir, "announce"].into_iter().collect();
-    fs::write(announce_path, response.to_bytes()).unwrap();
+    let mock = server
+        .mock("GET", "/announce")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(response)
+        .create_async()
+        .await;
 
-    process::Command::new("python3")
-        .args(["-m", "http.server", &port.to_string()])
-        .current_dir(dir)
-        .spawn()
-        .unwrap()
+    (server, mock)
 }
 
 fn compare_input_and_output(
@@ -694,7 +696,7 @@ async fn test_download_and_upload_multifile_torrent() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
+        let (_server, tracker_mock) = start_tracker(tracker_port, seeder_ips.iter()).await;
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
@@ -723,7 +725,7 @@ async fn test_download_and_upload_multifile_torrent() {
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
-        tracker.kill().unwrap();
+        tracker_mock.assert_async().await;
 
         compare_input_and_output(data_dir, output_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
@@ -804,7 +806,7 @@ async fn test_download_and_upload_monofile_torrent() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let mut tracker = start_tracker(output_dir, tracker_port, seeder_ips.iter());
+        let (_server, tracker_mock) = start_tracker(tracker_port, seeder_ips.iter()).await;
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
@@ -833,7 +835,7 @@ async fn test_download_and_upload_monofile_torrent() {
         let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
         assert!(mtorrent_ecode.success());
 
-        tracker.kill().unwrap();
+        tracker_mock.assert_async().await;
 
         compare_input_and_output(data_dir, output_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
