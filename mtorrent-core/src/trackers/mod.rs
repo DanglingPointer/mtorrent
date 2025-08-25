@@ -71,6 +71,7 @@ pub fn init() -> (TrackerClient, TrackerManager) {
     (TrackerClient { cmd_sender }, TrackerManager { cmd_receiver })
 }
 
+#[derive(Clone)]
 pub struct TrackerClient {
     cmd_sender: mpsc::Sender<Command>,
 }
@@ -276,14 +277,40 @@ async fn do_udp_announce(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time;
+
+    fn udp_connect_response(transaction_id: &[u8]) -> [u8; 16] {
+        let mut response: [u8; 16] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x04, 0x17, 0x27, 0x10,
+            0x19, 0x80,
+        ];
+        response[4..8].copy_from_slice(transaction_id);
+        response
+    }
+
+    fn udp_announce_response(transaction_id: &[u8]) -> [u8; 32] {
+        let mut response = [
+            0x00, 0x00, 0x00, 0x01, // action
+            0x00, 0x00, 0x00, 0x00, // transaction id
+            0x00, 0x00, 0x07, 0x08, // interval
+            0x00, 0x00, 0x00, 0x01, // leechers
+            0x00, 0x00, 0x00, 0x02, // seeders
+            0xc0, 0xa8, 0x01, 0x01, // ip
+            0x1a, 0xe9, // port
+            0xc0, 0xa8, 0x00, 0x01, // ip
+            0x1a, 0xe8, // port
+        ];
+        response[4..8].copy_from_slice(transaction_id);
+        response
+    }
 
     #[tokio::test]
-    async fn test_http_tracker_client_announce() {
+    async fn test_http_announce_success() {
         let (client, mgr) = init();
         task::spawn(mgr.run());
         let mut server = mockito::Server::new_async().await;
-        {
-            let mock = server
+
+        let mock = server
                 .mock("GET", "/announce")
                 .with_status(200)
                 .with_body(b"d8:intervali1800e5:peersld2:ip9:127.0.0.14:porti50000eed2:ip9:127.0.0.14:porti50049eeee")
@@ -291,44 +318,81 @@ mod tests {
                 .create_async()
                 .await;
 
-            let response = client
-                .announce(
-                    TrackerUrl::Http(format!("{}/announce", server.url())),
-                    AnnounceRequest {
-                        info_hash: [b'h'; 20],
-                        downloaded: 0,
-                        left: 100,
-                        uploaded: 0,
-                        local_peer_id: [b'm'; 20].into(),
-                        listener_port: 123,
-                        event: None,
-                        num_want: 50,
-                    },
-                )
-                .await
-                .unwrap();
+        let response = client
+            .announce(
+                TrackerUrl::Http(format!("{}/announce", server.url())),
+                AnnounceRequest {
+                    info_hash: [b'h'; 20],
+                    downloaded: 0,
+                    left: 100,
+                    uploaded: 0,
+                    local_peer_id: [b'm'; 20].into(),
+                    listener_port: 123,
+                    event: None,
+                    num_want: 50,
+                },
+            )
+            .await
+            .unwrap();
 
-            assert_eq!(response.interval, sec!(1800));
-            assert_eq!(
-                response.peers,
-                vec![
-                    "127.0.0.1:50000".parse().unwrap(),
-                    "127.0.0.1:50049".parse().unwrap()
-                ]
-            );
-            mock.assert_async().await;
-        }
-        {
-            let mock = server
+        assert_eq!(response.interval, sec!(1800));
+        assert_eq!(
+            response.peers,
+            vec![
+                "127.0.0.1:50000".parse().unwrap(),
+                "127.0.0.1:50049".parse().unwrap()
+            ]
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_http_announce_failure() {
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
                 .mock("GET", "/announce")
                 .with_status(500)
                 .match_query("info_hash=gggggggggggggggggggg&peer_id=iiiiiiiiiiiiiiiiiiii&downloaded=0&left=100&uploaded=0&numwant=5&compact=1&no_peer_id=1&port=6881")
                 .create_async()
                 .await;
 
-            let err_response = client
+        let err_response = client
+            .announce(
+                TrackerUrl::Http(format!("{}/announce", server.url())),
+                AnnounceRequest {
+                    info_hash: [b'g'; 20],
+                    downloaded: 0,
+                    left: 100,
+                    uploaded: 0,
+                    local_peer_id: [b'i'; 20].into(),
+                    listener_port: 6881,
+                    event: None,
+                    num_want: 5,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err_response.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(err_response.to_string().contains("500"), "{err_response}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_udp_tracker_announce() {
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let tracker_addr = server_socket.local_addr().unwrap();
+
+        let client_task = task::spawn(async move {
+            client
                 .announce(
-                    TrackerUrl::Http(format!("{}/announce", server.url())),
+                    TrackerUrl::Udp(tracker_addr.to_string()),
                     AnnounceRequest {
                         info_hash: [b'g'; 20],
                         downloaded: 0,
@@ -341,41 +405,40 @@ mod tests {
                     },
                 )
                 .await
-                .unwrap_err();
+        });
 
-            assert_eq!(err_response.kind(), io::ErrorKind::UnexpectedEof);
-            assert!(err_response.to_string().contains("500"), "{err_response}");
-            mock.assert_async().await;
-        }
-        {
-            let mock = server
-                .mock("GET", "/")
-                .with_status(200)
-                .match_query(mockito::Matcher::Any)
-                .with_body(b"d8:intervali1800e5:peersld2:ip9:127.0.0.14:porti50000eed2:ip9:127.0.0.14:porti50049eeee")
-                .expect(0)
-                .create_async()
-                .await;
-
-            let err_response = client
-                .announce(
-                    TrackerUrl::Udp(format!("{}/announce", server.url())),
-                    AnnounceRequest {
-                        info_hash: [b'g'; 20],
-                        downloaded: 0,
-                        left: 100,
-                        uploaded: 0,
-                        local_peer_id: [b'i'; 20].into(),
-                        listener_port: 6881,
-                        event: None,
-                        num_want: 5,
-                    },
-                )
+        let mut recv_buffer = [0u8; 1024];
+        let (bytes_read, client_addr) =
+            time::timeout(sec!(5), server_socket.recv_from(&mut recv_buffer))
                 .await
-                .unwrap_err();
+                .unwrap()
+                .unwrap();
+        assert_eq!(bytes_read, 16);
+        let connect_request = &recv_buffer[..16];
 
-            assert_eq!(err_response.kind(), io::ErrorKind::InvalidInput);
-            mock.assert_async().await;
-        }
+        let connect_response = udp_connect_response(&connect_request[12..]);
+        server_socket.send_to(&connect_response, client_addr).await.unwrap();
+
+        let (bytes_read, _) = time::timeout(sec!(5), server_socket.recv_from(&mut recv_buffer))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes_read, 98);
+        let announce_request = &recv_buffer[..98];
+
+        let announce_response = udp_announce_response(&announce_request[12..16]);
+        server_socket.send_to(&announce_response, client_addr).await.unwrap();
+
+        let result = time::timeout(sec!(5), client_task).await.unwrap().unwrap();
+        let response = result.unwrap();
+
+        assert_eq!(response.interval, sec!(1800));
+        assert_eq!(
+            response.peers,
+            vec![
+                "192.168.1.1:6889".parse().unwrap(),
+                "192.168.0.1:6888".parse().unwrap()
+            ]
+        );
     }
 }

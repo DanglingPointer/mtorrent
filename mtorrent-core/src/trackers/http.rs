@@ -350,6 +350,28 @@ mod tests {
     }
 
     #[test]
+    fn test_announce_uri_no_path() {
+        let hash =
+            b"\x12\x34\x56\x78\x9a\xbc\xde\xf1\x23\x45\x67\x89\xab\xcd\xef\x12\x34\x56\x78\x9a";
+        let url_base = "http://example.com";
+
+        let mut builder = TrackerRequestBuilder::try_from(url_base).unwrap();
+        builder
+            .info_hash(hash)
+            .bytes_left(42)
+            .bytes_uploaded(3)
+            .no_peer_id()
+            .numwant(50);
+
+        let uri = builder.build_announce();
+
+        assert_eq!(
+            "http://example.com/?info_hash=%124Vx%9A%BC%DE%F1%23Eg%89%AB%CD%EF%124Vx%9A&left=42&uploaded=3&no_peer_id=1&numwant=50",
+            uri.as_str()
+        );
+    }
+
+    #[test]
     fn test_scrape_uri() {
         let hash1 =
             b"\x12\x34\x56\x78\x9a\xbc\xde\xf1\x23\x45\x67\x89\xab\xcd\xef\x12\x34\x56\x78\x9a";
