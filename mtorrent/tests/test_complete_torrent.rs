@@ -546,6 +546,7 @@ async fn launch_peers<P: Peer>(
 async fn start_tracker<'a>(
     port: u16,
     peers: impl Iterator<Item = &'a SocketAddr>,
+    info_hash: &str,
 ) -> (mockito::Server, mockito::Mock) {
     fn get_peers_entry(addr: &SocketAddr) -> benc::Element {
         let ip_key = benc::Element::from("ip");
@@ -579,7 +580,7 @@ async fn start_tracker<'a>(
 
     let mock = server
         .mock("GET", "/announce")
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::Regex(format!(".*info_hash={info_hash}.*")))
         .with_status(200)
         .with_body(response)
         .create_async()
@@ -696,7 +697,12 @@ async fn test_download_and_upload_multifile_torrent() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let (_server, tracker_mock) = start_tracker(tracker_port, seeder_ips.iter()).await;
+        let (_server, tracker_mock) = start_tracker(
+            tracker_port,
+            seeder_ips.iter(),
+            "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+        )
+        .await;
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
@@ -806,7 +812,12 @@ async fn test_download_and_upload_monofile_torrent() {
             .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
             .collect::<Vec<_>>();
 
-        let (_server, tracker_mock) = start_tracker(tracker_port, seeder_ips.iter()).await;
+        let (_server, tracker_mock) = start_tracker(
+            tracker_port,
+            seeder_ips.iter(),
+            "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3",
+        )
+        .await;
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
@@ -878,7 +889,7 @@ async fn test_download_torrent_from_magnet_link() {
     let data_dir = "tests/assets/screenshots";
     fs::create_dir_all(output_dir).unwrap();
 
-    let metainfo_file = "tests/assets/screenshots.torrent";
+    let metainfo_file = "tests/assets/screenshots_bad_tracker.torrent";
     let torrent_name = "screenshots";
 
     let peer_ips = (50100u16..50150u16)
