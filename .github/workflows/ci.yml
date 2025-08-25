@@ -61,4 +61,4 @@ jobs:
       with:
         tool: nextest
     - run: cargo nextest run --no-run
-    - run: cargo nextest run --all-targets --all-features --failure-output=immediate-final
+    - run: cargo nextest run --all-targets --all-features --no-fail-fast --failure-output=final
