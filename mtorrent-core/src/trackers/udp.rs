@@ -148,6 +148,8 @@ impl TrackerConnection {
     where
         F: Fn(&[u8]) -> Option<R>,
     {
+        const MAX_RETRANSMISSIONS: usize = 3; // timeout after 225s
+
         let mut retransmit_n = 0usize;
 
         loop {
@@ -169,7 +171,7 @@ impl TrackerConnection {
                     }
                 }
                 Err(_) => {
-                    if retransmit_n == 8 {
+                    if retransmit_n == MAX_RETRANSMISSIONS {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     retransmit_n += 1;

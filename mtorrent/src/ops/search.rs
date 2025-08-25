@@ -15,7 +15,7 @@ pub async fn run_dht_search(
     peer_sink: local_channel::Sender<(SocketAddr, PeerOrigin)>,
     pwp_listener_port: u16,
 ) {
-    const SEARCH_RESTART_INTERVAL: Duration = sec!(60);
+    const SEARCH_RESTART_INTERVAL: Duration = sec!(120);
 
     let _sw = debug_stopwatch!("DHT search operation");
 

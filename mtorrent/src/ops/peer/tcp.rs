@@ -59,7 +59,7 @@ pub async fn new_outbound_connection(
     quick: bool,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     log::debug!("Connecting to {remote_ip}...");
-    let mut attempts_left = if quick { 0 } else { 3 };
+    let mut attempts_left = if quick { 0 } else { 2 };
     let mut timeout = if quick { sec!(5) } else { sec!(15) };
 
     let local_addr = match &remote_ip {
