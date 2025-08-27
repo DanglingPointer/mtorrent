@@ -16,7 +16,7 @@ use thiserror::Error;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
 };
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, tcp};
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
 
@@ -211,33 +211,40 @@ where
 
 // ------
 
-#[cfg(any(feature = "mocks", test))]
-trait GenericStream: AsyncRead + AsyncWrite + Send + Unpin {}
-#[cfg(any(feature = "mocks", test))]
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> GenericStream for T {}
-
-#[cfg(any(feature = "mocks", test))]
-struct StreamHolder<S: GenericStream>(S);
-
-trait IngressStream: AsyncRead + Send + Unpin {}
-impl<T: AsyncRead + Send + Unpin> IngressStream for T {}
-
-trait EgressStream: AsyncWrite + Send + Unpin {}
-impl<T: AsyncWrite + Send + Unpin> EgressStream for T {}
-
 trait SplittableStream: Send + Unpin {
-    fn split(&mut self) -> (impl IngressStream, impl EgressStream);
+    type Ingress<'i>: AsyncRead + Send + Unpin
+    where
+        Self: 'i;
+    type Egress<'e>: AsyncWrite + Send + Unpin
+    where
+        Self: 'e;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>);
 }
 
 impl SplittableStream for TcpStream {
-    fn split(&mut self) -> (impl IngressStream, impl EgressStream) {
+    type Ingress<'i> = tcp::ReadHalf<'i>;
+    type Egress<'e> = tcp::WriteHalf<'e>;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
         TcpStream::split(self)
     }
 }
 
 #[cfg(any(feature = "mocks", test))]
-impl<S: GenericStream> SplittableStream for StreamHolder<S> {
-    fn split(&mut self) -> (impl IngressStream, impl EgressStream) {
+struct StreamHolder<S>(S)
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin;
+
+#[cfg(any(feature = "mocks", test))]
+impl<S> SplittableStream for StreamHolder<S>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    type Ingress<'i> = tokio::io::ReadHalf<&'i mut S>;
+    type Egress<'e> = tokio::io::WriteHalf<&'e mut S>;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
         tokio::io::split(&mut self.0)
     }
 }
