@@ -32,7 +32,8 @@ fn main() -> io::Result<()> {
         .with_module_level("mtorrent", log::LevelFilter::Info)
         .with_module_level("mtorrent_core", log::LevelFilter::Info)
         .with_module_level("mtorrent_utils", log::LevelFilter::Info)
-        .with_module_level("mtorrent::ops::search", log::LevelFilter::Debug)
+        .with_module_level("mtorrent_dht", log::LevelFilter::Info)
+        // .with_module_level("mtorrent::ops::connections", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::metadata", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
@@ -84,7 +85,7 @@ fn main() -> io::Result<()> {
     let peer_id = PeerId::generate_new();
 
     tokio::runtime::Builder::new_current_thread()
-        .max_blocking_threads(32) // used for DNS resolution
+        .max_blocking_threads(1) // unused
         .enable_all()
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(

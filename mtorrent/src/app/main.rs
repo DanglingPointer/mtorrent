@@ -1,9 +1,7 @@
 use crate::ops;
 use crate::utils::startup;
-use futures_util::StreamExt;
-use local_async_utils::prelude::*;
-use mtorrent_core::pwp::PeerOrigin;
-use mtorrent_core::trackers;
+use futures_util::FutureExt;
+use mtorrent_core::{pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{ip, magnet, upnp};
@@ -11,7 +9,6 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::{runtime, task};
 use tokio_util::sync::CancellationToken;
@@ -105,19 +102,8 @@ pub async fn single_torrent(
     Ok(())
 }
 
-const MAX_PRELIMINARY_CONNECTIONS: usize = 10;
+const MAX_PRELIMINARY_CONNECTIONS: usize = 50;
 const MAX_PEER_CONNECTIONS: usize = 200;
-
-macro_rules! log {
-    ($e:expr, $($arg:tt)+) => {{
-        let lvl = if $e.kind() == io::ErrorKind::Other {
-            log::Level::Error
-        } else {
-            log::Level::Debug
-        };
-        log::log!(lvl, $($arg)+);
-    }}
-}
 
 #[expect(clippy::too_many_arguments)]
 async fn preliminary_stage(
@@ -135,6 +121,7 @@ async fn preliminary_stage(
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
+    let info_hash: [u8; 20] = *magnet_link.info_hash();
 
     let (tracker_client, trackers_mgr) = trackers::init();
     pwp_runtime.spawn(trackers_mgr.run());
@@ -147,75 +134,53 @@ async fn preliminary_stage(
         .as_ref()
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
 
-    let (peer_discovered_sink, mut peer_discovered_src) =
-        local_channel::channel::<(SocketAddr, PeerOrigin)>();
-
-    dht_handle.map(|dht_cmds| {
-        tasks.spawn_local(ops::run_dht_search(
-            *magnet_link.info_hash(),
-            dht_cmds,
-            peer_discovered_sink.clone(),
-            public_pwp_ip.port(),
-        ))
-    });
-
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
     let canceller = CancellationToken::new();
-    let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
-        MAX_PRELIMINARY_CONNECTIONS,
-        ops::PreliminaryConnectionData {
-            ctx_handle: ctx.clone(),
-            pwp_worker_handle: pwp_runtime,
+
+    let (peer_reporter, connect_throttle) =
+        ops::connect_control(|peer_reporter| ops::CancellingConnectHandler {
+            connector: Rc::new(ops::PreliminaryConnectionData {
+                ctx_handle: ctx.clone(),
+                pwp_worker_handle: pwp_runtime.clone(),
+                peer_reporter: peer_reporter.clone(),
+            }),
+            max_connections: MAX_PRELIMINARY_CONNECTIONS,
             canceller: canceller.clone(),
-        },
+        });
+    tasks.spawn_local(connect_throttle.run());
+
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
+            info_hash,
+            dht_cmds,
+            peer_reporter.clone(),
+            public_pwp_ip.port(),
+        ))
+    });
+
+    pwp_runtime.spawn(
+        ops::run_pwp_listener(listener_addr, peer_reporter.clone(), canceller.clone()).map(
+            |result| match result {
+                Ok(_) => (),
+                Err(e) => log::error!("TCP listener exited: {e}"),
+            },
+        ),
     );
-    tasks.spawn_local(async move {
-        while let Some((peer_addr, _origin)) = peer_discovered_src.next().await {
-            if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
-                task::spawn_local(async move {
-                    log::debug!("Connecting to {peer_addr}...");
-                    ops::outgoing_preliminary_connection(peer_addr, permit).await.unwrap_or_else(
-                        |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
-                    );
-                });
-            } else {
-                log::debug!("Outgoing connection to {peer_addr} denied");
-            }
-        }
-    });
-
-    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        if let Some(permit) = incoming_ctrl.issue_permit(peer_ip) {
-            task::spawn_local(async move {
-                ops::incoming_preliminary_connection(stream, peer_ip, permit)
-                    .await
-                    .unwrap_or_else(|e| {
-                        log!(e, "Incoming peer connection from {peer_ip} failed: {e}")
-                    });
-            });
-        } else {
-            log::info!("Incoming connection from {peer_ip} rejected");
-        }
-    };
-    tasks.spawn_local(async move {
-        match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
-            Ok(_) => (),
-            Err(e) => log::error!("TCP listener exited: {e}"),
-        }
-    });
-
-    for peer_ip in extra_peers {
-        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
-    }
 
     tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
         tracker_client,
+        peer_reporter.clone(),
         PathBuf::from(config_dir.as_ref()),
-        peer_discovered_sink,
     ));
+
+    tasks.spawn_local(async move {
+        for peer_addr in extra_peers {
+            peer_reporter.report_discovered_new(peer_addr, pwp::PeerOrigin::Other).await;
+        }
+    });
 
     let peers =
         ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), canceller.drop_guard())
@@ -238,6 +203,7 @@ async fn main_stage(
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
+    let info_hash: [u8; 20] = *metainfo.info_hash();
 
     let content_dir = output_dir
         .as_ref()
@@ -256,76 +222,57 @@ async fn main_stage(
 
     let mut tasks = task::JoinSet::new();
 
-    let (peer_discovered_sink, mut peer_discovered_src) =
-        local_channel::channel::<(SocketAddr, PeerOrigin)>();
-
-    dht_handle.map(|dht_cmds| {
-        tasks.spawn_local(ops::run_dht_search(
-            *metainfo.info_hash(),
-            dht_cmds,
-            peer_discovered_sink.clone(),
-            public_pwp_ip.port(),
-        ))
-    });
-
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
     let canceller = CancellationToken::new();
-    let (mut outgoing_ctrl, mut incoming_ctrl) = ops::connection_control(
-        MAX_PEER_CONNECTIONS,
-        ops::MainConnectionData {
-            content_storage,
-            metainfo_storage,
-            ctx_handle: ctx.clone(),
-            pwp_worker_handle: pwp_runtime,
-            peer_discovered_channel: peer_discovered_sink.clone(),
-            piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+
+    let (peer_reporter, connect_throttle) =
+        ops::connect_control(|peer_reporter| ops::CancellingConnectHandler {
+            connector: Rc::new(ops::MainConnectionData {
+                content_storage,
+                metainfo_storage,
+                ctx_handle: ctx.clone(),
+                pwp_worker_handle: pwp_runtime.clone(),
+                peer_reporter: peer_reporter.clone(),
+                piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+            }),
+            max_connections: MAX_PEER_CONNECTIONS,
             canceller: canceller.clone(),
-        },
+        });
+    tasks.spawn_local(connect_throttle.run());
+
+    dht_handle.map(|dht_cmds| {
+        tasks.spawn_local(ops::run_dht_search(
+            info_hash,
+            dht_cmds,
+            peer_reporter.clone(),
+            public_pwp_ip.port(),
+        ))
+    });
+
+    pwp_runtime.spawn(
+        ops::run_pwp_listener(listener_addr, peer_reporter.clone(), canceller.clone()).map(
+            |result| match result {
+                Ok(_) => (),
+                Err(e) => log::error!("TCP listener exited: {e}"),
+            },
+        ),
     );
-    tasks.spawn_local(async move {
-        while let Some((peer_addr, origin)) = peer_discovered_src.next().await {
-            if let Some(permit) = outgoing_ctrl.issue_permit(peer_addr).await {
-                task::spawn_local(async move {
-                    ops::outgoing_pwp_connection(peer_addr, origin, permit).await.unwrap_or_else(
-                        |e| log!(e, "Outgoing peer connection to {peer_addr} failed: {e}"),
-                    );
-                });
-            } else {
-                log::debug!("Outgoing connection to {peer_addr} denied");
-            }
-        }
-    });
-
-    let on_incoming_connection = move |stream: TcpStream, peer_ip: SocketAddr| {
-        if let Some(permit) = incoming_ctrl.issue_permit(peer_ip) {
-            task::spawn_local(async move {
-                ops::incoming_pwp_connection(stream, peer_ip, permit).await.unwrap_or_else(|e| {
-                    log!(e, "Incoming peer connection from {peer_ip} failed: {e}")
-                });
-            });
-        } else {
-            log::info!("Incoming connection from {peer_ip} rejected");
-        }
-    };
-    tasks.spawn_local(async move {
-        match ops::run_pwp_listener(listener_addr, on_incoming_connection).await {
-            Ok(_) => (),
-            Err(e) => log::error!("TCP listener exited: {e}"),
-        }
-    });
-
-    for peer_ip in extra_peers {
-        peer_discovered_sink.send((peer_ip, PeerOrigin::Other));
-    }
 
     tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
         tracker_client,
+        peer_reporter.clone(),
         PathBuf::from(output_dir.as_ref()),
-        peer_discovered_sink,
     ));
+
+    let extra_peers: Vec<_> = extra_peers.into_iter().collect();
+    tasks.spawn_local(async move {
+        for peer_addr in extra_peers {
+            peer_reporter.report_discovered_new(peer_addr, pwp::PeerOrigin::Other).await;
+        }
+    });
 
     ops::periodic_state_dump(ctx, content_dir, canceller.drop_guard()).await;
     tasks.shutdown().await;

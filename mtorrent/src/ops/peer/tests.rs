@@ -1,4 +1,7 @@
 use super::testutils::*;
+use crate::ops::AcceptedPeer;
+use crate::ops::PeerConnector;
+use crate::ops::PeerReporter;
 use crate::ops::ctx;
 use crate::utils::startup;
 use local_async_utils::prelude::*;
@@ -15,7 +18,6 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
-use tokio_util::sync::CancellationToken;
 
 async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_path: &'static str) {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
@@ -37,7 +39,6 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
             remote_ip,
             0u16,
             &runtime::Handle::current(),
-            false,
         )
         .await
         .unwrap();
@@ -144,23 +145,21 @@ async fn run_listening_seeder(
             ctx.piece_tracker.forget_piece(piece_index);
         }
     });
-    let (sink, _src) = local_channel::channel();
-    let (_outgoing_ctrl, mut incoming_ctrl) = super::super::connection_control(
-        50,
-        super::MainConnectionData {
-            content_storage,
-            metainfo_storage: meta_storage,
-            ctx_handle: handle,
-            pwp_worker_handle: runtime::Handle::current(),
-            peer_discovered_channel: sink,
-            piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
-            canceller: CancellationToken::new(),
-        },
-    );
+
+    let data = Rc::new(super::MainConnectionData {
+        content_storage,
+        metainfo_storage: meta_storage,
+        ctx_handle: handle,
+        pwp_worker_handle: runtime::Handle::current(),
+        peer_reporter: PeerReporter::new_mock(),
+        piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+    });
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
-    let (stream, peer_ip) = listener.accept().await.unwrap();
-    super::incoming_pwp_connection(stream, peer_ip, incoming_ctrl.issue_permit(peer_ip).unwrap())
+    let (stream, addr) = listener.accept().await.unwrap();
+    let (dl_chan, ul_chan, ext_chan) =
+        data.inbound_connect_and_handshake(AcceptedPeer { addr, stream }).await?;
+    data.run_connection(pwp::PeerOrigin::Listener, dl_chan, ul_chan, ext_chan)
         .await?;
 
     Ok(())
