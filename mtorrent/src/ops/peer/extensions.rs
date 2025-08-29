@@ -1,4 +1,4 @@
-use super::super::{ctrl, ctx};
+use super::super::{PeerReporter, ctrl, ctx};
 use super::{CLIENT_NAME, LOCAL_REQQ};
 use local_async_utils::prelude::*;
 use mtorrent_core::{data, pwp};
@@ -19,7 +19,7 @@ struct Data {
     remote_extensions: HashMap<pwp::Extension, u8>,
     sent_metadata_pieces: pwp::Bitfield,
     last_shared_peers: HashSet<SocketAddr>,
-    peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
+    peer_reporter: PeerReporter,
 }
 
 pub struct Peer(Box<Data>);
@@ -30,7 +30,7 @@ pub async fn new_peer(
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
     enabled_extensions: impl IntoIterator<Item = &pwp::Extension>,
-    peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
+    peer_reporter: PeerReporter,
 ) -> io::Result<Peer> {
     let metadata_len = handle.with(|ctx| ctx.metainfo.size());
     let mut inner = Box::new(Data {
@@ -41,7 +41,7 @@ pub async fn new_peer(
         remote_extensions: Default::default(),
         sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
         last_shared_peers: Default::default(),
-        peer_discovered_channel,
+        peer_reporter,
     });
     define_with_ctx!(inner.handle);
 
@@ -140,7 +140,10 @@ async fn handle_incoming_message(inner: &mut Data, msg: pwp::ExtendedMessage) ->
                 let connected_peers: HashSet<SocketAddr> =
                     with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
                 for peer_addr in pex.added.difference(&connected_peers) {
-                    inner.peer_discovered_channel.send((*peer_addr, pwp::PeerOrigin::Pex));
+                    inner
+                        .peer_reporter
+                        .report_discovered_new(*peer_addr, pwp::PeerOrigin::Pex)
+                        .await;
                 }
             };
         }

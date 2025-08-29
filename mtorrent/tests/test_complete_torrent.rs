@@ -24,6 +24,7 @@ trait Peer {
     #[expect(clippy::too_many_arguments)]
     fn run(
         index: u8,
+        peer_count: usize,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
@@ -41,6 +42,7 @@ impl Peer for Leech {
 
     async fn run(
         index: u8,
+        _peer_count: usize,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
@@ -61,10 +63,10 @@ impl Peer for Leech {
             while let Ok(msg) = rx.receive_message().await {
                 match msg {
                     pwp::DownloaderMessage::Interested => {
-                        eprintln!("Leech {index} received Interested")
+                        // eprintln!("Leech {index} received Interested")
                     }
                     pwp::DownloaderMessage::NotInterested => {
-                        eprintln!("Leech {index} received NotInterested")
+                        // eprintln!("Leech {index} received NotInterested")
                     }
                     pwp::DownloaderMessage::Request(_) => {
                         panic!("Leech {index} received Request")
@@ -229,16 +231,24 @@ impl Seeder {
     }
 
     async fn seed_content(
-        index: u8,
+        index: usize,
+        peer_count: usize,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         content_storage: data::StorageClient,
         info: data::PieceInfo,
     ) {
         let piece_count = info.piece_count();
-        let bitfield = pwp::Bitfield::repeat(true, piece_count);
+        let bitfield = {
+            // each seeder owns unique pieces
+            let mut bitfield = pwp::Bitfield::repeat(false, piece_count);
+            for piece_index in (index..piece_count).step_by(peer_count) {
+                bitfield.set(piece_index, true);
+            }
+            bitfield
+        };
         let pwp::UploadChannels(mut tx, mut rx) = upload_chans;
-        tx.send_message(pwp::UploaderMessage::Bitfield(bitfield)).await.unwrap();
+        tx.send_message(pwp::UploaderMessage::Bitfield(bitfield.clone())).await.unwrap();
         tx.send_message(pwp::UploaderMessage::Unchoke).await.unwrap();
 
         let (request_sender, mut request_receiver) = mpsc::unbounded_channel::<pwp::BlockInfo>();
@@ -251,6 +261,7 @@ impl Seeder {
                     cancelled_blocks.insert(cancelled_block);
                 }
                 if let Some(requested_block) = request_receiver.recv().await {
+                    assert!(bitfield.get(requested_block.piece_index).unwrap() == true);
                     if !cancelled_blocks.remove(&requested_block) {
                         let global_offset = info
                             .global_offset(
@@ -289,7 +300,7 @@ impl Seeder {
                 match msg {
                     pwp::DownloaderMessage::Request(block) => request_sender.send(block).unwrap(),
                     pwp::DownloaderMessage::Cancel(block) => cancel_sender.send(block).unwrap(),
-                    msg => println!("Seeder {index} received {msg}"),
+                    _msg => (), //println!("Seeder {index} received {msg}"),
                 }
             }
         });
@@ -345,6 +356,7 @@ impl Peer for Seeder {
 
     async fn run(
         index: u8,
+        peer_count: usize,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
@@ -368,13 +380,23 @@ impl Peer for Seeder {
             )
             .await;
         } else {
-            Self::seed_content(index, download_chans, upload_chans, content_storage, pieces).await;
+            Self::seed_content(
+                index as usize,
+                peer_count,
+                download_chans,
+                upload_chans,
+                content_storage,
+                pieces,
+            )
+            .await;
         }
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn listening_peer<P: Peer>(
     index: u8,
+    peer_count: usize,
     listening_addr: SocketAddr,
     expected_remote_addr: SocketAddr,
     content_storage: data::StorageClient,
@@ -385,7 +407,10 @@ async fn listening_peer<P: Peer>(
     let verify_remote_addr = !extensions_enabled;
     macro_rules! accept_and_run {
         ($listener:expr) => {{
-            let (stream, remote_addr) = $listener.accept().await.unwrap();
+            let (stream, remote_addr) = tokio::time::timeout(sec!(20), $listener.accept())
+                .await
+                .unwrap_or_else(|e| panic!("Peer {index} got stuck accepting ({e})"))
+                .unwrap();
             stream.set_nodelay(true).unwrap();
             println!(
                 "Peer {} on {} accepted connection from {}",
@@ -406,6 +431,7 @@ async fn listening_peer<P: Peer>(
                 .unwrap();
             P::run(
                 index,
+                peer_count,
                 download_chans,
                 upload_chans,
                 ext_chans,
@@ -434,6 +460,7 @@ async fn listening_peer<P: Peer>(
 
 async fn connecting_peer<P: Peer>(
     index: u8,
+    peer_count: usize,
     remote_ip: SocketAddr,
     info_hash: [u8; 20],
     content_storage: data::StorageClient,
@@ -466,6 +493,7 @@ async fn connecting_peer<P: Peer>(
     println!("Peer {index} connected to {remote_ip}");
     P::run(
         index,
+        peer_count,
         download_chans,
         upload_chans,
         ext_chans,
@@ -514,6 +542,7 @@ async fn launch_peers<P: Peer>(
                 .run_until(future::join_all((0..num_peers).map(|peer_index| {
                     connecting_peer::<P>(
                         peer_index as u8,
+                        num_peers,
                         remote_ip,
                         info_hash,
                         content_storage.clone(),
@@ -524,11 +553,13 @@ async fn launch_peers<P: Peer>(
                 .await;
         }
         ConnectionMode::Incoming { listen_addrs } => {
+            let num_peers = listen_addrs.len();
             task_set
                 .run_until(future::join_all(listen_addrs.into_iter().enumerate().map(
                     |(index, listen_addr)| {
                         listening_peer::<P>(
                             index as u8,
+                            num_peers,
                             listen_addr,
                             remote_ip,
                             content_storage.clone(),
@@ -648,7 +679,7 @@ macro_rules! with_30s_timeout {
     ($fut:expr, $proc:expr) => {
         if tokio::time::timeout(sec!(30), $fut).await.is_err() {
             let _ = $proc.kill();
-            panic!("failed to finish in 60s");
+            panic!("failed to finish in 30s");
         }
     };
 }
@@ -892,7 +923,7 @@ async fn test_download_torrent_from_magnet_link() {
     let metainfo_file = "tests/assets/screenshots_bad_tracker.torrent";
     let torrent_name = "screenshots";
 
-    let peer_ips = (50100u16..50150u16)
+    let peer_ips = (50100u16..50110u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 

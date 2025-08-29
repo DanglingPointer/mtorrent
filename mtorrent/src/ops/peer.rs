@@ -10,18 +10,16 @@ mod tests;
 mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
-use tokio_util::sync::CancellationToken;
 
-use super::connections::{IncomingConnectionPermit, OutgoingConnectionPermit};
+use super::connections::{AcceptedPeer, DiscoveredPeer, PeerConnector, PeerReporter};
 use super::{ctrl, ctx};
 use local_async_utils::prelude::*;
 use mtorrent_core::{data, pwp};
 use std::io;
 use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
-use tokio::net::TcpStream;
 use tokio::sync::broadcast;
-use tokio::time::{self, Instant};
+use tokio::time::Instant;
 use tokio::{runtime, try_join};
 
 type MainHandle = ctx::Handle<ctx::MainCtx>;
@@ -121,8 +119,6 @@ async fn run_optional_extensions(peer: Option<extensions::Peer>) -> io::Result<(
     }
 }
 
-// ------------------------------------------------------------------------------------------------
-
 async fn run_peer_connection(
     origin: pwp::PeerOrigin,
     download_chans: pwp::DownloadChannels,
@@ -160,7 +156,7 @@ async fn run_peer_connection(
                     tx,
                     data.metainfo_storage.clone(),
                     ALL_SUPPORTED_EXTENSIONS,
-                    data.peer_discovered_channel.clone(),
+                    data.peer_reporter.clone(),
                 )
                 .await?,
             ))
@@ -177,120 +173,86 @@ async fn run_peer_connection(
         .clone()
         .with(|ctx| ctx.peer_states.set_origin(&remote_ip, origin));
 
-    data.canceller
-        .run_until_cancelled(async {
-            try_join!(
-                run_download(download.into(), remote_ip, data.ctx_handle.clone()),
-                run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
-                run_optional_extensions(extensions),
-                reporter.run(),
-            )
-            .map(|_| ())
-        })
-        .await
-        .unwrap_or(Ok(()))?; // return Ok when cancelled so that we don't reconnect
+    try_join!(
+        run_download(download.into(), remote_ip, data.ctx_handle.clone()),
+        run_upload(upload.into(), remote_ip, data.ctx_handle.clone()),
+        run_optional_extensions(extensions),
+        reporter.run(),
+    )?;
     Ok(())
 }
-
-// ------------------------------------------------------------------------------------------------
 
 pub struct MainConnectionData {
     pub content_storage: data::StorageClient,
     pub metainfo_storage: data::StorageClient,
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
-    pub peer_discovered_channel: local_channel::Sender<(SocketAddr, pwp::PeerOrigin)>,
+    pub peer_reporter: PeerReporter,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
-    pub canceller: CancellationToken,
 }
 
-pub async fn outgoing_pwp_connection(
-    remote_ip: SocketAddr,
-    origin: pwp::PeerOrigin,
-    permit: OutgoingConnectionPermit<MainConnectionData>,
-) -> io::Result<()> {
-    let mut handle = permit.0.ctx_handle.clone();
-    define_with_ctx!(handle);
+impl PeerConnector for Rc<MainConnectionData> {
+    const CONNECT_TIMEOUT: Duration = sec!(15);
 
-    loop {
+    const MAX_CONNECT_RETRIES: usize = 2;
+
+    async fn outbound_connect_and_handshake(
+        &self,
+        peer: DiscoveredPeer,
+    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
+    {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
         let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
             *ctx.metainfo.info_hash(),
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
+        tcp::new_outbound_connection(
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
-            remote_ip,
+            peer.addr,
             local_port,
-            &permit.0.pwp_worker_handle,
-            false,
+            &self.pwp_worker_handle,
         )
-        .await?;
-        let connected_time = Instant::now();
-
-        let run_result =
-            run_peer_connection(origin, download_chans, upload_chans, extended_chans, &permit.0)
-                .await;
-
-        match run_result {
-            Err(e) if e.kind() != io::ErrorKind::Other && connected_time.elapsed() > sec!(5) => {
-                // ErrorKind::Other means we disconnected the peer intentionally, and
-                // <5s since connect means peer probably didn't like our handshake
-                log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting in 1s...");
-                time::sleep(sec!(1)).await;
-            }
-            Err(e) => return Err(e),
-            _ => break,
-        }
+        .await
     }
-    Ok(())
-}
 
-pub async fn incoming_pwp_connection(
-    stream: TcpStream,
-    remote_ip: SocketAddr,
-    permit: IncomingConnectionPermit<MainConnectionData>,
-) -> io::Result<()> {
-    let mut handle = permit.0.ctx_handle.clone();
-    define_with_ctx!(handle);
+    async fn inbound_connect_and_handshake(
+        &self,
+        peer: AcceptedPeer,
+    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
+    {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
 
-    let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
+        tcp::new_inbound_connection(
+            &local_peer_id,
+            &info_hash,
+            EXTENSION_PROTOCOL_ENABLED,
+            peer.addr,
+            peer.stream,
+            &self.pwp_worker_handle,
+        )
+        .await
+    }
 
-    let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
-        &local_peer_id,
-        &info_hash,
-        EXTENSION_PROTOCOL_ENABLED,
-        remote_ip,
-        stream,
-        &permit.0.pwp_worker_handle,
-    )
-    .await?;
+    async fn run_connection(
+        &self,
+        origin: pwp::PeerOrigin,
+        download_chans: pwp::DownloadChannels,
+        upload_chans: pwp::UploadChannels,
+        extended_chans: Option<pwp::ExtendedChannels>,
+    ) -> io::Result<()> {
+        run_peer_connection(origin, download_chans, upload_chans, extended_chans, self).await
+    }
 
-    let run_result = run_peer_connection(
-        pwp::PeerOrigin::Listener,
-        download_chans,
-        upload_chans,
-        extended_chans,
-        &permit.0,
-    )
-    .await;
-
-    match run_result {
-        Err(e) if e.kind() != io::ErrorKind::Other => {
-            // ErrorKind::Other means we disconnected the peer intentionally
-            log::warn!("Peer {remote_ip} disconnected: {e}. Reconnecting...");
-            outgoing_pwp_connection(
-                remote_ip,
-                pwp::PeerOrigin::Listener,
-                OutgoingConnectionPermit(permit.0),
-            )
-            .await
-        }
-        Err(e) => Err(e),
-        _ => Ok(()),
+    async fn schedule_reconnect(&self, peer: DiscoveredPeer) {
+        self.peer_reporter.report_discovered(peer).await;
     }
 }
 
@@ -355,68 +317,71 @@ async fn run_metadata_download(
 pub struct PreliminaryConnectionData {
     pub ctx_handle: PreliminaryHandle,
     pub pwp_worker_handle: runtime::Handle,
-    pub canceller: CancellationToken,
+    pub peer_reporter: PeerReporter,
 }
 
-pub async fn outgoing_preliminary_connection(
-    remote_ip: SocketAddr,
-    permit: OutgoingConnectionPermit<PreliminaryConnectionData>,
-) -> io::Result<()> {
-    let OutgoingConnectionPermit(permit) = permit;
-    let mut handle = permit.ctx_handle.clone();
-    define_with_ctx!(handle);
+impl PeerConnector for Rc<PreliminaryConnectionData> {
+    const CONNECT_TIMEOUT: Duration = sec!(5);
 
-    let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
-        *ctx.magnet.info_hash(),
-        *ctx.const_data.local_peer_id(),
-        ctx.const_data.pwp_local_tcp_port(),
-    ));
+    const MAX_CONNECT_RETRIES: usize = 1;
 
-    permit
-        .canceller
-        .run_until_cancelled(async {
-            let (download_chans, upload_chans, extended_chans) = tcp::new_outbound_connection(
-                &local_peer_id,
-                &info_hash,
-                true, // extension_protocol_enabled
-                remote_ip,
-                local_port,
-                &permit.pwp_worker_handle,
-                true,
-            )
-            .await?;
-            run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
-        })
+    async fn outbound_connect_and_handshake(
+        &self,
+        peer: DiscoveredPeer,
+    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
+    {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
+        let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
+            *ctx.magnet.info_hash(),
+            *ctx.const_data.local_peer_id(),
+            ctx.const_data.pwp_local_tcp_port(),
+        ));
+        tcp::new_outbound_connection(
+            &local_peer_id,
+            &info_hash,
+            true, // extension_protocol_enabled
+            peer.addr,
+            local_port,
+            &self.pwp_worker_handle,
+        )
         .await
-        .unwrap_or(Ok(()))
-}
+    }
 
-pub async fn incoming_preliminary_connection(
-    stream: TcpStream,
-    remote_ip: SocketAddr,
-    permit: IncomingConnectionPermit<PreliminaryConnectionData>,
-) -> io::Result<()> {
-    let IncomingConnectionPermit(permit) = permit;
-    let mut handle = permit.ctx_handle.clone();
-    define_with_ctx!(handle);
+    async fn inbound_connect_and_handshake(
+        &self,
+        peer: AcceptedPeer,
+    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
+    {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
 
-    let (info_hash, local_peer_id) =
-        with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
-
-    permit
-        .canceller
-        .run_until_cancelled(async {
-            let (download_chans, upload_chans, extended_chans) = tcp::new_inbound_connection(
-                &local_peer_id,
-                &info_hash,
-                true, // extension_protocol_enabled
-                remote_ip,
-                stream,
-                &permit.pwp_worker_handle,
-            )
-            .await?;
-            run_metadata_download(download_chans, upload_chans, extended_chans, handle).await
-        })
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
+        tcp::new_inbound_connection(
+            &local_peer_id,
+            &info_hash,
+            true, // extension_protocol_enabled
+            peer.addr,
+            peer.stream,
+            &self.pwp_worker_handle,
+        )
         .await
-        .unwrap_or(Ok(()))
+    }
+
+    async fn run_connection(
+        &self,
+        _origin: pwp::PeerOrigin,
+        download_chans: pwp::DownloadChannels,
+        upload_chans: pwp::UploadChannels,
+        extended_chans: Option<pwp::ExtendedChannels>,
+    ) -> io::Result<()> {
+        run_metadata_download(download_chans, upload_chans, extended_chans, self.ctx_handle.clone())
+            .await
+    }
+
+    async fn schedule_reconnect(&self, peer: DiscoveredPeer) {
+        self.peer_reporter.report_discovered(peer).await;
+    }
 }

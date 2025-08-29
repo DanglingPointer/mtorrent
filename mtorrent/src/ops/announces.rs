@@ -1,4 +1,5 @@
 use super::ctx;
+use crate::ops::PeerReporter;
 use crate::utils::config;
 use futures_util::future;
 use local_async_utils::prelude::*;
@@ -6,31 +7,30 @@ use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_core::trackers::*;
 use mtorrent_utils::metainfo::Metainfo;
 use std::iter;
-use std::net::SocketAddr;
 use std::path::Path;
-use tokio::time;
+use tokio::time::{self, Instant};
 
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
     trackers_handle: TrackerClient,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    peer_reporter: PeerReporter,
 ) {
     define_with_ctx!(ctx_handle);
     let tracker_urls =
         with_ctx!(|ctx| update_tracker_urls(trackers_from_metainfo(&ctx.metainfo), &config_dir));
-    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel, &config_dir).await;
+    launch_announces(&trackers_handle, ctx_handle, tracker_urls, peer_reporter, &config_dir).await;
 }
 
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     trackers_handle: TrackerClient,
     config_dir: impl AsRef<Path>,
-    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    peer_reporter: PeerReporter,
 ) {
     define_with_ctx!(ctx_handle);
     let tracker_urls = with_ctx!(|ctx| update_tracker_urls(ctx.magnet.trackers(), &config_dir));
-    launch_announces(&trackers_handle, ctx_handle, tracker_urls, cb_channel, &config_dir).await;
+    launch_announces(&trackers_handle, ctx_handle, tracker_urls, peer_reporter, &config_dir).await;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -65,7 +65,7 @@ async fn launch_announces(
     trackers_handle: &TrackerClient,
     handler: impl AnnounceHandler + Clone,
     tracker_urls: impl IntoIterator<Item = TrackerUrl>,
-    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
     future::join_all(tracker_urls.into_iter().map(|url| {
@@ -73,7 +73,7 @@ async fn launch_announces(
             trackers_handle,
             url,
             handler.clone(),
-            cb_channel.clone(),
+            peer_reporter.clone(),
             config_dir.as_ref(),
         )
     }))
@@ -84,7 +84,7 @@ async fn announce_periodically(
     trackers_handle: &TrackerClient,
     url: TrackerUrl,
     mut handler: impl AnnounceHandler,
-    cb_channel: local_channel::Sender<(SocketAddr, PeerOrigin)>,
+    peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
     loop {
@@ -93,11 +93,11 @@ async fn announce_periodically(
             Ok(mut response) => {
                 log::info!("Received response from {url:?}: {response:?}");
                 handler.preprocess_response(&mut response);
-                let interval = response.interval.clamp(sec!(5), sec!(300));
+                let reannounce_at = Instant::now() + response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {
-                    cb_channel.send((peer_addr, PeerOrigin::Tracker));
+                    peer_reporter.report_discovered_new(peer_addr, PeerOrigin::Tracker).await;
                 }
-                time::sleep(interval).await;
+                time::sleep_until(reannounce_at).await;
             }
             Err(e) => {
                 log::error!("Announce to {url:?} failed: {e}");

@@ -1,4 +1,4 @@
-use crate::ops::ctx;
+use crate::ops::{PeerReporter, ctx};
 use crate::utils::startup;
 use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
@@ -14,7 +14,6 @@ use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::task;
-use tokio_util::sync::CancellationToken;
 
 pub fn compare_input_and_output(
     input_dir: impl AsRef<Path> + Debug,
@@ -188,7 +187,6 @@ impl PeerBuilder {
                 }
             });
         }
-        let (sink, _src) = local_channel::channel();
 
         let ctx_handle_clone = ctx_handle.clone();
         let run_future = async move {
@@ -197,9 +195,8 @@ impl PeerBuilder {
                 metainfo_storage,
                 ctx_handle: ctx_handle.clone(),
                 pwp_worker_handle: tokio::runtime::Handle::current(),
-                peer_discovered_channel: sink,
+                peer_reporter: PeerReporter::new_mock(),
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
-                canceller: CancellationToken::new(),
             };
             super::run_peer_connection(pwp::PeerOrigin::Other, dlchans, ulchans, extchans, &data)
                 .await

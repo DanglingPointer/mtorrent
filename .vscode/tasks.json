@@ -26,6 +26,7 @@
 				"run",
 				"--all-targets",
 				"--all-features",
+				"--failure-output=final",
 			],
 			"problemMatcher": [
 				"$rustc"
