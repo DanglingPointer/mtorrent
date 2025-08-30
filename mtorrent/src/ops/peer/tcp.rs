@@ -46,6 +46,9 @@ fn can_retry(e: &io::Error, attempts_left: usize) -> bool {
                 | io::ErrorKind::ConnectionReset
                 | io::ErrorKind::UnexpectedEof
                 | io::ErrorKind::TimedOut
+                // the 2 below happen when the preliminary connection hasn't exited yet:
+                | io::ErrorKind::AddrInUse
+                | io::ErrorKind::AddrNotAvailable
         )
 }
 
@@ -58,7 +61,6 @@ pub async fn new_outbound_connection(
     pwp_runtime: &runtime::Handle,
     quick: bool,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
-    log::debug!("Connecting to {remote_ip}...");
     let mut attempts_left = if quick { 0 } else { 2 };
     let mut timeout = if quick { sec!(5) } else { sec!(15) };
 
@@ -70,6 +72,7 @@ pub async fn new_outbound_connection(
     let (download_chans, upload_chans, extended_chans, runner) = loop {
         let connect_and_handshake = async {
             let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
+            log::debug!("Connecting to {remote_ip}...");
             let stream = socket.connect(remote_ip).await?;
             let stream = marshal_stream!(stream, pwp_runtime);
             pwp::channels_for_outbound_connection(
