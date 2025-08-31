@@ -1,12 +1,9 @@
 pub mod bandwidth;
 pub mod benc;
-// pub(crate) mod config;
-pub mod connctrl;
 pub mod ip;
 pub mod magnet;
 pub mod metainfo;
 pub mod peer_id;
-// pub mod startup;
 pub mod stopwatch;
 pub mod upnp;
 pub mod worker;
