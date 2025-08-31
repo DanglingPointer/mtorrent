@@ -41,7 +41,7 @@ pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelRece
 }
 
 impl Runner {
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self) {
         let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
             socket: &self.socket,
@@ -55,8 +55,8 @@ impl Runner {
         };
         select! {
             biased;
-            egress_result = egress => egress_result,
-            ingress_result = ingress => ingress_result,
+            _ = egress => (),
+            _ = ingress => (),
         }
     }
 }
@@ -77,7 +77,7 @@ struct Egress<'s> {
 }
 
 impl<'s> Future for Ingress<'s> {
-    type Output = io::Result<()>;
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         fn parse_msg(buffer: &[u8]) -> Result<Message, DhtError> {
@@ -97,8 +97,13 @@ impl<'s> Future for Ingress<'s> {
         let mut buffer = ReadBuf::uninit(buffer);
         loop {
             buffer.clear();
-            let src_addr = ready!(socket.poll_recv_from(cx, &mut buffer))
-                .inspect_err(|e| log::error!("Failed to receive UDP packet: {e}"))?;
+            let src_addr = match ready!(socket.poll_recv_from(cx, &mut buffer)) {
+                Err(e) => {
+                    log::error!("Failed to receive UDP packet: {e}");
+                    continue;
+                }
+                Ok(addr) => addr,
+            };
             let message = match parse_msg(buffer.filled()) {
                 Err(e) => {
                     log::debug!("Failed to parse message from {src_addr}: {e}");
@@ -108,7 +113,7 @@ impl<'s> Future for Ingress<'s> {
             };
             match sink.try_send((message, src_addr)) {
                 Err(TrySendError::Closed(_)) => {
-                    return Poll::Ready(Ok(()));
+                    return Poll::Ready(());
                 }
                 Err(TrySendError::Full(_)) => {
                     log::warn!("Dropping message from {src_addr}: channel is full");
@@ -121,7 +126,7 @@ impl<'s> Future for Ingress<'s> {
 }
 
 impl<'s> Future for Egress<'s> {
-    type Output = io::Result<()>;
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Egress {
@@ -134,7 +139,7 @@ impl<'s> Future for Egress<'s> {
             match pending {
                 None => match ready!(source.poll_recv(cx)) {
                     None => {
-                        return Poll::Ready(Ok(()));
+                        return Poll::Ready(());
                     }
                     Some((message, dst_addr)) => {
                         let bencode = benc::Element::from(message);

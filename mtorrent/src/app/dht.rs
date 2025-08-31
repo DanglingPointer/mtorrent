@@ -88,12 +88,9 @@ async fn dht_main(
 
     let processor = dht::Processor::new(config_dir, client);
 
-    let (udp_result, queries_result, _) =
+    let (_, queries_result, _) =
         join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
 
-    if let Err(e) = udp_result {
-        log::warn!("UDP exited with error: {e}");
-    }
     if let Err(e) = queries_result {
         log::warn!("Queries exited with error: {e}");
     }

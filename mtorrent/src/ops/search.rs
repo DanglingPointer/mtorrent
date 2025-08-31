@@ -2,7 +2,7 @@ use super::connections::PeerReporter;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_dht as dht;
-use mtorrent_utils::debug_stopwatch;
+use mtorrent_utils::info_stopwatch;
 use std::time::Duration;
 use tokio::{select, sync::mpsc, time};
 
@@ -18,7 +18,7 @@ pub async fn run_dht_search(
 ) {
     const SEARCH_RESTART_INTERVAL: Duration = sec!(120);
 
-    let _sw = debug_stopwatch!("DHT search operation");
+    let _sw = info_stopwatch!("DHT search operation");
 
     async fn do_search(
         info_hash: &[u8; 20],
@@ -35,7 +35,7 @@ pub async fn run_dht_search(
             })
             .await
         {
-            log::warn!("Failed to start DHT search: {e}");
+            log::error!("Failed to start DHT search: {e}");
             return;
         }
         while let Some(peer_addr) = result_receiver.recv().await {
