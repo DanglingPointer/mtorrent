@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "clap",
@@ -1010,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitvec",
  "bytes",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent-dht"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitvec",
  "derive_more",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "mtorrent-utils"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "derive_more",
