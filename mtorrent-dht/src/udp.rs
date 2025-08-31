@@ -83,7 +83,7 @@ impl<'s> Future for Ingress<'s> {
         fn parse_msg(buffer: &[u8]) -> Result<Message, DhtError> {
             let (bencode, len) = benc::Element::from_bytes_with_len(buffer)?;
             if len < buffer.len() {
-                log::warn!("Incoming UDP packet contains more than one message, ignoring the rest");
+                log::debug!("Ignored trailing bytes in an incoming UDP packet");
             }
             let message = Message::try_from(bencode)?;
             Ok(message)

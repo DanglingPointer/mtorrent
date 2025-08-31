@@ -778,7 +778,7 @@ async fn test_clear_pending_requests_when_peer_chokes() {
     })
     .unwrap();
     let error = peer_result.unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
 }
 
 #[tokio::test(start_paused = true)]

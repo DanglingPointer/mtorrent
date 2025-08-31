@@ -187,9 +187,9 @@ impl fmt::Display for PeerStates {
         fn origin_str(origin: PeerOrigin) -> &'static str {
             match origin {
                 PeerOrigin::Tracker => "tracker",
-                PeerOrigin::Listener => "✨listener✨",
+                PeerOrigin::Listener => "🫧listener🫧",
                 PeerOrigin::Pex => "✨pex✨",
-                PeerOrigin::Dht => "✨dht✨",
+                PeerOrigin::Dht => "💎dht💎",
                 PeerOrigin::Other => "other",
             }
         }

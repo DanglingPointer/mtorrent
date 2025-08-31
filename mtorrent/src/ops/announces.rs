@@ -89,6 +89,7 @@ async fn announce_periodically(
 ) {
     loop {
         let request = handler.generate_request();
+        log::debug!("Announcing to {url:?}");
         match tracker_client.announce(url.clone(), request).await {
             Ok(mut response) => {
                 log::info!("Received response from {url:?}: {response:?}");
@@ -100,9 +101,9 @@ async fn announce_periodically(
                 time::sleep_until(reannounce_at).await;
             }
             Err(e) => {
-                log::error!("Announce to {url:?} failed: {e}");
+                log::warn!("Announce to {url:?} failed: {e}. Removing tracker from config");
                 _ = config::remove_tracker(config_dir, &url)
-                    .inspect_err(|e| log::error!("Failed to remove tracker: {e}"));
+                    .inspect_err(|e| log::error!("Failed to remove tracker from config: {e}"));
                 return;
             }
         }

@@ -474,7 +474,7 @@ impl From<ChannelError> for io::Error {
             ChannelError::Timeout => {
                 io::Error::new(io::ErrorKind::TimedOut, "Peer channel timeout")
             }
-            ChannelError::ConnectionClosed => io::Error::from(io::ErrorKind::UnexpectedEof),
+            ChannelError::ConnectionClosed => io::Error::from(io::ErrorKind::BrokenPipe),
         }
     }
 }
