@@ -213,7 +213,7 @@ async fn do_http_announce(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no interval in response"))?;
     let mut peers = response
         .peers()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no interval in response"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no peers in response"))?;
     peers.retain(|peer_ip| !peer_ip.ip().is_unspecified());
     Ok(AnnounceResponse {
         interval: sec!(interval_sec as u64),

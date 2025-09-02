@@ -13,7 +13,7 @@ license = "Apache-2.0"
 opt-level = 3
 
 [workspace.dependencies]
-url = "2.5.4"
+url = "2.5.7"
 futures-util = { version = "0.3", default-features = false }
 futures-channel = { version = "0.3", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
@@ -32,12 +32,12 @@ tokio = { version = "1.45.1", features = [
 ] }
 tokio-util = "0.7.15"
 derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
-local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.2.0", features = [
+local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.2.1", features = [
     "tokio-time",
 ] }
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde_json = "1.0.143"
 static_assertions = "1.1.0"
 tokio-test = "0.4.4"
 mockito = { version = "1.7.0", default-features = false }

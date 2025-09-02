@@ -85,7 +85,7 @@ impl QueryManager {
             };
             if timeout.retries_left == 0 {
                 // erase entry and invoke callback with error
-                outstanding.remove().response_sink.send(Err(Error::Timeout));
+                _ = outstanding.remove().response_sink.send(Err(Error::Timeout));
             } else {
                 let query = outstanding.get_mut();
                 // retransmit query
