@@ -1,6 +1,6 @@
 [package]
 name = "mtorrent"
-description = "CLI BitTorrent client based on Tokio"
+description = "Fast and lightweight CLI BitTorrent client in Rust"
 categories = [
     "asynchronous",
     "network-programming",
@@ -8,17 +8,18 @@ categories = [
     "security",
 ]
 keywords = ["bittorrent", "torrent", "client", "p2p", "protocol"]
-exclude = ["/tests/"]
+exclude = ["/tests/", "/src/bin/prettyprint.rs", "/src/bin/dht_node.rs"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
+default-run = "mtorrent"
 
 [dependencies]
-mtorrent-core = { path = "../mtorrent-core" }
-mtorrent-dht = { path = "../mtorrent-dht" }
-mtorrent-utils = { path = "../mtorrent-utils" }
+mtorrent-core = { workspace = true }
+mtorrent-dht = { workspace = true }
+mtorrent-utils = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 futures-util = { workspace = true }
