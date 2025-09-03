@@ -796,7 +796,7 @@ async fn test_download_and_upload_multifile_torrent() {
         compare_input_and_output(output_dir, data_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
     }
-    let _ = std::fs::remove_file("tests/assets/.mtorrent");
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
@@ -911,7 +911,7 @@ async fn test_download_and_upload_monofile_torrent() {
         compare_input_and_output(output_dir, data_dir, torrent_name);
         std::fs::remove_dir_all(output_dir).unwrap();
     }
-    let _ = std::fs::remove_file("tests/assets/.mtorrent");
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]

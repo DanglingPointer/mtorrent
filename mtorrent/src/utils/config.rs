@@ -20,7 +20,8 @@ use std::io::Seek;
 use std::path::Path;
 use std::{fs, io};
 
-const FILENAME: &str = ".mtorrent";
+const FILENAME_TRACKERS: &str = ".mtorrent_cfg";
+const FILENAME_STATE: &str = ".mtorrent";
 
 #[derive(Default, Serialize, Deserialize)]
 struct Trackers {
@@ -31,7 +32,7 @@ struct Trackers {
 pub fn load_trackers(
     config_dir: impl AsRef<Path>,
 ) -> io::Result<impl ExactSizeIterator<Item = TrackerUrl>> {
-    let file = fs::File::open(config_dir.as_ref().join(FILENAME))?;
+    let file = fs::File::open(config_dir.as_ref().join(FILENAME_TRACKERS))?;
     let Trackers { trackers } = serde_json::from_reader(io::BufReader::new(file))?;
     Ok(trackers.into_iter())
 }
@@ -49,7 +50,7 @@ pub fn save_trackers(
         .create(true)
         .truncate(false)
         .append(false)
-        .open(config_dir.as_ref().join(FILENAME))?;
+        .open(config_dir.as_ref().join(FILENAME_TRACKERS))?;
 
     // parse existing content
     let mut saved_trackers: Trackers =
@@ -69,7 +70,7 @@ pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io:
     let mut file = fs::File::options()
         .write(true)
         .read(true)
-        .open(config_dir.as_ref().join(FILENAME))?;
+        .open(config_dir.as_ref().join(FILENAME_TRACKERS))?;
 
     let mut saved_trackers: Trackers = serde_json::from_reader(io::BufReader::new(&file))?;
     if !saved_trackers.trackers.remove(tracker) {
@@ -88,7 +89,7 @@ pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io:
 
 /// Read the bencoded progress file, and get the state of `info_hash`.
 pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
-    let buf = fs::read(config_dir.as_ref().join(FILENAME))?;
+    let buf = fs::read(config_dir.as_ref().join(FILENAME_STATE))?;
     let bencode = Element::from_bytes(&buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
 
@@ -114,7 +115,7 @@ pub fn save_state(
     let root: BTreeMap<Element, Element> = [(key, value)].into();
     let bencode = Element::Dictionary(root);
 
-    let config_path = config_dir.as_ref().join(FILENAME);
+    let config_path = config_dir.as_ref().join(FILENAME_STATE);
     fs::write(config_path, bencode.to_bytes())?;
     Ok(())
 }
@@ -137,7 +138,7 @@ mod tests {
         );
 
         save_state(dir, &info_hash, bitfield.clone()).unwrap();
-        assert!(Path::new(dir).join(FILENAME).is_file());
+        assert!(Path::new(dir).join(FILENAME_STATE).is_file());
 
         let mut loaded_state = load_state(dir, &info_hash).unwrap();
         loaded_state.resize(bitfield.len(), false);
@@ -151,7 +152,7 @@ mod tests {
         let dir = "test_read_trackers";
         fs::create_dir_all(dir).unwrap();
         fs::write(
-            Path::new(dir).join(FILENAME),
+            Path::new(dir).join(FILENAME_TRACKERS),
             r#"{
                 "trackers": [
                     "http://tracker1.com",
@@ -186,7 +187,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = fs::read_to_string(Path::new(dir).join(FILENAME)).unwrap();
+        let content = fs::read_to_string(Path::new(dir).join(FILENAME_TRACKERS)).unwrap();
         assert_eq!(
             content,
             r#"{
@@ -205,7 +206,7 @@ mod tests {
         let dir = "test_remove_tracker";
         fs::create_dir_all(dir).unwrap();
         fs::write(
-            Path::new(dir).join(FILENAME),
+            Path::new(dir).join(FILENAME_TRACKERS),
             r#"{
                 "trackers": [
                     "http://tracker1.com",
@@ -217,7 +218,7 @@ mod tests {
 
         remove_tracker(dir, &TrackerUrl::Http("http://tracker1.com".to_string())).unwrap();
 
-        let content = fs::read_to_string(Path::new(dir).join(FILENAME)).unwrap();
+        let content = fs::read_to_string(Path::new(dir).join(FILENAME_TRACKERS)).unwrap();
         assert_eq!(
             content,
             r#"{
@@ -242,7 +243,7 @@ mod tests {
             .into_iter()
             .map(|s| TrackerUrl::Http(s.to_owned()));
         save_trackers(dir, initial_trackers.clone()).unwrap();
-        assert!(Path::new(dir).join(FILENAME).is_file());
+        assert!(Path::new(dir).join(FILENAME_TRACKERS).is_file());
 
         let loaded_trackers = load_trackers(dir).unwrap();
         assert_eq!(
