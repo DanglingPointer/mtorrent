@@ -14,7 +14,7 @@ default = []
 mocks = []
 
 [dependencies]
-mtorrent-utils = { path = "../mtorrent-utils" }
+mtorrent-utils = { workspace = true }
 futures-channel = { workspace = true }
 futures-util = { workspace = true }
 local_async_utils = { workspace = true }
