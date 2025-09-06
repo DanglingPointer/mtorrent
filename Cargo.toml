@@ -32,9 +32,7 @@ tokio = { version = "1.45.1", features = [
 ] }
 tokio-util = "0.7.15"
 derive_more = { version = "2.0.1", features = ["from", "display", "debug"] }
-local_async_utils = { git = "https://github.com/DanglingPointer/local_async_utils.git", tag = "v0.2.1", features = [
-    "tokio-time",
-] }
+local_async_utils = { version = "0.2.2", features = ["tokio-time"] }
 thiserror = "2.0.16"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"

@@ -940,8 +940,9 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
 name = "local_async_utils"
-version = "0.2.1"
-source = "git+https://github.com/DanglingPointer/local_async_utils.git?tag=v0.2.1#bc85dd69bd5562fe5359faca6c2b1d248d5e587b"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "445b9fa29fa454ba188dbe209f139b45709e6c02934d55f7834339a9706c8cd7"
 dependencies = [
  "futures",
  "log",

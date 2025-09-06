@@ -113,7 +113,7 @@ pub struct SearchTask {
     ctx: Rc<Ctx>,
 
     cmd_result_sender: mpsc::Sender<SocketAddr>,
-    peer_sender: local_channel::Sender<(SocketAddr, U160)>,
+    peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
 }
 
 impl SearchTask {
@@ -122,7 +122,7 @@ impl SearchTask {
         local_peer_port: u16,
         ctx: Rc<Ctx>,
         cmd_result_sender: mpsc::Sender<SocketAddr>,
-        peer_sender: local_channel::Sender<(SocketAddr, U160)>,
+        peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
     ) -> Self {
         Self {
             target,
@@ -171,7 +171,7 @@ impl SearchTask {
                 }
                 Some(peer) = peer_receiver.recv() => {
                     if discovered_peers.insert(peer) {
-                        self.peer_sender.send((peer, self.target));
+                        self.peer_sender.send((peer, self.target))?;
                         self.cmd_result_sender.send(peer).await?;
                     }
                 }

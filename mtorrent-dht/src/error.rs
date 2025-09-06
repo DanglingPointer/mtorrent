@@ -1,4 +1,5 @@
 use super::msgs;
+use local_async_utils::prelude::*;
 use mtorrent_utils::benc;
 use std::io;
 use thiserror::Error;
@@ -39,6 +40,12 @@ impl<T> From<mpsc::error::SendError<T>> for Error {
 
 impl From<oneshot::error::RecvError> for Error {
     fn from(_: oneshot::error::RecvError) -> Self {
+        Error::ChannelClosed
+    }
+}
+
+impl<T> From<local_sync_error::SendError<T>> for Error {
+    fn from(_: local_sync_error::SendError<T>) -> Self {
         Error::ChannelClosed
     }
 }

@@ -199,7 +199,7 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
     let peer_reqq = with_ctx!(|ctx| ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx));
 
     let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
-    let (piece_sink, piece_src) = local_channel::channel::<usize>();
+    let (piece_sink, piece_src) = local_unbounded::channel::<usize>();
     let (block_received_notifier, block_received_waiter) = local_condvar::condvar();
 
     try_join!(
@@ -355,7 +355,7 @@ async fn receive_pieces(
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
     block_received_reporter: local_condvar::Sender,
-    verification_channel: local_channel::Sender<usize>,
+    verification_channel: local_unbounded::Sender<usize>,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -377,7 +377,7 @@ async fn receive_pieces(
                         panic!("Failed to start write ({info}) to storage: {e}")
                     });
                     if with_ctx!(|ctx| ctx.accountant.has_piece(info.piece_index)) {
-                        verification_channel.send(info.piece_index);
+                        _ = verification_channel.send(info.piece_index);
                     }
                 }
                 // notify the request task
@@ -403,7 +403,7 @@ async fn verify_pieces(
     mut handle: CtxHandle,
     storage: &data::StorageClient,
     progress_reporter: &broadcast::Sender<usize>,
-    mut downloaded_pieces: local_channel::Receiver<usize>,
+    mut downloaded_pieces: local_unbounded::Receiver<usize>,
     verified_pieces: &mut usize,
 ) -> io::Result<()> {
     define_with_ctx!(handle);

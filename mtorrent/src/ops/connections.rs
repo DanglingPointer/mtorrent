@@ -37,7 +37,7 @@ pub fn connect_control<H: ConnectHandler + 'static>(
 ) -> (PeerReporter, ConnectThrottle<H>) {
     let (discovered_tx, discovered_rx) = mpsc::channel(1);
     let (accepted_tx, accepted_rx) = mpsc::channel(1);
-    let (disconnect_tx, disconnect_rx) = local_channel::channel();
+    let (disconnect_tx, disconnect_rx) = local_unbounded::channel();
     let reporter = PeerReporter {
         discovered_reporter: discovered_tx,
         accepted_reporter: accepted_tx,
@@ -85,13 +85,13 @@ impl PeerReporter {
 pub struct ConnectPermit {
     addr: SocketAddr,
     #[debug(skip)]
-    disconnect_reporter: local_channel::Sender<SocketAddr>,
+    disconnect_reporter: local_unbounded::Sender<SocketAddr>,
 }
 
 impl Drop for ConnectPermit {
     fn drop(&mut self) {
         if !self.disconnect_reporter.is_closed() {
-            self.disconnect_reporter.send(self.addr);
+            _ = self.disconnect_reporter.send(self.addr);
         }
     }
 }
@@ -102,8 +102,8 @@ pub struct ConnectThrottle<H> {
     discovered_peers_receiver: mpsc::Receiver<DiscoveredPeer>,
     accepted_peers_receiver: mpsc::Receiver<AcceptedPeer>,
 
-    disconnected_peers_receiver: local_channel::Receiver<SocketAddr>,
-    disconnect_reporter: local_channel::Sender<SocketAddr>,
+    disconnected_peers_receiver: local_unbounded::Receiver<SocketAddr>,
+    disconnect_reporter: local_unbounded::Sender<SocketAddr>,
 
     handler: H,
 }
@@ -488,7 +488,7 @@ mod tests {
     }
 
     fn mock_permit() -> ConnectPermit {
-        let (tx, _rx) = local_channel::channel();
+        let (tx, _rx) = local_unbounded::channel();
         ConnectPermit {
             addr: addr!("127.0.0.1:8080"),
             disconnect_reporter: tx,

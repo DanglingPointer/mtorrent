@@ -229,7 +229,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     define_with_ctx!(inner.handle);
     let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
 
-    let (request_sink, request_src) = local_channel::channel::<pwp::BlockInfo>();
+    let (request_sink, request_src) = local_unbounded::channel::<pwp::BlockInfo>();
     let mut state_copy = inner.state.clone();
 
     let mut discarded_requests = 0u64;
@@ -243,12 +243,14 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 .await
             {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    if !request_sink.try_send(LOCAL_REQQ, info) {
+                    if request_sink.queue().len() < LOCAL_REQQ {
+                        _ = request_sink.send(info);
+                    } else {
                         discarded_requests = discarded_requests.saturating_add(1);
                     }
                 }
                 Ok(pwp::DownloaderMessage::Cancel(info)) => {
-                    request_sink.remove_all(&info);
+                    request_sink.queue().remove_all(&info);
                 }
                 Ok(msg) => {
                     update_state_with_msg!(inner, msg);

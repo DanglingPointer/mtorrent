@@ -23,7 +23,7 @@ use tokio::time::{Instant, sleep_until};
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
 pub struct Client {
-    channel: local_channel::Sender<OutgoingQuery>,
+    channel: local_unbounded::Sender<OutgoingQuery>,
     query_slots: Rc<Semaphore>,
 }
 
@@ -70,13 +70,13 @@ impl Client {
         R: TryFrom<ResponseMsg, Error = Error> + Debug,
     {
         let _slot = self.query_slots.acquire().await;
-        let (tx, rx) = local_oneshot::oneshot();
+        let (tx, rx) = local_oneshot::channel();
         log::trace!("[{dst_addr}] <= {args:?}");
         self.channel.send(OutgoingQuery {
             query: args.into(),
             destination_addr: dst_addr,
             response_sink: tx,
-        });
+        })?;
         let result = rx.await.ok_or(Error::ChannelClosed)?.and_then(R::try_from);
         match &result {
             Ok(response) => log::trace!("[{dst_addr}] => {response:?}"),
@@ -89,13 +89,13 @@ impl Client {
 }
 
 /// Server for receiving incoming queries from different nodes.
-pub struct Server(pub(super) local_channel::Receiver<IncomingQuery>);
+pub struct Server(pub(super) local_unbounded::Receiver<IncomingQuery>);
 
 /// Actor that routes queries between app layer and network layer,
 /// performs retries and matches requests and responses.
 pub struct Runner {
     queries: QueryManager,
-    outgoing_queries_source: local_channel::Receiver<OutgoingQuery>,
+    outgoing_queries_source: local_unbounded::Receiver<OutgoingQuery>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 }
 
@@ -148,8 +148,8 @@ pub fn setup_routing(
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
     max_concurrent_queries: Option<usize>,
 ) -> (Client, Server, Runner) {
-    let (outgoing_queries_sink, outgoing_queries_source) = local_channel::channel();
-    let (incoming_queries_sink, incoming_queries_source) = local_channel::channel();
+    let (outgoing_queries_sink, outgoing_queries_source) = local_unbounded::channel();
+    let (incoming_queries_sink, incoming_queries_source) = local_unbounded::channel();
     let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
     let runner = Runner {

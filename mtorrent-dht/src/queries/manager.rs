@@ -49,7 +49,7 @@ pub struct QueryManager {
     outstanding_queries: HashMap<u32, OutgoingQuery>,
     pending_timeouts: BinaryHeap<PendingTimeout>,
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-    incoming_queries_sink: local_channel::Sender<IncomingQuery>,
+    incoming_queries_sink: local_unbounded::Sender<IncomingQuery>,
 }
 
 impl QueryManager {
@@ -58,7 +58,7 @@ impl QueryManager {
 
     pub fn new(
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-        incoming_queries_sink: local_channel::Sender<IncomingQuery>,
+        incoming_queries_sink: local_unbounded::Sender<IncomingQuery>,
     ) -> Self {
         Self {
             next_tid: 1,
@@ -152,7 +152,7 @@ impl QueryManager {
             let response_sink = self.outgoing_msgs_sink.clone().reserve_owned().await?;
             let incoming_query =
                 IncomingQuery::new(request, msg.transaction_id, response_sink, src_addr);
-            self.incoming_queries_sink.send(incoming_query);
+            self.incoming_queries_sink.send(incoming_query)?;
         } else if let Some((tid, outstanding)) =
             msg.transaction_id.last_chunk::<4>().and_then(|&tid| {
                 let tid = u32::from_be_bytes(tid);

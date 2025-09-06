@@ -31,8 +31,8 @@ pub struct Processor {
     known_nodes: HashSet<SocketAddr>,
     task_ctx: Rc<Ctx>,
 
-    peer_sender: local_channel::Sender<(SocketAddr, U160)>,
-    peer_receiver: local_channel::Receiver<(SocketAddr, U160)>,
+    peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
+    peer_receiver: local_unbounded::Receiver<(SocketAddr, U160)>,
     node_event_receiver: mpsc::Receiver<NodeEvent>,
 
     config: Config,
@@ -42,7 +42,7 @@ pub struct Processor {
 
 impl Processor {
     pub fn new(config_dir: PathBuf, client: queries::Client) -> Self {
-        let (peer_sender, peer_receiver) = local_channel::channel();
+        let (peer_sender, peer_receiver) = local_unbounded::channel();
         let (node_event_sender, node_event_receiver) = mpsc::channel(1024);
 
         let config = Config::load(&config_dir).unwrap_or_else(|e| {
