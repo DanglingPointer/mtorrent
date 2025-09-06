@@ -2,6 +2,7 @@ use super::super::ctx;
 use super::LOCAL_REQQ;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
+use local_async_utils::sync::error::TrySendError;
 use mtorrent_core::{data, pwp};
 use mtorrent_utils::bandwidth;
 use mtorrent_utils::{debug_stopwatch, info_stopwatch};
@@ -229,12 +230,12 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
     define_with_ctx!(inner.handle);
     let _sw = info_stopwatch!("Serving pieces to {}", inner.tx.remote_ip());
 
-    let (request_sink, request_src) = local_unbounded::channel::<pwp::BlockInfo>();
+    let (request_sink, request_src) = local_bounded::channel::<pwp::BlockInfo>(LOCAL_REQQ);
     let mut state_copy = inner.state.clone();
 
     let mut discarded_requests = 0u64;
     let collect_requests = async {
-        let request_sink = request_sink; // move it, so that it's dropped at the end
+        let mut request_sink = request_sink; // move it, so that it's dropped at the end
         let start_time = Instant::now();
         loop {
             match inner
@@ -243,9 +244,7 @@ pub async fn serve_pieces(peer: LeechingPeer, min_duration: Duration) -> io::Res
                 .await
             {
                 Ok(pwp::DownloaderMessage::Request(info)) => {
-                    if request_sink.queue().len() < LOCAL_REQQ {
-                        _ = request_sink.send(info);
-                    } else {
+                    if let Err(TrySendError::Full(_)) = request_sink.try_send(info) {
                         discarded_requests = discarded_requests.saturating_add(1);
                     }
                 }

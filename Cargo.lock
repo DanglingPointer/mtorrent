@@ -940,9 +940,9 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
 name = "local_async_utils"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "445b9fa29fa454ba188dbe209f139b45709e6c02934d55f7834339a9706c8cd7"
+checksum = "4c0eafab851c50b9e1aa8da9b32222d7129164c7f31700b2d66840321ba5fae2"
 dependencies = [
  "futures",
  "log",

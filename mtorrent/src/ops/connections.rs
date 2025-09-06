@@ -90,9 +90,7 @@ pub struct ConnectPermit {
 
 impl Drop for ConnectPermit {
     fn drop(&mut self) {
-        if !self.disconnect_reporter.is_closed() {
-            _ = self.disconnect_reporter.send(self.addr);
-        }
+        _ = self.disconnect_reporter.send(self.addr);
     }
 }
 
@@ -298,7 +296,7 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     connector: &C,
     permit: ConnectPermit,
 ) -> io::Result<()> {
-    log::debug!("Connecting to {peer:?}");
+    log::debug!("Accepted {peer:?}");
     let peer_addr = peer.addr;
     let connect_deadline = Instant::now() + with_jitter(C::CONNECT_TIMEOUT);
 
