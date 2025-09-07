@@ -17,7 +17,7 @@ pub async fn single_torrent(
     local_peer_id: PeerId,
     metainfo_uri: &str,
     output_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CmdSender>,
+    dht_handle: Option<dht::CommandSink>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     use_upnp: bool,
@@ -113,7 +113,7 @@ async fn preliminary_stage(
     magnet_link: impl AsRef<str>,
     config_dir: impl AsRef<Path>,
     metainfo_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CmdSender>,
+    dht_handle: Option<dht::CommandSink>,
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(impl AsRef<Path>, impl IntoIterator<Item = SocketAddr>)> {
     let magnet_link: magnet::MagnetLink = magnet_link
@@ -196,7 +196,7 @@ async fn main_stage(
     public_pwp_ip: SocketAddr,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CmdSender>,
+    dht_handle: Option<dht::CommandSink>,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     extra_peers: impl IntoIterator<Item = SocketAddr>,

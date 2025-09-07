@@ -12,7 +12,7 @@ use tokio::{select, sync::mpsc, time};
 /// but not immmediately after the channel has been closed.
 pub async fn run_dht_search(
     info_hash: [u8; 20],
-    dht_cmds: dht::CmdSender,
+    dht_cmds: dht::CommandSink,
     peer_reporter: PeerReporter,
     pwp_listener_port: u16,
 ) {
@@ -22,14 +22,14 @@ pub async fn run_dht_search(
 
     async fn do_search(
         info_hash: &[u8; 20],
-        dht_cmds: &dht::CmdSender,
+        dht_cmds: &dht::CommandSink,
         peer_reporter: &PeerReporter,
         pwp_listener_port: u16,
     ) {
         let (sender, mut result_receiver) = mpsc::channel(1024);
         if let Err(e) = dht_cmds
             .send(dht::Command::FindPeers {
-                info_hash: dht::U160::from(*info_hash),
+                info_hash: *info_hash,
                 callback: sender,
                 local_peer_port: pwp_listener_port,
             })

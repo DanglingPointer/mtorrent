@@ -2,8 +2,9 @@ use mtorrent_dht as dht;
 use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::{ip, upnp, worker};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
+use tokio::net::UdpSocket;
 use tokio::{join, runtime, task};
 
 pub fn launch_node_runtime(
@@ -11,8 +12,8 @@ pub fn launch_node_runtime(
     max_concurrent_queries: Option<usize>,
     config_dir: PathBuf,
     use_upnp: bool,
-) -> (worker::simple::Handle, dht::CmdSender) {
-    let (cmd_sender, cmd_server) = dht::setup_cmds();
+) -> (worker::simple::Handle, dht::CommandSink) {
+    let (cmd_sender, cmd_server) = dht::setup_commands();
 
     let worker_handle = worker::without_runtime(
         worker::simple::Config {
@@ -63,7 +64,7 @@ async fn start_upnp(local_port: u16) -> io::Result<()> {
 }
 
 async fn dht_main(
-    cmd_server: dht::CmdServer,
+    cmd_server: dht::CommandSource,
     local_port: u16,
     config_dir: PathBuf,
     max_concurrent_queries: Option<usize>,
@@ -71,7 +72,7 @@ async fn dht_main(
 ) {
     let _sw = info_stopwatch!("DHT");
 
-    let socket = match dht::create_ipv4_socket(local_port).await {
+    let socket = match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, local_port)).await {
         Err(e) => return log::error!("Failed to create a UDP socket for DHT: {e}"),
         Ok(socket) => socket,
     };
@@ -83,15 +84,11 @@ async fn dht_main(
     }
 
     let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
+
     let (client, server, queries_runner) =
-        dht::setup_routing(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
+        dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
 
     let processor = dht::Processor::new(config_dir, client);
 
-    let (_, queries_result, _) =
-        join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
-
-    if let Err(e) = queries_result {
-        log::warn!("Queries exited with error: {e}");
-    }
+    join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
 }

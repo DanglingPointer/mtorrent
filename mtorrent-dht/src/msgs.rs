@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::{fmt, iter};
 
-pub struct Message {
+/// DHT message.
+pub(super) struct Message {
     pub(super) transaction_id: Vec<u8>,
     pub(super) version: Option<String>,
     pub(super) data: MessageData,
@@ -181,7 +182,7 @@ impl TryFrom<benc::Element> for ErrorCode {
 }
 
 #[derive(Debug)]
-pub struct ErrorMsg {
+pub(super) struct ErrorMsg {
     pub(super) error_code: ErrorCode,
     pub(super) error_msg: String,
 }
@@ -579,7 +580,7 @@ fn serialize_nodes(nodes: impl ExactSizeIterator<Item = (U160, SocketAddrV4)>) -
     let mut buffer = vec![0u8; nodes.len() * 26];
     for ((id, addr), dst) in iter::zip(nodes, buffer.chunks_exact_mut(26)) {
         unsafe {
-            dst.get_unchecked_mut(0..20).copy_from_slice(id.0.as_raw_slice());
+            dst.get_unchecked_mut(0..20).copy_from_slice(id.as_raw_slice());
             dst.get_unchecked_mut(20..24).copy_from_slice(&addr.ip().octets());
             dst.get_unchecked_mut(24..26).copy_from_slice(&addr.port().to_be_bytes());
         }

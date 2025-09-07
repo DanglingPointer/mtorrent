@@ -1,14 +1,15 @@
 use super::error::Error;
 use bitvec::prelude::*;
-use derive_more::Debug;
+use derive_more::{Debug, Deref};
 use mtorrent_utils::benc;
 use std::ops::BitXor;
 use std::str;
 use std::{fmt, iter};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+/// 160-bit unsigned integer that supports bitwise XOR and comparisons.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Deref)]
 #[debug("{self}")]
-pub struct U160(pub(super) BitArray<[u8; 20], Msb0>);
+pub(crate) struct U160(BitArray<[u8; 20], Msb0>);
 
 impl str::FromStr for U160 {
     type Err = String;

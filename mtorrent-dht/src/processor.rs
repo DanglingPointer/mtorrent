@@ -1,11 +1,11 @@
-use super::cmds::{self, Command};
+use super::cmds::{Command, CommandSource};
 use super::kademlia;
 use super::msgs::*;
 use super::peers::TokenManager;
-use super::queries::{self, IncomingQuery};
+use super::queries::{InboundQueries, IncomingQuery, OutboundQueries};
 use super::tasks::*;
 use super::u160::U160;
-use crate::Config;
+use crate::config::Config;
 use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
@@ -22,10 +22,11 @@ use tokio::{select, task, time};
 use tokio_util::sync::CancellationToken;
 
 type RoutingTable = kademlia::RoutingTable<16>;
-pub(super) type BoxRoutingTable = Box<RoutingTable>;
 
+/// Actor that maintains the routing table, responds to incoming queries,
+/// keeps track of discovered peers, and handles commands from the user.
 pub struct Processor {
-    node_table: BoxRoutingTable,
+    node_table: Box<RoutingTable>,
     peers: PeerTable,
     token_mgr: TokenManager,
     known_nodes: HashSet<SocketAddr>,
@@ -41,7 +42,7 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn new(config_dir: PathBuf, client: queries::Client) -> Self {
+    pub fn new(config_dir: PathBuf, client: OutboundQueries) -> Self {
         let (peer_sender, peer_receiver) = local_unbounded::channel();
         let (node_event_sender, node_event_receiver) = mpsc::channel(1024);
 
@@ -71,7 +72,7 @@ impl Processor {
         }
     }
 
-    pub async fn run(mut self, mut queries: queries::Server, mut commands: cmds::Server) {
+    pub async fn run(mut self, mut queries: InboundQueries, mut commands: CommandSource) {
         macro_rules! handle_next_event {
             ($queries:expr $(,$commands:expr)?) => {
                 select! {
@@ -99,7 +100,7 @@ impl Processor {
         const BOOTSTRAP_TIMEOUT: Duration = sec!(10);
         const BOOTSTRAP_TARGET: usize = 200;
 
-        // do all DNS resolution first because it will block the current thread
+        // do all DNS resolution first because it will block the thread
         let sw = warn_stopwatch!("DNS resolution of bootstrapping nodes");
         let bootstrapping_nodes: Vec<SocketAddr> = self
             .config
@@ -111,7 +112,7 @@ impl Processor {
             .collect();
         drop(sw);
 
-        // do bootstrapping for the next 10 sec
+        // ignore commands until we have a certain number of nodes
         if !bootstrapping_nodes.is_empty() {
             let _sw = debug_stopwatch!("Bootstrapping");
 
@@ -133,6 +134,7 @@ impl Processor {
             .await;
         }
 
+        // now we're ready to handle commands
         while handle_next_event!(queries, commands).is_continue() {}
     }
 
@@ -282,7 +284,7 @@ impl Processor {
             } => {
                 if self
                     .peers
-                    .get_peers(info_hash)
+                    .get_peers(info_hash.into())
                     .try_for_each(|addr| callback.try_send(*addr))
                     .is_err()
                 {
@@ -290,7 +292,7 @@ impl Processor {
                     return;
                 }
                 let search = SearchTask::new(
-                    info_hash,
+                    info_hash.into(),
                     local_peer_port,
                     self.task_ctx.clone(),
                     callback,
@@ -298,7 +300,7 @@ impl Processor {
                 );
                 let initial_nodes: Vec<Node> = self
                     .node_table
-                    .get_closest_nodes(&info_hash, RoutingTable::BUCKET_SIZE * 3)
+                    .get_closest_nodes(&info_hash.into(), RoutingTable::BUCKET_SIZE * 3)
                     .cloned()
                     .collect();
                 task::spawn_local(

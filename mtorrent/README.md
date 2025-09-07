@@ -1,3 +1,6 @@
+[![CI](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
+[![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
+
 # mtorrent
 Lightweight CLI Bittorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general.
 

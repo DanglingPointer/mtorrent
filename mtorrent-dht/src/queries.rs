@@ -4,7 +4,7 @@ mod manager;
 mod tests;
 
 use super::error::Error;
-use super::{U160, msgs::*, udp};
+use super::{msgs::*, u160::U160, udp};
 use derive_more::derive::From;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
@@ -22,12 +22,12 @@ use tokio::time::{Instant, sleep_until};
 
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
-pub struct Client {
+pub struct OutboundQueries {
     channel: local_unbounded::Sender<OutgoingQuery>,
     query_slots: Rc<Semaphore>,
 }
 
-impl Client {
+impl OutboundQueries {
     pub(super) async fn ping(
         &self,
         destination: SocketAddr,
@@ -89,41 +89,45 @@ impl Client {
 }
 
 /// Server for receiving incoming queries from different nodes.
-pub struct Server(pub(super) local_unbounded::Receiver<IncomingQuery>);
+pub struct InboundQueries(pub(super) local_unbounded::Receiver<IncomingQuery>);
 
-/// Actor that routes queries between app layer and network layer,
+/// Actor that routes queries between [`crate::Processor`] and [`crate::IoDriver`],
 /// performs retries and matches requests and responses.
-pub struct Runner {
+pub struct QueryRouter {
     queries: QueryManager,
     outgoing_queries_source: local_unbounded::Receiver<OutgoingQuery>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 }
 
-impl Runner {
-    pub async fn run(mut self) -> Result<(), Error> {
+impl QueryRouter {
+    pub async fn run(mut self) {
         let _sw = debug_stopwatch!("Queries runner");
         loop {
             let next_timeout = self.queries.next_timeout();
             select! {
                 biased;
                 outgoing = self.outgoing_queries_source.next() => {
-                    match outgoing {
-                        None => break,
-                        Some(query) => self.queries.handle_one_outgoing(query).await?,
+                    let Some(query) = outgoing else { break };
+                    if let Err(e) = self.queries.handle_one_outgoing(query).await {
+                        log::warn!("Error while handling outbound query: {e}");
+                        break;
                     }
                 }
                 incoming = self.incoming_msgs_source.recv() => {
-                    match incoming {
-                        None => break,
-                        Some(msg) => self.queries.handle_one_incoming(msg).await?,
+                    let Some(msg) = incoming else { break };
+                    if let Err(e) = self.queries.handle_one_incoming(msg).await {
+                        log::warn!("Error while handling inbound query: {e}");
+                        break;
                     }
                 }
                 _ = Self::sleep_until(next_timeout), if next_timeout.is_some() => {
-                    self.queries.handle_timeouts().await?;
+                    if let Err(e) = self.queries.handle_timeouts().await {
+                        log::warn!("Error while handling timeouts: {e}");
+                        break;
+                    }
                 }
             }
         }
-        Ok(())
     }
 
     async fn sleep_until(deadline: Option<Instant>) {
@@ -143,28 +147,29 @@ impl Runner {
 
 // ------------------------------------------------------------------------------------------------
 
-pub fn setup_routing(
-    outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
-    incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
+/// Create the layer that facilitates inbound and outbound transactions (queries).
+pub fn setup_queries(
+    udp::MessageChannelSender(outgoing_msgs_sink): udp::MessageChannelSender,
+    udp::MessageChannelReceiver(incoming_msgs_source): udp::MessageChannelReceiver,
     max_concurrent_queries: Option<usize>,
-) -> (Client, Server, Runner) {
+) -> (OutboundQueries, InboundQueries, QueryRouter) {
     let (outgoing_queries_sink, outgoing_queries_source) = local_unbounded::channel();
     let (incoming_queries_sink, incoming_queries_source) = local_unbounded::channel();
     let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
-    let runner = Runner {
+    let runner = QueryRouter {
         queries: QueryManager::new(outgoing_msgs_sink, incoming_queries_sink),
         outgoing_queries_source,
         incoming_msgs_source,
     };
-    let client = Client {
+    let client = OutboundQueries {
         channel: outgoing_queries_sink,
         query_slots: Rc::new(Semaphore::const_new(max_in_flight)),
     };
     if max_in_flight == 0 {
         client.query_slots.close();
     }
-    (client, Server(incoming_queries_source), runner)
+    (client, InboundQueries(incoming_queries_source), runner)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -201,7 +206,7 @@ impl IncomingQuery {
         sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
         remote_addr: SocketAddr,
     ) -> IncomingQuery {
-        macro_rules! convert {
+        macro_rules! construct {
             ($query_args:expr, $name:literal) => {{
                 log::trace!("[{}] => {:?}", remote_addr, $query_args);
                 IncomingQuery::from(IncomingGenericQuery {
@@ -215,10 +220,10 @@ impl IncomingQuery {
             }};
         }
         match incoming {
-            QueryMsg::Ping(args) => convert!(args, "Ping"),
-            QueryMsg::FindNode(args) => convert!(args, "FindNode"),
-            QueryMsg::GetPeers(args) => convert!(args, "GetPeers"),
-            QueryMsg::AnnouncePeer(args) => convert!(args, "AnnouncePeer"),
+            QueryMsg::Ping(args) => construct!(args, "Ping"),
+            QueryMsg::FindNode(args) => construct!(args, "FindNode"),
+            QueryMsg::GetPeers(args) => construct!(args, "GetPeers"),
+            QueryMsg::AnnouncePeer(args) => construct!(args, "AnnouncePeer"),
         }
     }
 

@@ -1,4 +1,4 @@
-use super::U160;
+use super::u160::U160;
 use bitvec::mem::bits_of;
 use derive_more::{Debug, Display};
 use pinned_init::*;
@@ -99,7 +99,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     /// Insert a new node if it's ID doesn't collide with any existing node,
     /// and the corresponding bucket is not full.
     pub fn insert_node(&mut self, id: &U160, addr: &SocketAddr) -> bool {
-        let U160(distance) = *id ^ self.local_id;
+        let distance = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {
             self.buckets[bucket_index].insert(Node {
                 id: *id,
@@ -111,14 +111,14 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     }
 
     pub fn remove_node(&mut self, id: &U160) -> Option<Node> {
-        let U160(distance) = *id ^ self.local_id;
+        let distance = *id ^ self.local_id;
         distance
             .first_one()
             .and_then(|bucket_index| self.buckets[bucket_index].remove(id))
     }
 
     pub fn can_insert(&self, id: &U160) -> bool {
-        let U160(distance) = *id ^ self.local_id;
+        let distance = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {
             self.buckets[bucket_index].has_space()
                 && !self.buckets[bucket_index].iter().any(|node| node.id == *id)
@@ -129,7 +129,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
 
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn get_node(&self, id: &U160) -> Option<&Node> {
-        let U160(distance) = *id ^ self.local_id;
+        let distance = *id ^ self.local_id;
         if let Some(bucket_index) = distance.first_one() {
             self.buckets[bucket_index].iter().find(|node| node.id == *id)
         } else {
@@ -142,7 +142,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     pub fn all_nodes_by_dist_asc(&self, target: &U160) -> impl Iterator<Item = &Node> {
         let mut nodes_by_dist_asc = BTreeMap::<_, &Node>::new();
         for node in self.buckets.iter().flat_map(Bucket::iter) {
-            let U160(distance) = node.id ^ *target;
+            let distance = node.id ^ *target;
             nodes_by_dist_asc.insert(distance, node);
         }
         nodes_by_dist_asc.into_values()
@@ -163,7 +163,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
                 - 1,
         );
 
-        let U160(distance) = *target ^ self.local_id;
+        let distance = *target ^ self.local_id;
         let initial_index = distance.first_one().unwrap_or(BUCKET_COUNT - 1);
 
         assert!(initial_index < self.buckets.len());
@@ -216,6 +216,7 @@ impl<const BUCKET_SIZE: usize> Drop for RoutingTable<BUCKET_SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitvec::prelude::*;
     use std::{collections::HashSet, net::Ipv4Addr};
 
     type RoutingTable = super::RoutingTable<16>;
@@ -283,10 +284,10 @@ mod tests {
         let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 6666);
 
         fn bucket_k_id(k: usize, i: u8) -> U160 {
-            let mut id: U160 = [0u8; 20].into();
-            id.0.get_mut(k).unwrap().set(true);
-            id.0.data[19] = i;
-            id
+            let mut id: BitArray<_, Msb0> = [0u8; 20].into();
+            id.get_mut(k).unwrap().set(true);
+            id.data[19] = i;
+            id.data.into()
         }
 
         let target = bucket_k_id(100, 3);

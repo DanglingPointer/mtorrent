@@ -1,7 +1,8 @@
 [![Build and test](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
+[![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
 
 # mtorrent
-CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently runs 3 threads in total). Blazingly fast, incredibly robust and very impressive in general.
+CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently runs 4 threads in total). Blazingly fast, incredibly robust and very impressive in general.
 
 ## Useful links
 - https://wiki.theory.org/BitTorrentSpecification

@@ -22,8 +22,12 @@ fn tid(num: u8) -> Vec<u8> {
 fn setup_routing(
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
-) -> (Client, Server, Runner) {
-    super::setup_routing(outgoing_msgs_sink, incoming_msgs_source, None)
+) -> (OutboundQueries, InboundQueries, QueryRouter) {
+    super::setup_queries(
+        udp::MessageChannelSender(outgoing_msgs_sink),
+        udp::MessageChannelReceiver(incoming_msgs_source),
+        None,
+    )
 }
 
 #[test]
@@ -650,8 +654,11 @@ fn test_outgoing_queries_limit_is_respected() {
     let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
 
     // given: max 1 outstanding query
-    let (client, _server, runner) =
-        super::setup_routing(outgoing_msgs_sink, incoming_msgs_source, Some(1));
+    let (client, _server, runner) = super::setup_queries(
+        udp::MessageChannelSender(outgoing_msgs_sink),
+        udp::MessageChannelReceiver(incoming_msgs_source),
+        Some(1),
+    );
     let mut runner_fut = spawn(runner.run());
 
     // when: first outgoing ping sent out
@@ -724,7 +731,7 @@ fn test_outgoing_ping_channel_error() {
 
     drop(outgoing_msgs_source);
     drop(incoming_msgs_sink);
-    assert_ready!(runner_fut.poll()).unwrap_err();
+    assert_ready!(runner_fut.poll());
     let ping_result = assert_ready!(ping_fut.poll());
     let ping_error = ping_result.unwrap_err();
     assert!(matches!(ping_error, Error::ChannelClosed));
@@ -1195,7 +1202,7 @@ fn test_incoming_ping_channel_error() {
 
     drop(outgoing_msgs_source);
     drop(incoming_msgs_sink);
-    assert_ready!(runner_fut.poll()).unwrap();
+    assert_ready!(runner_fut.poll());
     let error = incoming_ping
         .respond(PingResponse {
             id: U160::from([2u8; 20]),

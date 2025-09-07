@@ -1,7 +1,7 @@
-use super::U160;
 use super::error::Error;
 use super::msgs::*;
-use super::queries::Client;
+use super::queries::OutboundQueries;
+use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
 use std::collections::HashSet;
@@ -13,7 +13,7 @@ use tokio::time::Instant;
 use tokio::{select, task, time};
 use tokio_util::sync::CancellationToken;
 
-const PING_INTERVAL: Duration = min!(5);
+const PING_INTERVAL: Duration = min!(1);
 const GET_PEERS_INTERVAL: Duration = sec!(30);
 
 macro_rules! is_valid_addr {
@@ -34,7 +34,7 @@ pub enum NodeEvent {
 }
 
 pub struct Ctx {
-    pub client: Client,
+    pub client: OutboundQueries,
     pub event_reporter: mpsc::Sender<NodeEvent>,
     pub local_id: U160,
 }
@@ -100,7 +100,7 @@ pub async fn keep_alive_node(node: Node, ctx: Rc<Ctx>) -> Result<()> {
             return Ok(());
         }
 
-        // sleep until next ping time
+        // sleep until next ping time (with some jitter to avoid bursts)
         time::sleep(PING_INTERVAL + sec!(rand::random::<u64>() % 10)).await;
     }
 }

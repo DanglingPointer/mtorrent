@@ -79,7 +79,7 @@ fn main() -> io::Result<()> {
     let search_results_channel = if let Some(magnet_link) = args.target_magnet {
         let (sender, receiver) = mpsc::channel(512);
         cmds.try_send(dht::Command::FindPeers {
-            info_hash: (*magnet_link.info_hash()).into(),
+            info_hash: *magnet_link.info_hash(),
             callback: sender,
             local_peer_port: 6881,
         })

@@ -1,4 +1,4 @@
-use super::U160;
+use super::u160::U160;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io::{BufReader, BufWriter};
 use std::path::Path;

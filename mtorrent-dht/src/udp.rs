@@ -3,9 +3,8 @@ use super::msgs::Message;
 use mtorrent_utils::benc;
 use mtorrent_utils::debug_stopwatch;
 use std::future::Future;
-use std::io;
 use std::mem::MaybeUninit;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use tokio::io::ReadBuf;
@@ -14,33 +13,31 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 
-pub struct Runner {
+/// Actor that reads and writes UDP packets, and encodes/decodes DHT messages.
+pub struct IoDriver {
     socket: UdpSocket,
     ingress_sender: mpsc::Sender<(Message, SocketAddr)>,
     egress_receiver: mpsc::Receiver<(Message, SocketAddr)>,
 }
 
-pub type MessageChannelSender = mpsc::Sender<(Message, SocketAddr)>;
-pub type MessageChannelReceiver = mpsc::Receiver<(Message, SocketAddr)>;
-
-pub async fn create_ipv4_socket(port: u16) -> io::Result<UdpSocket> {
-    UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
-}
+pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
+pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
 
 pub(super) const MSG_QUEUE_LEN: usize = 512;
 
-pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelReceiver, Runner) {
+/// Create the networking layer that handles low-level I/O.
+pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelReceiver, IoDriver) {
     let (ingress_sender, ingress_receiver) = mpsc::channel(MSG_QUEUE_LEN);
     let (egress_sender, egress_receiver) = mpsc::channel(MSG_QUEUE_LEN);
-    let actor = Runner {
+    let actor = IoDriver {
         socket,
         ingress_sender,
         egress_receiver,
     };
-    (egress_sender, ingress_receiver, actor)
+    (MessageChannelSender(egress_sender), MessageChannelReceiver(ingress_receiver), actor)
 }
 
-impl Runner {
+impl IoDriver {
     pub async fn run(self) {
         let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
@@ -169,10 +166,15 @@ impl<'s> Future for Egress<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{U160, msgs::*};
+    use crate::{msgs::*, u160::U160};
     use local_async_utils::prelude::*;
-    use std::iter;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::{io, iter};
     use tokio::{task, time::timeout};
+
+    async fn create_ipv4_socket(port: u16) -> io::Result<UdpSocket> {
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await
+    }
 
     #[tokio::test]
     async fn receive_single_message() {
@@ -184,7 +186,7 @@ mod tests {
             .unwrap();
 
         let socket = create_ipv4_socket(receiver_addr.port()).await.unwrap();
-        let (_tx_channel, mut rx_channel, runner) = setup_udp(socket);
+        let (_tx_channel, MessageChannelReceiver(mut rx_channel), runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         let sent_msg = Message {
@@ -229,7 +231,7 @@ mod tests {
             .unwrap();
 
         let socket = create_ipv4_socket(receiver_addr.port()).await.unwrap();
-        let (_tx_channel, mut rx_channel, runner) = setup_udp(socket);
+        let (_tx_channel, MessageChannelReceiver(mut rx_channel), runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         bad_sender.send_to(b"malformed", receiver_addr).await.unwrap();
@@ -268,7 +270,7 @@ mod tests {
         let receiver_sock = UdpSocket::bind(receiver_addr).await.unwrap();
 
         let socket = create_ipv4_socket(sender_addr.port()).await.unwrap();
-        let (tx_channel, _rx_channel, runner) = setup_udp(socket);
+        let (MessageChannelSender(tx_channel), _rx_channel, runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         tx_channel
@@ -302,7 +304,7 @@ mod tests {
         let receiver_sock = UdpSocket::bind(receiver_addr).await.unwrap();
 
         let socket = UdpSocket::bind(sender_addr).await.unwrap();
-        let (tx_channel, _rx_channel, runner) = setup_udp(socket);
+        let (MessageChannelSender(tx_channel), _rx_channel, runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         // send a message to nowhere
@@ -354,7 +356,7 @@ mod tests {
             .unwrap();
 
         let socket = create_ipv4_socket(receiver_addr.port()).await.unwrap();
-        let (_tx_channel, mut rx_channel, runner) = setup_udp(socket);
+        let (_tx_channel, MessageChannelReceiver(mut rx_channel), runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         let sent_msg = Message {
@@ -414,7 +416,7 @@ mod tests {
         let receiver_sock = UdpSocket::bind(receiver_addr).await.unwrap();
 
         let socket = create_ipv4_socket(sender_addr.port()).await.unwrap();
-        let (tx_channel, _rx_channel, runner) = setup_udp(socket);
+        let (MessageChannelSender(tx_channel), _rx_channel, runner) = setup_udp(socket);
         task::spawn(runner.run());
 
         tx_channel
@@ -472,7 +474,7 @@ mod tests {
         let second_sender = UdpSocket::bind(second_sender_addr).await.unwrap();
 
         let socket = create_ipv4_socket(receiver_addr.port()).await.unwrap();
-        let (_tx_channel, mut rx_channel, runner) = setup_udp(socket);
+        let (_tx_channel, MessageChannelReceiver(mut rx_channel), runner) = setup_udp(socket);
         let mut _reserved = iter::repeat_with(|| runner.ingress_sender.clone().try_reserve_owned())
             .take(511)
             .collect::<Vec<_>>();
