@@ -408,19 +408,18 @@ async fn verify_pieces(
 ) -> io::Result<()> {
     define_with_ctx!(handle);
     let _sw = trace_stopwatch!("Verifying pieces");
+    let piece_info = with_ctx!(|ctx| ctx.pieces.clone());
 
     while let Some(piece_index) = downloaded_pieces.next().await {
-        let piece_len = with_ctx!(|ctx| ctx.pieces.piece_len(piece_index));
-        let global_offset = with_ctx!(|ctx| ctx.pieces.global_offset(piece_index, 0, piece_len))
+        let piece_len = piece_info.piece_len(piece_index);
+        let global_offset = piece_info
+            .global_offset(piece_index, 0, piece_len)
             .expect("Requested (and received!) invalid piece index");
-        let expected_sha1 = with_ctx!(|ctx| -> Option<[u8; 20]> {
-            let mut buf = [0u8; 20];
-            buf.copy_from_slice(ctx.metainfo.pieces()?.nth(piece_index)?);
-            Some(buf)
-        })
-        .expect("Requested (and received!) invalid piece index");
+        let expected_sha1: &[u8; 20] = piece_info
+            .hash_of_piece(piece_index)
+            .expect("Requested (and received!) invalid piece index");
         let verification_success =
-            storage.verify_block(global_offset, piece_len, &expected_sha1).await?;
+            storage.verify_block(global_offset, piece_len, expected_sha1).await?;
         with_ctx!(|ctx| ctx.pending_requests.clear_requests_of(piece_index));
         if verification_success {
             *verified_pieces += 1;

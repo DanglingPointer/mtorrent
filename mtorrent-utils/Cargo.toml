@@ -7,7 +7,7 @@ categories = [
     "network-programming",
     "parser-implementations",
 ]
-keywords = ["bittorrent", "torrent", "bencode", "bencoding", "magnet"]
+keywords = ["bittorrent", "torrent", "bencode", "bencoding"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,8 +20,6 @@ derive_more = { workspace = true }
 thiserror = { workspace = true }
 local_async_utils = { workspace = true }
 bytes = { workspace = true }
-url = { workspace = true }
-sha1_smol = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 igd-next = { version = "0.16.1", features = ["aio_tokio"] }

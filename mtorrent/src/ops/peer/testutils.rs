@@ -2,8 +2,7 @@ use crate::ops::{PeerReporter, ctx};
 use crate::utils::startup;
 use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, pwp};
-use mtorrent_utils::magnet;
+use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::fmt::Debug;
 use std::io::Read;
@@ -212,7 +211,7 @@ impl PeerBuilder {
             "magnet:?xt=urn:btih:77c09d63baf907ceeed366e2bdd687ca37cc4098&dn=Star.Trek.Voyager.S05.DVDRip.x264-MARS%5brartv%5d&tr=http%3a%2f%2ftracker.trackerfix.com%3a80%2fannounce&tr=udp%3a%2f%2f9.rarbg.me%3a2750%2fannounce&tr=udp%3a%2f%2f9.rarbg.to%3a2930%2fannounce"
                 .to_owned());
 
-        let magnet_link: magnet::MagnetLink = magnet_link.parse().unwrap();
+        let magnet_link: input::MagnetLink = magnet_link.parse().unwrap();
 
         let (dlchans, ulchans, extchans) = pwp::channels_from_mock(
             self.remote_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 6666)),

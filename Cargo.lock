@@ -1093,13 +1093,11 @@ dependencies = [
  "local_async_utils",
  "log",
  "rand",
- "sha1_smol",
  "simple_logger",
  "static_assertions",
  "thiserror",
  "tokio",
  "tokio-test",
- "url",
 ]
 
 [[package]]

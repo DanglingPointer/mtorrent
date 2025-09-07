@@ -1,7 +1,7 @@
 use super::ctx;
 use local_async_utils::prelude::*;
+use mtorrent_core::input;
 use mtorrent_core::pwp;
-use mtorrent_utils::metainfo;
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
@@ -258,7 +258,7 @@ pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
     if ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
         false
     } else {
-        match metainfo::Metainfo::new(&ctx.metainfo) {
+        match input::Metainfo::new(&ctx.metainfo) {
             Some(metainfo) if metainfo.info_hash() == ctx.magnet.info_hash() => true,
             _ => {
                 log::error!("Discarding corrupt metainfo");

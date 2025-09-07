@@ -1,18 +1,17 @@
-use mtorrent_core::data;
-use mtorrent_utils::metainfo;
+use mtorrent_core::{data, input};
 use std::path::{Path, PathBuf};
 use std::{fs, io, iter};
 
-pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<metainfo::Metainfo> {
+pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let file_content = fs::read(metainfo_filepath)?;
-    let metainfo = metainfo::Metainfo::new(&file_content)
+    let metainfo = input::Metainfo::new(&file_content)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid metainfo file"))?;
     Ok(metainfo)
 }
 
 pub fn create_content_storage(
-    metainfo: &metainfo::Metainfo,
+    metainfo: &input::Metainfo,
     filedir: impl AsRef<Path>,
 ) -> io::Result<(data::StorageClient, data::StorageServer)> {
     let total_size = metainfo
@@ -47,7 +46,6 @@ pub fn create_metainfo_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mtorrent_utils::metainfo;
 
     fn count_files(dir: impl AsRef<Path>) -> io::Result<usize> {
         let mut count = 0usize;
@@ -68,7 +66,7 @@ mod tests {
     #[test]
     fn test_read_metainfo_and_spawn_files() {
         let data = fs::read("tests/assets/example.torrent").unwrap();
-        let info = metainfo::Metainfo::new(&data).unwrap();
+        let info = input::Metainfo::new(&data).unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_files_output";
         let filedir = Path::new(parent_dir).join("files");
@@ -94,7 +92,7 @@ mod tests {
     #[test]
     fn test_read_metainfo_and_spawn_single_file() {
         let data = fs::read("tests/assets/pcap.torrent").unwrap();
-        let info = metainfo::Metainfo::new(&data).unwrap();
+        let info = input::Metainfo::new(&data).unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
         let filedir = Path::new(parent_dir).join("files");

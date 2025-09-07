@@ -1,8 +1,7 @@
 use futures_util::future;
 use local_async_utils::prelude::*;
 use mtorrent::utils::startup;
-use mtorrent_core::{data, pwp};
-use mtorrent_utils::metainfo::Metainfo;
+use mtorrent_core::{data, input::Metainfo, pwp};
 use mtorrent_utils::{benc, ip};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;

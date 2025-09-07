@@ -1,10 +1,10 @@
 use crate::ops;
 use crate::utils::startup;
 use futures_util::FutureExt;
-use mtorrent_core::{pwp, trackers};
+use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::{ip, magnet, upnp};
+use mtorrent_utils::{ip, upnp};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -116,7 +116,7 @@ async fn preliminary_stage(
     dht_handle: Option<dht::CommandSink>,
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(impl AsRef<Path>, impl IntoIterator<Item = SocketAddr>)> {
-    let magnet_link: magnet::MagnetLink = magnet_link
+    let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))

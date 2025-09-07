@@ -2,6 +2,7 @@ use derive_more::Deref;
 use serde::{Deserialize, Serialize, Serializer, de::IntoDeserializer};
 use std::str::FromStr;
 
+/// Parsed tracker address.
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub enum TrackerUrl {
     Http(Http),

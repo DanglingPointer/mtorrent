@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::{iter, net, str};
 use thiserror::Error;
 
+/// Parsed magnet link.
 #[derive(Clone)]
 pub struct MagnetLink {
     info_hash: [u8; 20],
@@ -11,6 +12,7 @@ pub struct MagnetLink {
     peers: Vec<SocketAddr>,
 }
 
+/// Error that can be produced while parsing a magnet link.
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("malformed uri: {0}")]
@@ -70,18 +72,22 @@ impl str::FromStr for MagnetLink {
 }
 
 impl MagnetLink {
+    /// SHA-1 hash of the torrent's metainfo.
     pub fn info_hash(&self) -> &[u8; 20] {
         &self.info_hash
     }
 
+    /// Name of the torrent.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
+    /// Tracker addresses.
     pub fn trackers(&self) -> impl ExactSizeIterator<Item = &str> {
         self.trackers.iter().map(AsRef::as_ref)
     }
 
+    /// Peer addresses.
     pub fn peers(&self) -> impl ExactSizeIterator<Item = &SocketAddr> {
         self.peers.iter()
     }

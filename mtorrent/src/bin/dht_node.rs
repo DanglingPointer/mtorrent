@@ -1,7 +1,7 @@
 use clap::Parser;
 use mtorrent::app;
+use mtorrent_core::input::MagnetLink;
 use mtorrent_dht as dht;
-use mtorrent_utils::magnet::MagnetLink;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::{env, io, iter};

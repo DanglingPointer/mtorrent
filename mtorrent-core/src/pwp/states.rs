@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tokio::time::Instant;
 
+/// Indicates how the peer was discovered.
 #[derive(Default, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PeerOrigin {
     Tracker,
@@ -13,6 +14,7 @@ pub enum PeerOrigin {
     Other,
 }
 
+/// The current state of the download of data from a remote peer.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DownloadState {
     pub am_interested: bool,
@@ -43,6 +45,7 @@ impl fmt::Display for DownloadState {
     }
 }
 
+/// The current state of the update of data to a remote peer.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UploadState {
     pub am_choking: bool,
@@ -73,6 +76,7 @@ impl fmt::Display for UploadState {
     }
 }
 
+/// The current state of a connected peer.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PeerState {
     pub download: DownloadState,
@@ -96,6 +100,7 @@ impl Default for PeerState {
     }
 }
 
+/// Collections of states of the connected peers.
 #[derive(Default, Debug)]
 pub struct PeerStates {
     peers: HashMap<SocketAddr, PeerState>,
@@ -105,6 +110,7 @@ pub struct PeerStates {
 }
 
 impl PeerStates {
+    /// Update the download state of the peer at `remote_ip`.
     pub fn update_download(&mut self, remote_ip: &SocketAddr, new_state: &DownloadState) {
         let state = self.peers.entry(*remote_ip).or_default();
         if new_state.bytes_received > state.download.bytes_received {
@@ -118,6 +124,7 @@ impl PeerStates {
         }
     }
 
+    /// Update the upload state of the peer at `remote_ip`.
     pub fn update_upload(&mut self, remote_ip: &SocketAddr, new_state: &UploadState) {
         let state = self.peers.entry(*remote_ip).or_default();
         if new_state.bytes_sent > state.upload.bytes_sent {
@@ -131,6 +138,7 @@ impl PeerStates {
         }
     }
 
+    /// Update the extended handshake received from the peer at `remote_ip`.
     pub fn set_extended_handshake(
         &mut self,
         remote_ip: &SocketAddr,
@@ -142,11 +150,13 @@ impl PeerStates {
         }
     }
 
+    /// Update how the peer at `remote_ip` was discovered.
     pub fn set_origin(&mut self, remote_ip: &SocketAddr, origin: PeerOrigin) {
         let state = self.peers.entry(*remote_ip).or_default();
         state.origin = origin;
     }
 
+    /// Erase peer.
     pub fn remove_peer(&mut self, remote_ip: &SocketAddr) {
         if let Some(state) = self.peers.get(remote_ip) {
             self.previously_uploaded_bytes += state.upload.bytes_sent;
@@ -156,26 +166,32 @@ impl PeerStates {
         }
     }
 
+    /// Get peer state for a given remote socket addr.
     pub fn get(&self, peer_ip: &SocketAddr) -> Option<&PeerState> {
         self.peers.get(peer_ip)
     }
 
+    /// Total number of seeding peers.
     pub fn seeders_count(&self) -> usize {
         self.seeders.len()
     }
 
+    /// Total number of leeching peers.
     pub fn leeches_count(&self) -> usize {
         self.leeches.len()
     }
 
+    /// Addresses of all leeching peers.
     pub fn leeches(&self) -> &HashSet<SocketAddr> {
         &self.leeches
     }
 
+    /// States of all connected peers.
     pub fn iter(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
         self.peers.iter()
     }
 
+    /// Total number of bytes uploaded to all peers during the entire lifetime (including peers that have been erased).
     pub fn uploaded_bytes(&self) -> usize {
         self.previously_uploaded_bytes
             + self.peers.values().map(|state| state.upload.bytes_sent).sum::<usize>()

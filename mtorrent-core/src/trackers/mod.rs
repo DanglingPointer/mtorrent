@@ -22,6 +22,7 @@ pub enum AnnounceEvent {
     Completed,
 }
 
+/// Announce request data.
 #[derive(Debug)]
 pub struct AnnounceRequest {
     pub info_hash: [u8; 20],
@@ -34,17 +35,20 @@ pub struct AnnounceRequest {
     pub num_want: usize,
 }
 
+/// Parsed announce response data.
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub interval: Duration,
     pub peers: Vec<SocketAddr>,
 }
 
+/// Scrape request data.
 #[derive(Debug)]
 pub struct ScrapeRequest {
     pub info_hashes: Vec<[u8; 20]>,
 }
 
+/// Parsed entry from a scrape response.
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
     pub seeders: usize,
@@ -52,6 +56,7 @@ pub struct ScrapeResponseEntry {
     pub leechers: usize,
 }
 
+/// Parsed scrape response.
 #[derive(Debug)]
 pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
 
@@ -66,17 +71,20 @@ enum Command {
     Scrape(Request<ScrapeRequest, ScrapeResponse>),
 }
 
+/// Set up the [`TrackerClient`]-[`TrackerManager`] pair.
 pub fn init() -> (TrackerClient, TrackerManager) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(128);
     (TrackerClient { cmd_sender }, TrackerManager { cmd_receiver })
 }
 
+/// Handle for sending announces and scrapes to HTTP and UDP trackers.
 #[derive(Clone)]
 pub struct TrackerClient {
     cmd_sender: mpsc::Sender<Command>,
 }
 
 impl TrackerClient {
+    /// Send announce request to a tracker and wait for response.
     pub async fn announce(
         &self,
         url: TrackerUrl,
@@ -90,10 +98,11 @@ impl TrackerClient {
                 responder: tx,
             }))
             .await
-            .map_err(Self::to_broken_pipe_error)?;
-        rx.await.map_err(Self::to_broken_pipe_error)?
+            .map_err(Self::broken_pipe_error)?;
+        rx.await.map_err(Self::broken_pipe_error)?
     }
 
+    /// Send scrape request to a tracker and wait for response.
     pub async fn scrape(&self, url: TrackerUrl, data: ScrapeRequest) -> io::Result<ScrapeResponse> {
         let (tx, rx) = oneshot::channel();
         self.cmd_sender
@@ -103,11 +112,11 @@ impl TrackerClient {
                 responder: tx,
             }))
             .await
-            .map_err(Self::to_broken_pipe_error)?;
-        rx.await.map_err(Self::to_broken_pipe_error)?
+            .map_err(Self::broken_pipe_error)?;
+        rx.await.map_err(Self::broken_pipe_error)?
     }
 
-    fn to_broken_pipe_error<T>(_: T) -> io::Error {
+    fn broken_pipe_error<T>(_: T) -> io::Error {
         io::Error::from(io::ErrorKind::BrokenPipe)
     }
 }
@@ -132,6 +141,7 @@ impl From<AnnounceEvent> for udp::AnnounceEvent {
     }
 }
 
+/// Actor that sends announces and scrapes to HTTP and UDP trackers.
 pub struct TrackerManager {
     cmd_receiver: mpsc::Receiver<Command>,
 }

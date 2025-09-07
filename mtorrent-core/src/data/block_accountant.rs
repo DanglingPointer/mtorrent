@@ -4,6 +4,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+/// Keeps track of downloaded data on per-block basis.
 #[derive(Debug)]
 pub struct BlockAccountant {
     pieces: Rc<PieceInfo>,
@@ -20,6 +21,8 @@ impl BlockAccountant {
         }
     }
 
+    /// Try to add a received block to the internal records. Fails if the block has invalid
+    /// offset, index or length.
     pub fn submit_block(&mut self, block_info: &BlockInfo) -> Result<usize, Error> {
         let result = self.pieces.global_offset(
             block_info.piece_index,
@@ -63,6 +66,7 @@ impl BlockAccountant {
         self.total_bytes += end - start;
     }
 
+    /// Mark a piece as downloaded. Fails if the piece index is invalid.
     pub fn submit_piece(&mut self, piece_index: usize) -> bool {
         let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
@@ -73,6 +77,8 @@ impl BlockAccountant {
         }
     }
 
+    /// Update internal records from a bitfield. All pieces present in the bitfield
+    /// will be marked as downloaded. Fails if the bitfield has unexpected length.
     pub fn submit_bitfield(&mut self, bitfield: &Bitfield) -> bool {
         if bitfield.len() < self.pieces.piece_count() {
             return false;
@@ -85,6 +91,7 @@ impl BlockAccountant {
         true
     }
 
+    /// Remove a piece from the internal records, i.e. no longer consider it as downloaded.
     pub fn remove_piece(&mut self, piece_index: usize) {
         let piece_length = self.pieces.piece_len(piece_index);
         if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_length) {
@@ -123,7 +130,7 @@ impl BlockAccountant {
         }
     }
 
-    pub fn max_block_length_at(&self, global_offset: usize) -> Option<usize> {
+    fn max_block_length_at(&self, global_offset: usize) -> Option<usize> {
         if let Some((_start, end)) = self.blocks_start_end.range(..=global_offset).last() {
             if *end > global_offset {
                 Some(*end - global_offset)
@@ -135,6 +142,7 @@ impl BlockAccountant {
         }
     }
 
+    /// Check whether `length` bytes at `global_offset` have been downloaded.
     pub fn has_exact_block_at(&self, global_offset: usize, length: usize) -> bool {
         if let Some(block_length) = self.max_block_length_at(global_offset) {
             block_length >= length
@@ -143,6 +151,7 @@ impl BlockAccountant {
         }
     }
 
+    /// Check presense of an exact block among the downloaded data.
     pub fn has_exact_block(&self, block_info: &BlockInfo) -> bool {
         if let Ok(global_offset) = self.pieces.global_offset(
             block_info.piece_index,
@@ -155,6 +164,7 @@ impl BlockAccountant {
         }
     }
 
+    /// Check whether the piece at `piece_index` has been downloaded.
     pub fn has_piece(&self, piece_index: usize) -> bool {
         let piece_len = self.pieces.piece_len(piece_index);
         if let Ok(global_offset) = self.pieces.global_offset(piece_index, 0, piece_len) {
@@ -164,6 +174,7 @@ impl BlockAccountant {
         }
     }
 
+    /// Represent the internal state as a bitfield. Partially downloaded pieces won't be included.
     pub fn generate_bitfield(&self) -> Bitfield {
         let mut bitfield = Bitfield::repeat(false, self.pieces.piece_count());
         for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
@@ -174,10 +185,12 @@ impl BlockAccountant {
         bitfield
     }
 
+    /// The total number of downloaded bytes.
     pub fn accounted_bytes(&self) -> usize {
         self.total_bytes
     }
 
+    /// The total number of missing bytes.
     pub fn missing_bytes(&self) -> usize {
         self.pieces.total_len() - self.total_bytes
     }

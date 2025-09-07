@@ -7,37 +7,88 @@ use std::path::{Path, PathBuf};
 use std::{cmp, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
-pub type StorageServer = GenericStorageServer<fs::File>;
-
-pub struct GenericStorageServer<F: RandomAccessReadWrite> {
-    channel: mpsc::UnboundedReceiver<Command>,
-    storage: GenericStorage<F>,
-}
-
-#[derive(Clone)]
-pub struct StorageClient {
-    channel: mpsc::UnboundedSender<Command>,
-}
-
+/// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory `parent_dir`.
+/// If the files don't exist, new files with the specified size will be created.
 pub fn new_async_storage(
     parent_dir: impl AsRef<Path>,
     length_path_it: impl Iterator<Item = (usize, PathBuf)>,
 ) -> Result<(StorageClient, StorageServer), Error> {
     let storage = Storage::new(parent_dir, length_path_it)?;
-    Ok(async_generic_storage(storage))
+    let (client, server) = async_generic_storage(storage);
+    Ok((client, StorageServer(server)))
 }
 
-fn async_generic_storage<F: RandomAccessReadWrite>(
-    storage: GenericStorage<F>,
-) -> (StorageClient, GenericStorageServer<F>) {
-    let (tx, rx) = mpsc::unbounded_channel::<Command>();
-    (
-        StorageClient { channel: tx },
-        GenericStorageServer {
-            channel: rx,
-            storage,
-        },
-    )
+/// Actor that performs filesystem operations, like reading and writing
+/// chunks of data, as well as calculating their hash. All operations are done
+/// sequentially (in the same order as they were scheduled).
+pub struct StorageServer(GenericStorageServer<fs::File>);
+
+impl StorageServer {
+    /// Start serving commands received from [`StorageClient`]. Filesystem operations will be performed synchronously in the current thread.
+    pub async fn run(self) {
+        self.0.run().await;
+    }
+}
+
+/// Handle for requesting filesystem operations.
+#[derive(Clone)]
+pub struct StorageClient {
+    channel: mpsc::UnboundedSender<Command>,
+}
+
+impl StorageClient {
+    /// Write bytes `data` at `global_offset` relative to the start of the first file managed by this storage.
+    /// Returns once the filesystem write operation is finished.
+    pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
+        let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
+        self.channel.send(Command::WriteBlock {
+            global_offset,
+            data,
+            callback: Some(result_sender),
+        })?;
+        result_receiver.await?
+    }
+
+    /// Schedule write of `data` at `global_offset` relative to the start of the first file managed by this storage.
+    /// Returns immediately without waiting for the result of the filesystem operation.
+    pub fn start_write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
+        self.channel.send(Command::WriteBlock {
+            global_offset,
+            data,
+            callback: None,
+        })?;
+        Ok(())
+    }
+
+    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by this storage.
+    pub async fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
+        let (result_sender, result_receiver) = oneshot::channel::<ReadResult>();
+        self.channel.send(Command::ReadBlock {
+            global_offset,
+            length,
+            callback: result_sender,
+        })?;
+        result_receiver.await?
+    }
+
+    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by this storage,
+    /// calculate their SHA-1 hash, and compare it to `expected_sha`. Return whether the two hashes are identical.
+    pub async fn verify_block(
+        &self,
+        global_offset: usize,
+        length: usize,
+        expected_sha1: &[u8; 20],
+    ) -> Result<bool, Error> {
+        let _sw = warn_stopwatch!("Verification of {length} bytes");
+        let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
+        self.channel.send(Command::VerifyBlock {
+            global_offset,
+            length,
+            expected_sha1: *expected_sha1,
+            callback: result_sender,
+        })?;
+        result_receiver.await?
+    }
 }
 
 #[cfg(feature = "mocks")]
@@ -93,15 +144,54 @@ pub fn new_mock_storage(total_size: usize) -> StorageClient {
     StorageClient { channel: tx }
 }
 
-impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
-    pub async fn run(mut self) {
-        while let Some(cmd) = self.channel.recv().await {
-            self.handle_cmd(cmd);
-        }
-    }
+// ------------------------------------------------------------------------------------------------
 
-    pub fn run_blocking(mut self) {
-        while let Some(cmd) = self.channel.blocking_recv() {
+fn async_generic_storage<F: RandomAccessReadWrite>(
+    storage: GenericStorage<F>,
+) -> (StorageClient, GenericStorageServer<F>) {
+    let (tx, rx) = mpsc::unbounded_channel::<Command>();
+    (
+        StorageClient { channel: tx },
+        GenericStorageServer {
+            channel: rx,
+            storage,
+        },
+    )
+}
+
+type WriteResult = Result<(), Error>;
+type ReadResult = Result<Vec<u8>, Error>;
+type VerifyResult = Result<bool, Error>;
+
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug)]
+enum Command {
+    WriteBlock {
+        global_offset: usize,
+        data: Vec<u8>,
+        callback: Option<oneshot::Sender<WriteResult>>,
+    },
+    ReadBlock {
+        global_offset: usize,
+        length: usize,
+        callback: oneshot::Sender<ReadResult>,
+    },
+    VerifyBlock {
+        global_offset: usize,
+        length: usize,
+        expected_sha1: [u8; 20],
+        callback: oneshot::Sender<VerifyResult>,
+    },
+}
+
+struct GenericStorageServer<F: RandomAccessReadWrite> {
+    channel: mpsc::UnboundedReceiver<Command>,
+    storage: GenericStorage<F>,
+}
+
+impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
+    async fn run(mut self) {
+        while let Some(cmd) = self.channel.recv().await {
             self.handle_cmd(cmd);
         }
     }
@@ -154,89 +244,16 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
     }
 }
 
-impl StorageClient {
-    pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
-        let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
-        self.channel.send(Command::WriteBlock {
-            global_offset,
-            data,
-            callback: Some(result_sender),
-        })?;
-        result_receiver.await?
-    }
+// ------------------------------------------------------------------------------------------------
 
-    pub fn start_write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
-        self.channel.send(Command::WriteBlock {
-            global_offset,
-            data,
-            callback: None,
-        })?;
-        Ok(())
-    }
+pub(super) type Storage = GenericStorage<fs::File>;
 
-    pub async fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
-        let (result_sender, result_receiver) = oneshot::channel::<ReadResult>();
-        self.channel.send(Command::ReadBlock {
-            global_offset,
-            length,
-            callback: result_sender,
-        })?;
-        result_receiver.await?
-    }
-
-    pub async fn verify_block(
-        &self,
-        global_offset: usize,
-        length: usize,
-        expected_sha1: &[u8; 20],
-    ) -> Result<bool, Error> {
-        let _sw = warn_stopwatch!("Verification of {length} bytes");
-        let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
-        self.channel.send(Command::VerifyBlock {
-            global_offset,
-            length,
-            expected_sha1: *expected_sha1,
-            callback: result_sender,
-        })?;
-        result_receiver.await?
-    }
-}
-
-type WriteResult = Result<(), Error>;
-type ReadResult = Result<Vec<u8>, Error>;
-type VerifyResult = Result<bool, Error>;
-
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug)]
-enum Command {
-    WriteBlock {
-        global_offset: usize,
-        data: Vec<u8>,
-        callback: Option<oneshot::Sender<WriteResult>>,
-    },
-    ReadBlock {
-        global_offset: usize,
-        length: usize,
-        callback: oneshot::Sender<ReadResult>,
-    },
-    VerifyBlock {
-        global_offset: usize,
-        length: usize,
-        expected_sha1: [u8; 20],
-        callback: oneshot::Sender<VerifyResult>,
-    },
-}
-
-// ------
-
-pub type Storage = GenericStorage<fs::File>;
-
-pub struct GenericStorage<F: RandomAccessReadWrite> {
+pub(super) struct GenericStorage<F: RandomAccessReadWrite> {
     files: BTreeMap<usize, F>,
 }
 
 impl Storage {
-    pub fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
+    pub(super) fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
         parent_dir: P,
         length_path_it: I,
     ) -> Result<Self, Error> {
@@ -278,12 +295,12 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
         Ok(Self { files: filemap })
     }
 
-    pub fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
+    pub(super) fn write_block(&self, global_offset: usize, block: Vec<u8>) -> Result<(), Error> {
         self.write_block_from(global_offset, &block)?;
         Ok(())
     }
 
-    pub fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
+    pub(super) fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
         let mut dest = vec![0u8; length];
         self.read_block_into(global_offset, &mut dest)?;
         Ok(dest)
@@ -334,7 +351,7 @@ impl<F: RandomAccessReadWrite> GenericStorage<F> {
     }
 }
 
-pub trait RandomAccessReadWrite {
+pub(super) trait RandomAccessReadWrite {
     fn read_at_offset(&self, dest: &mut [u8], offset: u64) -> io::Result<usize>;
     fn write_at_offset(&self, src: &[u8], offset: u64) -> io::Result<usize>;
     fn try_clone(&self) -> io::Result<Self>

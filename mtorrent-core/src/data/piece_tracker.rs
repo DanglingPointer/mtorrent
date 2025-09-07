@@ -20,6 +20,7 @@ fn available_pieces(bitfield: &pwp::Bitfield) -> impl Iterator<Item = usize> + C
         .filter_map(|(index, bit)| (bit == true).then_some(index))
 }
 
+/// Keeps track of missing pieces (as opposed to blocks) and their owners.
 #[derive(Debug)]
 pub struct PieceTracker {
     piece_index_to_owners: HashMap<PieceIndex, HashSet<SocketAddr>>,
@@ -44,6 +45,8 @@ impl PieceTracker {
         }
     }
 
+    /// Get an iterator over the not-yet-downloaded pieces, ordered by the number of
+    /// peers that own each piece, such that pieces with the fewest owners are yielded first.
     pub fn missing_pieces_rarest_first(&self) -> impl Iterator<Item = usize> + '_ {
         self.owner_count_to_piece_indices
             .iter()
@@ -56,6 +59,7 @@ impl PieceTracker {
         self.piece_count_to_owners.values().flat_map(HashSet::iter)
     }
 
+    /// Get addresses of all peers that own a particular piece.
     pub fn get_piece_owners(
         &self,
         piece_index: usize,
@@ -63,10 +67,12 @@ impl PieceTracker {
         self.piece_index_to_owners.get(&piece_index).into_iter().flat_map(HashSet::iter)
     }
 
+    /// Get piece indices of all pieces owned by a particular peer.
     pub fn get_peer_pieces(&self, peer: &SocketAddr) -> impl Iterator<Item = usize> + Clone + '_ {
         self.owners_to_piece_indices.get(peer).into_iter().flat_map(available_pieces)
     }
 
+    /// Check if `peer` ownes `piece_index`.
     pub fn has_peer_piece(&self, peer: &SocketAddr, piece_index: usize) -> bool {
         self.owners_to_piece_indices
             .get(peer)
@@ -74,6 +80,7 @@ impl PieceTracker {
             .is_some_and(|piece_present| piece_present == true)
     }
 
+    /// Record that `piece_owner` owns `piece_index`.
     pub fn add_single_record(&mut self, piece_owner: &SocketAddr, piece_index: usize) -> bool {
         let piece_index = PieceIndex(piece_index);
 
@@ -100,12 +107,15 @@ impl PieceTracker {
         }
     }
 
+    /// Record that `peer` owns pieces represented by the `bitfield`. This won't invalidate any
+    /// previous records for the same peer, i.e. it will never remove pieces.
     pub fn add_bitfield_record(&mut self, peer: &SocketAddr, bitfield: &pwp::Bitfield) {
         for piece_index in available_pieces(bitfield) {
             self.add_single_record(peer, piece_index);
         }
     }
 
+    /// Erase all records pertaining to the specified peer.
     pub fn forget_peer(&mut self, peer: &SocketAddr) {
         if let Some(pieces) = self.owners_to_piece_indices.remove(peer) {
             for piece_index in available_pieces(&pieces).map(PieceIndex) {
@@ -129,6 +139,7 @@ impl PieceTracker {
         }
     }
 
+    /// Erase all records pertaining to the specified piece.
     pub fn forget_piece(&mut self, piece_index: usize) {
         if let Some(owners) = self.piece_index_to_owners.remove(&piece_index) {
             for owner in owners {

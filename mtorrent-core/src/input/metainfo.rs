@@ -1,10 +1,11 @@
-use crate::benc;
+use mtorrent_utils::benc;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::str;
 
+/// Low-level represention of a parsed metainfo file.
 pub struct Metainfo {
     root: BTreeMap<String, benc::Element>,
     info: BTreeMap<String, benc::Element>,
@@ -19,6 +20,7 @@ impl Hash for Metainfo {
 }
 
 impl Metainfo {
+    /// Parse bencoded bytes.
     pub fn new(file_content: &[u8]) -> Option<Self> {
         Self::from_full_metainfo(file_content)
             .or_else(|| Self::from_incomplete_metainfo(file_content))
@@ -62,6 +64,7 @@ impl Metainfo {
         }
     }
 
+    /// The announce URL of the tracker
     pub fn announce(&self) -> Option<&str> {
         if let Some(benc::Element::ByteString(data)) = self.root.get("announce") {
             str::from_utf8(data).ok()
@@ -70,6 +73,7 @@ impl Metainfo {
         }
     }
 
+    /// Lists of tracker URLs, as defined in [Multitracker Metadata Extension](https://bittorrent.org/beps/bep_0012.html).
     pub fn announce_list(&self) -> Option<impl Iterator<Item = impl Iterator<Item = &str>>> {
         if let Some(benc::Element::List(list)) = self.root.get("announce-list") {
             Some(list.iter().filter_map(try_get_string_iter))
@@ -78,6 +82,7 @@ impl Metainfo {
         }
     }
 
+    /// Filename for single file torrents.
     pub fn name(&self) -> Option<&str> {
         if let Some(benc::Element::ByteString(data)) = self.info.get("name") {
             str::from_utf8(data).ok()
@@ -86,10 +91,12 @@ impl Metainfo {
         }
     }
 
+    /// SHA-1 hash of the metainfo.
     pub fn info_hash(&self) -> &[u8; 20] {
         &self.info_hash
     }
 
+    /// Number of bytes in each piece.
     pub fn piece_length(&self) -> Option<usize> {
         if let Some(benc::Element::Integer(data)) = self.info.get("piece length") {
             usize::try_from(*data).ok()
@@ -98,6 +105,7 @@ impl Metainfo {
         }
     }
 
+    /// 20-byte SHA-1 hash values, one per piece.
     pub fn pieces(&self) -> Option<impl Iterator<Item = &[u8]>> {
         if let Some(benc::Element::ByteString(data)) = self.info.get("pieces") {
             Some(data.chunks_exact(20))
@@ -106,6 +114,7 @@ impl Metainfo {
         }
     }
 
+    /// Length of the file in bytes for single file torrents.
     pub fn length(&self) -> Option<usize> {
         if let Some(benc::Element::Integer(data)) = self.info.get("length") {
             usize::try_from(*data).ok()
@@ -114,6 +123,7 @@ impl Metainfo {
         }
     }
 
+    /// Length-path pairs for each file in multifile torrents.
     pub fn files(&self) -> Option<impl Iterator<Item = (usize, PathBuf)> + '_> {
         if let Some(benc::Element::List(data)) = self.info.get("files") {
             Some(data.iter().filter_map(try_get_length_path_pair))
@@ -122,6 +132,7 @@ impl Metainfo {
         }
     }
 
+    /// Total size of the metainfo in bytes.
     pub fn size(&self) -> usize {
         self.size
     }

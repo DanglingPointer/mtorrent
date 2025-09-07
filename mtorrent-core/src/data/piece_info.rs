@@ -1,5 +1,6 @@
 use crate::data::Error;
 
+/// Helper for obtaining various information about pieces of a torrent.
 #[derive(Debug)]
 pub struct PieceInfo {
     pieces: Vec<[u8; 20]>,
@@ -8,6 +9,7 @@ pub struct PieceInfo {
 }
 
 impl PieceInfo {
+    /// Create new [`PieceInfo`] from an iterator over 20-bytes slices representing SHA-1 hashes of the pieces of a torrent.
     pub fn new<'a, I: Iterator<Item = &'a [u8]>>(
         piece_it: I,
         piece_length: usize,
@@ -25,6 +27,8 @@ impl PieceInfo {
         }
     }
 
+    /// Get global offset relative to the start of the entire torrent (a single entity possibly comprised of multiple files).
+    /// Returns [`Error::InvalidLocation`] if the resulting index of the start or the end of the data is out of bounds.
     pub fn global_offset(
         &self,
         piece_index: usize,
@@ -39,14 +43,12 @@ impl PieceInfo {
         }
     }
 
-    pub fn index_of_piece(&self, hash: &[u8; 20]) -> Result<usize, Error> {
-        self.pieces.iter().position(|e| e == hash).ok_or(Error::InvalidLocation)
-    }
-
+    /// Get 20-byte long SHA-1 hash of a given piece.
     pub fn hash_of_piece(&self, piece_index: usize) -> Result<&[u8; 20], Error> {
         self.pieces.get(piece_index).ok_or(Error::InvalidLocation)
     }
 
+    /// Get length of a given piece in bytes.
     pub fn piece_len(&self, piece_index: usize) -> usize {
         if piece_index + 1 == self.pieces.len() && self.total_length % self.piece_length != 0 {
             self.total_length % self.piece_length
@@ -55,10 +57,12 @@ impl PieceInfo {
         }
     }
 
+    /// Get the total number of pieces.
     pub fn piece_count(&self) -> usize {
         self.pieces.len()
     }
 
+    /// Get the total size of the torrent in bytes.
     pub fn total_len(&self) -> usize {
         self.total_length
     }

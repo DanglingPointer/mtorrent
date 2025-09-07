@@ -3,9 +3,8 @@ use crate::utils::config;
 use core::fmt;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::Bitfield;
-use mtorrent_core::{data, pwp};
+use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::{magnet, metainfo};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -49,7 +48,7 @@ impl ConstData {
 }
 
 pub struct PreliminaryCtx {
-    pub(super) magnet: magnet::MagnetLink,
+    pub(super) magnet: input::MagnetLink,
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
     pub(super) reachable_peers: HashSet<SocketAddr>,
@@ -59,7 +58,7 @@ pub struct PreliminaryCtx {
 
 impl PreliminaryCtx {
     pub fn new(
-        magnet: magnet::MagnetLink,
+        magnet: input::MagnetLink,
         local_peer_id: PeerId,
         pwp_listener_public_addr: SocketAddr,
         pwp_local_tcp_port: u16,
@@ -95,7 +94,7 @@ pub struct MainCtx {
     pub(super) pieces: Rc<data::PieceInfo>,
     pub(super) accountant: data::BlockAccountant,
     pub(super) piece_tracker: data::PieceTracker,
-    pub(super) metainfo: metainfo::Metainfo,
+    pub(super) metainfo: input::Metainfo,
     pub(super) peer_states: pwp::PeerStates,
     pub(super) pending_requests: data::PendingRequests,
     pub(super) const_data: ConstData,
@@ -103,7 +102,7 @@ pub struct MainCtx {
 
 impl MainCtx {
     pub fn new(
-        metainfo: metainfo::Metainfo,
+        metainfo: input::Metainfo,
         local_peer_id: PeerId,
         pwp_listener_public_addr: SocketAddr,
         pwp_local_tcp_port: u16,

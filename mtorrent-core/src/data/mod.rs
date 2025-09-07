@@ -12,11 +12,12 @@ pub use block_accountant::BlockAccountant;
 pub use piece_info::PieceInfo;
 pub use piece_requests::PendingRequests;
 pub use piece_tracker::PieceTracker;
-pub use storage::{Storage, StorageClient, StorageServer, new_async_storage};
+pub use storage::{StorageClient, StorageServer, new_async_storage};
 
 #[cfg(feature = "mocks")]
 pub use storage::new_mock_storage;
 
+/// Common error type.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]

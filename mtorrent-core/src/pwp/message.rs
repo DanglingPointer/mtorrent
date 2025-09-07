@@ -7,6 +7,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 
+/// Bitfield from the bitfield message.
 pub type Bitfield = BitVec<u8, Msb0>;
 
 #[derive(Debug)]
@@ -238,6 +239,7 @@ const ID_EXTENDED: u8 = 20;
 
 // ------
 
+/// Information about a block of data.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Display)]
 #[display("ind={piece_index} off={in_piece_offset} len={block_length}")]
 pub struct BlockInfo {
@@ -246,6 +248,7 @@ pub struct BlockInfo {
     pub block_length: usize,
 }
 
+/// Messages pertaining to the upload of data by the peer sending the messages.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum UploaderMessage {
     Choke,
@@ -257,6 +260,7 @@ pub enum UploaderMessage {
     Block(BlockInfo, Vec<u8>),
 }
 
+/// Messages pertaining to the download of data by the peer sending the messages.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum DownloaderMessage {
     Interested,
@@ -265,12 +269,14 @@ pub enum DownloaderMessage {
     Cancel(BlockInfo),
 }
 
+/// Types of extensions for the [extension protocol](https://www.bittorrent.org/beps/bep_0010.html).
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Extension {
     Metadata,
     PeerExchange,
 }
 
+/// Parsed extended handshake.
 #[derive(Default, Clone, Eq, PartialEq, Debug)]
 pub struct ExtendedHandshake {
     pub extensions: HashMap<Extension, u8>,
@@ -283,6 +289,7 @@ pub struct ExtendedHandshake {
     pub metadata_size: Option<usize>,
 }
 
+/// Parsed PEX message.
 #[derive(Default, Clone, Eq, PartialEq, Debug, Display)]
 #[display("added={added:?} dropped={dropped:?}")]
 pub struct PeerExchangeData {
@@ -290,6 +297,7 @@ pub struct PeerExchangeData {
     pub dropped: HashSet<SocketAddr>,
 }
 
+/// Parsed extended message as defined by the [extension protocol](https://www.bittorrent.org/beps/bep_0010.html).
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum ExtendedMessage {
     Handshake(Box<ExtendedHandshake>),
@@ -498,6 +506,7 @@ impl Extension {
             Extension::PeerExchange => Self::NAME_PEX,
         }
     }
+    /// ID of the extension used locally, i.e. for parsing of incoming messages.
     pub const fn local_id(&self) -> u8 {
         match self {
             Extension::Metadata => Self::ID_METADATA,

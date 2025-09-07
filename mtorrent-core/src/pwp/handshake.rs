@@ -3,18 +3,22 @@ use std::io;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 
+/// Representation of the reserved bits in a handshake.
 pub type ReservedBits = BitArray<[u8; 8], Lsb0>;
 
+/// Generate reserved bits.
 pub fn reserved_bits(extended_protocol: bool) -> ReservedBits {
     let mut bits = ReservedBits::ZERO;
     bits.set(44, extended_protocol);
     bits
 }
 
+/// Check if the extension protocol is enabled.
 pub fn is_extension_protocol_enabled(reserved: &ReservedBits) -> bool {
     reserved[44]
 }
 
+/// Parsed handshake data.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Handshake {
     pub peer_id: [u8; 20],

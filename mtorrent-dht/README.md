@@ -1,6 +1,6 @@
 [![CI](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
 [![Crates.io Version](https://img.shields.io/crates/v/mtorrent-dht)](https://crates.io/crates/mtorrent-dht)
-[![docs.rs](https://img.shields.io/docsrs/mtorrent-dht)](https://docs.rs/mtorrent-dht/latest/mtorrent_dht/)
+[![docs.rs](https://img.shields.io/docsrs/mtorrent-dht)](https://docs.rs/mtorrent-dht/latest)
 
 # mtorrent-dht
 
