@@ -185,14 +185,14 @@ mod tests {
     fn test_extract_trackers_from_metainfo() {
         fn get_udp_tracker_addr(tracker: &str) -> Option<String> {
             match tracker.parse::<TrackerUrl>() {
-                Ok(TrackerUrl::Udp(url)) => Some(url),
+                Ok(TrackerUrl::Udp(url)) => Some((*url).to_owned()),
                 _ => None,
             }
         }
 
         fn get_http_tracker_addr(tracker: &str) -> Option<String> {
             match tracker.parse::<TrackerUrl>() {
-                Ok(TrackerUrl::Http(url)) => Some(url),
+                Ok(TrackerUrl::Http(url)) => Some((*url).to_owned()),
                 _ => None,
             }
         }
@@ -237,8 +237,8 @@ mod tests {
             assert_eq!(
                 updated_trackers,
                 vec![
-                    TrackerUrl::Udp("open.stealth.si:80".to_owned()),
-                    TrackerUrl::Http("https://example.com".to_owned()),
+                    "udp://open.stealth.si:80/announce".parse().unwrap(),
+                    "https://example.com".parse().unwrap(),
                 ]
             );
         }
@@ -249,8 +249,8 @@ mod tests {
             assert_eq!(
                 updated_trackers,
                 vec![
-                    TrackerUrl::Http("https://example.com".to_owned()),
-                    TrackerUrl::Udp("open.stealth.si:80".to_owned()),
+                    "https://example.com".parse().unwrap(),
+                    "udp://open.stealth.si:80".parse().unwrap(),
                 ]
             );
         }
@@ -263,10 +263,10 @@ mod tests {
             assert_eq!(
                 updated_trackers,
                 vec![
-                    TrackerUrl::Http("http://tracker1.com".to_owned()),
-                    TrackerUrl::Udp("tracker.tiny-vps.com:6969".to_owned()),
-                    TrackerUrl::Http("https://example.com".to_owned()),
-                    TrackerUrl::Udp("open.stealth.si:80".to_owned()),
+                    "http://tracker1.com".parse().unwrap(),
+                    "udp://tracker.tiny-vps.com:6969".parse().unwrap(),
+                    "https://example.com".parse().unwrap(),
+                    "udp://open.stealth.si:80".parse().unwrap(),
                 ]
             );
         }
@@ -277,10 +277,10 @@ mod tests {
             assert_eq!(
                 updated_trackers,
                 vec![
-                    TrackerUrl::Http("http://tracker1.com".to_owned()),
-                    TrackerUrl::Http("https://example.com".to_owned()),
-                    TrackerUrl::Udp("open.stealth.si:80".to_owned()),
-                    TrackerUrl::Udp("tracker.tiny-vps.com:6969".to_owned()),
+                    "http://tracker1.com".parse().unwrap(),
+                    "https://example.com".parse().unwrap(),
+                    "udp://open.stealth.si:80".parse().unwrap(),
+                    "udp://tracker.tiny-vps.com:6969".parse().unwrap(),
                 ]
             );
         }

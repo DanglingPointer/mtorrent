@@ -123,6 +123,7 @@ pub fn save_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_write_and_read_state_for_single_torrent() {
@@ -166,7 +167,7 @@ mod tests {
         assert_eq!(
             ["http://tracker1.com", "http://tracker2.com"]
                 .into_iter()
-                .map(|s| TrackerUrl::Http(s.to_owned()))
+                .map(|s| TrackerUrl::from_str(s).unwrap())
                 .collect::<BTreeSet<_>>(),
             loaded_trackers.collect::<BTreeSet<_>>(),
         );
@@ -183,7 +184,7 @@ mod tests {
             dir,
             ["http://tracker1.com", "http://tracker2.com"]
                 .into_iter()
-                .map(|s| TrackerUrl::Http(s.to_owned())),
+                .map(|s| TrackerUrl::from_str(s).unwrap()),
         )
         .unwrap();
 
@@ -216,7 +217,7 @@ mod tests {
         )
         .unwrap();
 
-        remove_tracker(dir, &TrackerUrl::Http("http://tracker1.com".to_string())).unwrap();
+        remove_tracker(dir, &"http://tracker1.com".parse().unwrap()).unwrap();
 
         let content = fs::read_to_string(Path::new(dir).join(FILENAME_TRACKERS)).unwrap();
         assert_eq!(
@@ -241,7 +242,7 @@ mod tests {
         // create config with trackers
         let initial_trackers = ["http://tracker1.com", "http://tracker2.com"]
             .into_iter()
-            .map(|s| TrackerUrl::Http(s.to_owned()));
+            .map(|s| TrackerUrl::from_str(s).unwrap());
         save_trackers(dir, initial_trackers.clone()).unwrap();
         assert!(Path::new(dir).join(FILENAME_TRACKERS).is_file());
 
@@ -254,7 +255,7 @@ mod tests {
         // add new trackers
         let new_trackers = ["http://tracker3.com", "http://tracker4.com"]
             .into_iter()
-            .map(|s| TrackerUrl::Http(s.to_owned()));
+            .map(|s| TrackerUrl::from_str(s).unwrap());
         save_trackers(dir, new_trackers.clone()).unwrap();
 
         let loaded_trackers = load_trackers(dir).unwrap();

@@ -320,7 +320,7 @@ mod tests {
 
         let response = client
             .announce(
-                TrackerUrl::Http(format!("{}/announce", server.url())),
+                format!("{}/announce", server.url()).parse().unwrap(),
                 AnnounceRequest {
                     info_hash: [b'h'; 20],
                     downloaded: 0,
@@ -361,7 +361,7 @@ mod tests {
 
         let err_response = client
             .announce(
-                TrackerUrl::Http(format!("{}/announce", server.url())),
+                format!("{}/announce", server.url()).parse().unwrap(),
                 AnnounceRequest {
                     info_hash: [b'g'; 20],
                     downloaded: 0,
@@ -392,7 +392,7 @@ mod tests {
         let client_task = task::spawn(async move {
             client
                 .announce(
-                    TrackerUrl::Udp(tracker_addr.to_string()),
+                    format!("udp://{tracker_addr}").parse().unwrap(),
                     AnnounceRequest {
                         info_hash: [b'g'; 20],
                         downloaded: 0,

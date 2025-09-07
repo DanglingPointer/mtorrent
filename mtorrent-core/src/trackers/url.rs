@@ -1,11 +1,20 @@
+use derive_more::Deref;
 use serde::{Deserialize, Serialize, Serializer, de::IntoDeserializer};
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub enum TrackerUrl {
-    Http(String),
-    Udp(String),
+    Http(Http),
+    Udp(Udp),
 }
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord, Deref)]
+#[deref(forward)]
+pub struct Http(String);
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord, Deref)]
+#[deref(forward)]
+pub struct Udp(String);
 
 impl Serialize for TrackerUrl {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -13,8 +22,8 @@ impl Serialize for TrackerUrl {
         S: Serializer,
     {
         match self {
-            TrackerUrl::Http(url) => url.serialize(serializer),
-            TrackerUrl::Udp(addr) => format!("udp://{addr}").serialize(serializer),
+            TrackerUrl::Http(Http(url)) => url.serialize(serializer),
+            TrackerUrl::Udp(Udp(addr)) => format!("udp://{addr}").serialize(serializer),
         }
     }
 }
@@ -29,8 +38,8 @@ impl<'de> Deserialize<'de> for TrackerUrl {
         let text_url = String::deserialize(deserializer)?;
         let parsed_url = url::Url::parse(&text_url).map_err(Error::custom)?;
         match parsed_url.scheme() {
-            "http" | "https" => Ok(TrackerUrl::Http(text_url)),
-            "udp" => Ok(TrackerUrl::Udp(format!(
+            "http" | "https" => Ok(TrackerUrl::Http(Http(text_url))),
+            "udp" => Ok(TrackerUrl::Udp(Udp(format!(
                 "{}:{}",
                 parsed_url
                     .host_str()
@@ -38,7 +47,7 @@ impl<'de> Deserialize<'de> for TrackerUrl {
                 parsed_url
                     .port()
                     .ok_or(Error::invalid_value(Unexpected::Str(&text_url), &"port present"))?
-            ))),
+            )))),
             scheme => Err(Error::invalid_value(Unexpected::Str(scheme), &"supported scheme")),
         }
     }
@@ -88,12 +97,21 @@ mod tests {
             };
         }
 
-        assert_eq!(http_trackers, expected_http_trackers.into_iter().map(Into::into).collect());
-        assert_eq!(udp_trackers, expected_udp_trackers.into_iter().map(Into::into).collect());
+        assert_eq!(
+            http_trackers,
+            expected_http_trackers.into_iter().map(ToString::to_string).map(Http).collect()
+        );
+        assert_eq!(
+            udp_trackers,
+            expected_udp_trackers.into_iter().map(ToString::to_string).map(Udp).collect()
+        );
     }
 
     #[test]
     fn test_parse_malformed_tracker_urls() {
+        let result = "invalid".parse::<TrackerUrl>();
+        assert!(result.is_err(), "{result:?}");
+
         let err = "udp://tracker.tiny-vps.com/announce".parse::<TrackerUrl>().unwrap_err();
         assert!(err.to_string().contains("expected port present"), "{err}");
 
