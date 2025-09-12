@@ -62,3 +62,11 @@ jobs:
         tool: nextest
     - run: cargo nextest run --no-run
     - run: cargo nextest run --all-targets --all-features --no-fail-fast --failure-output=final
+
+  doctest:
+    name: Documentation tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - run: cargo test --doc
