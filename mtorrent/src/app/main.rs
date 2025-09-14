@@ -1,5 +1,5 @@
 use crate::ops;
-use crate::utils::startup;
+use crate::utils::{listener, startup};
 use futures_util::FutureExt;
 use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
@@ -13,11 +13,13 @@ use tokio::sync::broadcast;
 use tokio::{runtime, task};
 use tokio_util::sync::CancellationToken;
 
+#[expect(clippy::too_many_arguments)]
 pub async fn single_torrent(
     local_peer_id: PeerId,
     metainfo_uri: &str,
     output_dir: impl AsRef<Path>,
     dht_handle: Option<dht::CommandSink>,
+    mut listener: impl listener::StateListener,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     use_upnp: bool,
@@ -68,6 +70,7 @@ pub async fn single_torrent(
             metainfo_uri,
             output_dir,
             dht_handle,
+            &mut listener,
             pwp_runtime,
             storage_runtime,
             std::iter::empty(),
@@ -82,6 +85,7 @@ pub async fn single_torrent(
             &output_dir,
             &output_dir,
             dht_handle.clone(),
+            &mut listener,
             pwp_runtime.clone(),
         )
         .await?;
@@ -93,6 +97,7 @@ pub async fn single_torrent(
             metainfo_filepath,
             &output_dir,
             dht_handle,
+            &mut listener,
             pwp_runtime,
             storage_runtime,
             peers,
@@ -114,8 +119,9 @@ async fn preliminary_stage(
     config_dir: impl AsRef<Path>,
     metainfo_dir: impl AsRef<Path>,
     dht_handle: Option<dht::CommandSink>,
+    listener: &mut impl listener::StateListener,
     pwp_runtime: runtime::Handle,
-) -> io::Result<(impl AsRef<Path>, impl IntoIterator<Item = SocketAddr>)> {
+) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
         .parse()
@@ -182,9 +188,13 @@ async fn preliminary_stage(
         }
     });
 
-    let peers =
-        ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), canceller.drop_guard())
-            .await?;
+    let peers = ops::periodic_metadata_check(
+        ctx,
+        metainfo_filepath.clone(),
+        listener,
+        canceller.drop_guard(),
+    )
+    .await?;
     tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }
@@ -197,6 +207,7 @@ async fn main_stage(
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
     dht_handle: Option<dht::CommandSink>,
+    listener: &mut impl listener::StateListener,
     pwp_runtime: runtime::Handle,
     storage_runtime: runtime::Handle,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
@@ -274,7 +285,7 @@ async fn main_stage(
         }
     });
 
-    ops::periodic_state_dump(ctx, content_dir, canceller.drop_guard()).await;
+    ops::periodic_state_dump(ctx, content_dir, listener, canceller.drop_guard()).await;
     tasks.shutdown().await;
     Ok(())
 }

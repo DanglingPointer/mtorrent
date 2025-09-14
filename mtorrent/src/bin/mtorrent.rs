@@ -1,6 +1,7 @@
 use clap::Parser;
 use mtorrent::app;
 use mtorrent::app::dht;
+use mtorrent::utils::listener;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
@@ -23,6 +24,14 @@ struct Cli {
     /// Disable DHT
     #[arg(long)]
     no_dht: bool,
+}
+
+struct SnapshotLogger;
+
+impl listener::StateListener for SnapshotLogger {
+    fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
+        log::info!("Periodic state dump:\n{snapshot}");
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -93,6 +102,7 @@ fn main() -> io::Result<()> {
             &cli.metainfo_uri,
             output_dir,
             dht_cmds,
+            SnapshotLogger,
             pwp_worker.runtime_handle(),
             storage_worker.runtime_handle(),
             !cli.no_upnp,

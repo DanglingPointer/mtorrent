@@ -1,10 +1,11 @@
 use core::fmt;
+use serde::{Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tokio::time::Instant;
 
 /// Indicates how the peer was discovered.
-#[derive(Default, Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize)]
 pub enum PeerOrigin {
     Tracker,
     Listener,
@@ -15,7 +16,7 @@ pub enum PeerOrigin {
 }
 
 /// The current state of the download of data from a remote peer.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct DownloadState {
     pub am_interested: bool,
     pub peer_choking: bool,
@@ -46,7 +47,7 @@ impl fmt::Display for DownloadState {
 }
 
 /// The current state of the update of data to a remote peer.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct UploadState {
     pub am_choking: bool,
     pub peer_interested: bool,
@@ -97,6 +98,34 @@ impl Default for PeerState {
             last_download_time: Instant::now(),
             last_upload_time: Instant::now(),
         }
+    }
+}
+
+impl Serialize for PeerState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        struct Data<'a> {
+            download: &'a DownloadState,
+            upload: &'a UploadState,
+            client: &'a str,
+            reqq: Option<usize>,
+            origin: PeerOrigin,
+        }
+        let data = Data {
+            download: &self.download,
+            upload: &self.upload,
+            client: self
+                .extensions
+                .as_ref()
+                .and_then(|ext| ext.client_type.as_deref())
+                .unwrap_or("n/a"),
+            reqq: self.extensions.as_ref().and_then(|ext| ext.request_limit),
+            origin: self.origin,
+        };
+        data.serialize(serializer)
     }
 }
 
@@ -187,7 +216,7 @@ impl PeerStates {
     }
 
     /// States of all connected peers.
-    pub fn iter(&self) -> impl Iterator<Item = (&SocketAddr, &PeerState)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&SocketAddr, &PeerState)> {
         self.peers.iter()
     }
 
@@ -195,34 +224,5 @@ impl PeerStates {
     pub fn uploaded_bytes(&self) -> usize {
         self.previously_uploaded_bytes
             + self.peers.values().map(|state| state.upload.bytes_sent).sum::<usize>()
-    }
-}
-
-impl fmt::Display for PeerStates {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn origin_str(origin: PeerOrigin) -> &'static str {
-            match origin {
-                PeerOrigin::Tracker => "tracker",
-                PeerOrigin::Listener => "🫧listener🫧",
-                PeerOrigin::Pex => "✨pex✨",
-                PeerOrigin::Dht => "💎dht💎",
-                PeerOrigin::Other => "other",
-            }
-        }
-
-        write!(f, "Connected peers ({}):", self.peers.len())?;
-        for (ip, state) in &self.peers {
-            write!(f, "\n[ {:^21} ]     origin: {:<12}", ip, origin_str(state.origin))?;
-            if let Some(hs) = &state.extensions {
-                write!(
-                    f,
-                    "client: {:<20} reqq: {}",
-                    hs.client_type.as_deref().unwrap_or("n/a"),
-                    hs.request_limit.unwrap_or_default()
-                )?;
-            }
-            write!(f, "\n{} {}", state.download, state.upload)?;
-        }
-        Ok(())
     }
 }

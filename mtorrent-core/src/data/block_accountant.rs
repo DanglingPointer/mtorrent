@@ -1,6 +1,5 @@
 use crate::data::{Error, PieceInfo};
 use crate::pwp::{Bitfield, BlockInfo};
-use core::fmt;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -193,22 +192,6 @@ impl BlockAccountant {
     /// The total number of missing bytes.
     pub fn missing_bytes(&self) -> usize {
         self.pieces.total_len() - self.total_bytes
-    }
-}
-
-impl fmt::Display for BlockAccountant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let bitfield = self.generate_bitfield();
-        let piece_count = bitfield.count_ones();
-        write!(f, "pieces={}/{}", piece_count, bitfield.len())?;
-        write!(
-            f,
-            " bytes={}/{}",
-            self.accounted_bytes(),
-            self.accounted_bytes() + self.missing_bytes()
-        )?;
-        write!(f, " fragments={}", self.blocks_start_end.len())?;
-        Ok(())
     }
 }
 

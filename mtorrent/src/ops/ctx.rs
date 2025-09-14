@@ -1,8 +1,9 @@
 use super::ctrl;
 use crate::utils::config;
-use core::fmt;
+use crate::utils::listener::{
+    BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
+};
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::Bitfield;
 use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::HashSet;
@@ -66,7 +67,7 @@ impl PreliminaryCtx {
         Handle::new(Self {
             magnet,
             metainfo: Vec::new(),
-            metainfo_pieces: Bitfield::new(),
+            metainfo_pieces: pwp::Bitfield::new(),
             reachable_peers: Default::default(),
             connected_peers: Default::default(),
             const_data: ConstData {
@@ -75,18 +76,6 @@ impl PreliminaryCtx {
                 pwp_local_tcp_port,
             },
         })
-    }
-}
-
-impl fmt::Display for PreliminaryCtx {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Metainfo pieces: {}/{}\nConnected peers: {:?}",
-            self.metainfo_pieces.count_ones(),
-            self.metainfo_pieces.len(),
-            self.connected_peers,
-        )
     }
 }
 
@@ -137,33 +126,20 @@ impl MainCtx {
     }
 }
 
-impl fmt::Display for MainCtx {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Local availability: {}\nOutstanding requests: {}\n{}",
-            self.accountant, self.pending_requests, self.peer_states
-        )
-    }
-}
-
-impl Drop for MainCtx {
-    fn drop(&mut self) {
-        log::info!("Final state dump:\n{self}");
-    }
-}
-
 pub async fn periodic_metadata_check(
     mut ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
+    state_listener: &mut impl StateListener,
     _canceller: DropGuard,
-) -> io::Result<impl IntoIterator<Item = SocketAddr>> {
+) -> io::Result<impl IntoIterator<Item = SocketAddr> + 'static> {
     define_with_ctx!(ctx_handle);
 
     let mut interval = time::interval(sec!(1));
     while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
         interval.tick().await;
-        with_ctx!(|ctx| log::info!("Periodic state dump:\n{ctx}"));
+        with_ctx!(|ctx| {
+            state_listener.on_snapshot(preliminary_snapshot(ctx, &Default::default()));
+        });
     }
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
@@ -174,6 +150,7 @@ pub async fn periodic_metadata_check(
 pub async fn periodic_state_dump(
     mut ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
+    state_listener: &mut impl StateListener,
     _canceller: DropGuard,
 ) {
     define_with_ctx!(ctx_handle);
@@ -208,11 +185,51 @@ pub async fn periodic_state_dump(
             ) {
                 log::warn!("Failed to save state to file: {e}");
             }
-            log::info!("Periodic state dump:\n{ctx}");
+            state_listener.on_snapshot(main_snapshot(ctx));
             ctrl::is_finished(ctx)
         });
         if finished {
             break;
         }
+    }
+}
+
+fn preliminary_snapshot<'p>(
+    ctx: &PreliminaryCtx,
+    blank_peer_state: &'p pwp::PeerState,
+) -> StateSnapshot<'p> {
+    StateSnapshot {
+        peers: ctx.connected_peers.iter().map(|addr| (*addr, blank_peer_state)).collect(),
+        metainfo: MetainfoSnapshot {
+            total_pieces: ctx.metainfo_pieces.len(),
+            downloaded_pieces: ctx.metainfo_pieces.count_ones(),
+        },
+        pieces: Default::default(),
+        bytes: Default::default(),
+        requests: Default::default(),
+    }
+}
+
+fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
+    let bitfield = ctx.accountant.generate_bitfield();
+    let metadata_pieces = ctx.metainfo.size().div_ceil(pwp::MAX_BLOCK_SIZE);
+    StateSnapshot {
+        peers: ctx.peer_states.iter().map(|(addr, state)| (*addr, state)).collect(),
+        pieces: PiecesSnapshot {
+            total: bitfield.len(),
+            downloaded: bitfield.count_ones(),
+        },
+        bytes: BytesSnapshot {
+            total: ctx.pieces.total_len(),
+            downloaded: ctx.accountant.accounted_bytes(),
+        },
+        requests: RequestsSnapshot {
+            in_flight: ctx.pending_requests.requests_in_flight(),
+            distinct_pieces: ctx.pending_requests.pieces_requested(),
+        },
+        metainfo: MetainfoSnapshot {
+            total_pieces: metadata_pieces,
+            downloaded_pieces: metadata_pieces,
+        },
     }
 }

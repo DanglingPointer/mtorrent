@@ -1,4 +1,3 @@
-use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
@@ -35,14 +34,15 @@ impl PendingRequests {
     pub fn is_piece_requested_from(&self, peer: &SocketAddr, piece: usize) -> bool {
         self.piece_requested_from.get(&piece).is_some_and(|peers| peers.contains(peer))
     }
-}
 
-impl fmt::Display for PendingRequests {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let requested_pieces =
-            self.piece_requested_from.iter().filter(|(_, peers)| !peers.is_empty()).count();
-        let request_count = self.piece_requested_from.values().flatten().count();
-        write!(f, "pieces/requests={requested_pieces}/{request_count}")
+    /// Count of all requests currently in-flight.
+    pub fn requests_in_flight(&self) -> usize {
+        self.piece_requested_from.values().flatten().count()
+    }
+
+    /// Count of all pieces currently requested from at least one peer.
+    pub fn pieces_requested(&self) -> usize {
+        self.piece_requested_from.values().filter(|peers| !peers.is_empty()).count()
     }
 }
 
