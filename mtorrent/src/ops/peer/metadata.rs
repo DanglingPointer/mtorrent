@@ -1,7 +1,7 @@
-use super::super::ctx;
+use super::super::{PeerReporter, ctx};
 use super::CLIENT_NAME;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp;
+use mtorrent_core::pwp::{self, PeerExchangeData};
 use std::{cmp, io};
 use tokio::time::Instant;
 
@@ -12,6 +12,7 @@ struct Data {
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     remote_metadata_ext_id: u8,
+    peer_reporter: PeerReporter,
 }
 
 impl Drop for Data {
@@ -115,6 +116,8 @@ fn submit_block(ctx: &mut ctx::PreliminaryCtx, piece_index: usize, data: &[u8]) 
 
 fn process_handshake(inner: &mut Data, handshake: Box<pwp::ExtendedHandshake>) -> io::Result<()> {
     define_with_ctx!(inner.handle);
+    log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), handshake);
+
     with_ctx!(|ctx| {
         if let Some(metadata_size) = handshake.metadata_size {
             init_metadata(ctx, metadata_size)?;
@@ -127,18 +130,35 @@ fn process_handshake(inner: &mut Data, handshake: Box<pwp::ExtendedHandshake>) -
     })
 }
 
+async fn process_pex(inner: &mut Data, pex: Box<PeerExchangeData>) {
+    define_with_ctx!(inner.handle);
+    log::debug!("Received PEX message from {}: {pex}", inner.rx.remote_ip());
+
+    if !pex.added.is_empty() {
+        let new_peers: Vec<_> =
+            with_ctx!(|ctx| pex.added.difference(&ctx.reachable_peers).cloned().collect());
+        for peer_addr in new_peers {
+            inner.peer_reporter.report_discovered_new(peer_addr, pwp::PeerOrigin::Pex).await;
+        }
+    };
+}
+
 pub async fn new_peer(
     mut handle: CtxHandle,
     extended_chans: pwp::ExtendedChannels,
+    peer_reporter: PeerReporter,
 ) -> io::Result<Peer> {
     define_with_ctx!(handle);
     let pwp::ExtendedChannels(mut tx, rx) = extended_chans;
 
     // send local handshake
     let local_handshake = Box::new(pwp::ExtendedHandshake {
-        extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())]
-            .into_iter()
-            .collect(),
+        extensions: [
+            (pwp::Extension::Metadata, pwp::Extension::Metadata.local_id()),
+            (pwp::Extension::PeerExchange, pwp::Extension::PeerExchange.local_id()),
+        ]
+        .into_iter()
+        .collect(),
         listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(rx.remote_ip().ip()),
@@ -151,16 +171,12 @@ pub async fn new_peer(
         rx,
         tx,
         remote_metadata_ext_id: 0,
+        peer_reporter,
     });
 
     // try wait for remote handshake
     match inner.rx.receive_message_timed(sec!(1)).await {
         Ok(pwp::ExtendedMessage::Handshake(hs)) => {
-            log::debug!(
-                "Received initial extended handshake from {}: {}",
-                inner.rx.remote_ip(),
-                hs
-            );
             inner.remote_metadata_ext_id = get_metadata_ext_id(&hs)?;
             process_handshake(&mut inner, hs)?;
         }
@@ -178,8 +194,10 @@ pub async fn wait_until_enabled(peer: DisabledPeer) -> io::Result<UploadingPeer>
     while inner.remote_metadata_ext_id == 0 {
         match inner.rx.receive_message().await? {
             pwp::ExtendedMessage::Handshake(hs) => {
-                log::debug!("Received extended handshake from {}: {}", inner.rx.remote_ip(), hs);
                 process_handshake(&mut inner, hs)?;
+            }
+            pwp::ExtendedMessage::PeerExchange(pex) => {
+                process_pex(&mut inner, pex).await;
             }
             msg => log::debug!(
                 "Received {} from {} while waiting for metadata to be enabled",
@@ -198,11 +216,6 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
     loop {
         match inner.rx.receive_message_timed(until - Instant::now()).await {
             Ok(pwp::ExtendedMessage::Handshake(hs)) => {
-                log::debug!(
-                    "Received subsequent extended handshake from {}: {}",
-                    inner.rx.remote_ip(),
-                    hs
-                );
                 process_handshake(&mut inner, hs)?;
                 if inner.remote_metadata_ext_id == 0 {
                     break;
@@ -221,6 +234,9 @@ pub async fn cool_off_rejecting_peer(peer: RejectingPeer, until: Instant) -> io:
                         inner.remote_metadata_ext_id,
                     ))
                     .await?;
+            }
+            Ok(pwp::ExtendedMessage::PeerExchange(pex)) => {
+                process_pex(&mut inner, pex).await;
             }
             Ok(msg) => log::debug!(
                 "Received {} from {} while cooling off a rejecting peer",
@@ -264,11 +280,6 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
         loop {
             match inner.rx.receive_message().await? {
                 pwp::ExtendedMessage::Handshake(hs) => {
-                    log::debug!(
-                        "Received subsequent extended handshake from {}: {}",
-                        inner.rx.remote_ip(),
-                        hs
-                    );
                     process_handshake(&mut inner, hs)?;
                     if inner.remote_metadata_ext_id == 0 {
                         return Ok(Peer::Disabled(DisabledPeer(inner)));
@@ -303,7 +314,9 @@ pub async fn download_metadata(peer: UploadingPeer) -> io::Result<Peer> {
                 pwp::ExtendedMessage::MetadataReject { .. } => {
                     return Ok(Peer::Rejector(RejectingPeer(inner)));
                 }
-                pwp::ExtendedMessage::PeerExchange(_) => (),
+                pwp::ExtendedMessage::PeerExchange(pex) => {
+                    process_pex(&mut inner, pex).await;
+                }
             }
         }
     }

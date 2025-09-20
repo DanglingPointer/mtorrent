@@ -238,6 +238,7 @@ impl PeerBuilder {
             ulchans,
             extchans,
             ctx_handle.clone(),
+            PeerReporter::new_mock(),
         );
 
         (ctx_handle, Box::pin(run_future))

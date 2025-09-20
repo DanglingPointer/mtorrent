@@ -264,6 +264,7 @@ async fn run_metadata_download(
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
     mut ctx_handle: PreliminaryHandle,
+    peer_reporter: PeerReporter,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
 
@@ -289,11 +290,13 @@ async fn run_metadata_download(
         origin: pwp::PeerOrigin,
         extended_chans: pwp::ExtendedChannels,
         mut ctx_handle: PreliminaryHandle,
+        peer_reporter: PeerReporter,
     ) -> io::Result<()> {
         define_with_ctx!(ctx_handle);
         let peer_addr = *extended_chans.0.remote_ip();
 
-        let mut peer = metadata::new_peer(ctx_handle.clone(), extended_chans).await?;
+        let mut peer =
+            metadata::new_peer(ctx_handle.clone(), extended_chans, peer_reporter).await?;
         with_ctx!(|ctx| {
             // the bookkeeping below must be done _after_ creating the peer above,
             // otherwise it will be never undone in the case of a send/recv error
@@ -318,7 +321,7 @@ async fn run_metadata_download(
     try_join!(
         handle_download(download_chans),
         handle_upload(upload_chans),
-        handle_metadata(origin, extended_chans, ctx_handle),
+        handle_metadata(origin, extended_chans, ctx_handle, peer_reporter),
     )?;
     Ok(())
 }
@@ -392,6 +395,7 @@ impl PeerConnector for Rc<PreliminaryConnectionData> {
             upload_chans,
             extended_chans,
             self.ctx_handle.clone(),
+            self.peer_reporter.clone(),
         )
         .await
     }
