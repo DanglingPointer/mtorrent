@@ -16,9 +16,9 @@ pub async fn make_periodic_announces(
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
-    define_with_ctx!(ctx_handle);
+    define_with!(ctx_handle);
     let tracker_urls =
-        with_ctx!(|ctx| update_tracker_urls(trackers_from_metainfo(&ctx.metainfo), &config_dir));
+        with!(|ctx| update_tracker_urls(trackers_from_metainfo(&ctx.metainfo), &config_dir));
     launch_announces(&tracker_client, &peer_reporter, ctx_handle, tracker_urls, &config_dir).await;
 }
 
@@ -28,8 +28,8 @@ pub async fn make_preliminary_announces(
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
-    define_with_ctx!(ctx_handle);
-    let tracker_urls = with_ctx!(|ctx| update_tracker_urls(ctx.magnet.trackers(), &config_dir));
+    define_with!(ctx_handle);
+    let tracker_urls = with!(|ctx| update_tracker_urls(ctx.magnet.trackers(), &config_dir));
     launch_announces(&trackers_handle, &peer_reporter, ctx_handle, tracker_urls, &config_dir).await;
 }
 
