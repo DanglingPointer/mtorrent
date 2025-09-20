@@ -53,7 +53,7 @@ pub struct PreliminaryCtx {
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
     pub(super) reachable_peers: HashSet<SocketAddr>,
-    pub(super) connected_peers: HashSet<SocketAddr>,
+    pub(super) peer_states: pwp::PeerStates,
     pub(super) const_data: ConstData,
 }
 
@@ -69,7 +69,7 @@ impl PreliminaryCtx {
             metainfo: Vec::new(),
             metainfo_pieces: pwp::Bitfield::new(),
             reachable_peers: Default::default(),
-            connected_peers: Default::default(),
+            peer_states: Default::default(),
             const_data: ConstData {
                 local_peer_id,
                 pwp_listener_public_addr,
@@ -138,7 +138,7 @@ pub async fn periodic_metadata_check(
     while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
         interval.tick().await;
         with_ctx!(|ctx| {
-            state_listener.on_snapshot(preliminary_snapshot(ctx, &Default::default()));
+            state_listener.on_snapshot(preliminary_snapshot(ctx));
         });
     }
 
@@ -194,12 +194,9 @@ pub async fn periodic_state_dump(
     }
 }
 
-fn preliminary_snapshot<'p>(
-    ctx: &PreliminaryCtx,
-    blank_peer_state: &'p pwp::PeerState,
-) -> StateSnapshot<'p> {
+fn preliminary_snapshot(ctx: &PreliminaryCtx) -> StateSnapshot<'_> {
     StateSnapshot {
-        peers: ctx.connected_peers.iter().map(|addr| (*addr, blank_peer_state)).collect(),
+        peers: ctx.peer_states.iter().map(|(addr, state)| (*addr, state)).collect(),
         metainfo: MetainfoSnapshot {
             total_pieces: ctx.metainfo_pieces.len(),
             downloaded_pieces: ctx.metainfo_pieces.count_ones(),

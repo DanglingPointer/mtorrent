@@ -232,8 +232,13 @@ impl PeerBuilder {
             local_addr.port(),
         );
 
-        let run_future =
-            super::run_metadata_download(dlchans, ulchans, extchans, ctx_handle.clone());
+        let run_future = super::run_metadata_download(
+            pwp::PeerOrigin::Other,
+            dlchans,
+            ulchans,
+            extchans,
+            ctx_handle.clone(),
+        );
 
         (ctx_handle, Box::pin(run_future))
     }

@@ -259,6 +259,7 @@ impl PeerConnector for Rc<MainConnectionData> {
 // ------------------------------------------------------------------------------------------------
 
 async fn run_metadata_download(
+    origin: pwp::PeerOrigin,
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
@@ -285,11 +286,19 @@ async fn run_metadata_download(
         }
     }
     async fn handle_metadata(
+        origin: pwp::PeerOrigin,
         extended_chans: pwp::ExtendedChannels,
         mut ctx_handle: PreliminaryHandle,
     ) -> io::Result<()> {
         define_with_ctx!(ctx_handle);
+        let peer_addr = *extended_chans.0.remote_ip();
+
         let mut peer = metadata::new_peer(ctx_handle.clone(), extended_chans).await?;
+        with_ctx!(|ctx| {
+            // the bookkeeping below must be done _after_ creating the peer above,
+            // otherwise it will be never undone in the case of a send/recv error
+            ctx.peer_states.set_origin(&peer_addr, origin);
+        });
         while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
             match peer {
                 metadata::Peer::Disabled(disabled) => {
@@ -309,7 +318,7 @@ async fn run_metadata_download(
     try_join!(
         handle_download(download_chans),
         handle_upload(upload_chans),
-        handle_metadata(extended_chans, ctx_handle),
+        handle_metadata(origin, extended_chans, ctx_handle),
     )?;
     Ok(())
 }
@@ -372,13 +381,19 @@ impl PeerConnector for Rc<PreliminaryConnectionData> {
 
     async fn run_connection(
         &self,
-        _origin: pwp::PeerOrigin,
+        origin: pwp::PeerOrigin,
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         extended_chans: Option<pwp::ExtendedChannels>,
     ) -> io::Result<()> {
-        run_metadata_download(download_chans, upload_chans, extended_chans, self.ctx_handle.clone())
-            .await
+        run_metadata_download(
+            origin,
+            download_chans,
+            upload_chans,
+            extended_chans,
+            self.ctx_handle.clone(),
+        )
+        .await
     }
 
     async fn schedule_reconnect(&self, peer: DiscoveredPeer) {
