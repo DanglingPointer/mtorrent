@@ -46,7 +46,7 @@ impl PieceTracker {
     }
 
     /// Get an iterator over the not-yet-downloaded pieces, ordered by the number of
-    /// peers that own each piece, such that pieces with the fewest owners are yielded first.
+    /// peers that own each piece, such that pieces with fewest owners are yielded first.
     pub fn missing_pieces_rarest_first(&self) -> impl Iterator<Item = usize> + '_ {
         self.owner_count_to_piece_indices
             .iter()

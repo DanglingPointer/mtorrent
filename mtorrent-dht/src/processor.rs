@@ -112,7 +112,7 @@ impl Processor {
             .collect();
         drop(sw);
 
-        // ignore commands until we have a certain number of nodes
+        // ignore commands until we have a certain number of nodes (or the timeout occurs)
         if !bootstrapping_nodes.is_empty() {
             let _sw = debug_stopwatch!("Bootstrapping");
 

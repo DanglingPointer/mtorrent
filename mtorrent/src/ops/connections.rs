@@ -210,19 +210,18 @@ pub(super) trait PeerConnector {
     fn schedule_reconnect(&self, peer: DiscoveredPeer) -> impl Future<Output = ()>;
 }
 
-fn can_retry_connect(e: &io::Error, attempts_left: usize) -> bool {
-    attempts_left > 0
-        && matches!(
-            e.kind(),
-            io::ErrorKind::ConnectionRefused
-                | io::ErrorKind::ConnectionReset
-                | io::ErrorKind::UnexpectedEof
-                | io::ErrorKind::TimedOut
-                | io::ErrorKind::Interrupted
-                // the 2 below happen when the preliminary connection hasn't exited yet:
-                | io::ErrorKind::AddrInUse
-                | io::ErrorKind::AddrNotAvailable
-        )
+fn is_fatal_error(e: &io::Error) -> bool {
+    match e.kind() {
+        io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::UnexpectedEof
+        | io::ErrorKind::TimedOut
+        | io::ErrorKind::Interrupted
+        // the 2 below happen when the preliminary connection hasn't exited yet:
+        | io::ErrorKind::AddrInUse
+        | io::ErrorKind::AddrNotAvailable => false,
+        _ => true,
+    }
 }
 
 fn with_jitter(duration: Duration) -> Duration {
@@ -253,9 +252,9 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     let (download_chans, upload_chans, extended_chans) = match connect_result {
         Ok(channels) => channels,
         Err(e) => {
-            if can_retry_connect(&e, reconnects_left) {
+            if reconnects_left > 0 && !is_fatal_error(&e) {
+                drop(permit); // free up a slot for other peers
                 time::sleep_until(connect_deadline).await;
-                drop(permit);
                 connector
                     .schedule_reconnect(DiscoveredPeer {
                         reconnects_left: Some(reconnects_left - 1),
@@ -274,17 +273,18 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         .run_connection(peer.origin, download_chans, upload_chans, extended_chans)
         .await;
 
-    // ErrorKind::Other means we disconnected the peer intentionally, and
+    // Fatal error means we disconnected the peer intentionally, and
     // <5s since connect means peer probably didn't like our handshake.
     // If none of the above is the case, we'll try to reconnect
     if let Err(e) = &run_result
-        && e.kind() != io::ErrorKind::Other
+        && !is_fatal_error(e)
         && connected_time.elapsed() > sec!(5)
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", peer.addr);
+        // free up a slot for other peers
+        drop(permit);
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
-        drop(permit);
         connector.schedule_reconnect(peer).await;
     }
 
@@ -309,14 +309,15 @@ async fn incoming_pwp_connection<C: PeerConnector>(
         .run_connection(PeerOrigin::Listener, download_chans, upload_chans, extended_chans)
         .await;
 
-    // ErrorKind::Other means we disconnected the peer intentionally
+    // Fatal error means we disconnected the peer intentionally
     if let Err(e) = &run_result
-        && e.kind() != io::ErrorKind::Other
+        && !is_fatal_error(e)
     {
         log::warn!("Peer {peer_addr} disconnected: {e}. Reconnecting in 1s...");
+        // free up a slot for other peers
+        drop(permit);
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
-        drop(permit);
         connector
             .schedule_reconnect(DiscoveredPeer {
                 addr: peer_addr,
@@ -336,10 +337,10 @@ pub struct CancellingConnectHandler<C> {
 
 macro_rules! log {
     ($e:expr, $($arg:tt)+) => {{
-        let lvl = if can_retry_connect(&$e, 1) {
-            log::Level::Debug
-        } else {
+        let lvl = if is_fatal_error(&$e) {
             log::Level::Warn
+        } else {
+            log::Level::Debug
         };
         log::log!(lvl, $($arg)+);
     }}
@@ -382,6 +383,7 @@ impl<C: PeerConnector + Clone + 'static> ConnectHandler for CancellingConnectHan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
     use mtorrent_core::pwp::{Handshake, channels_from_mock};
     use std::{cell::Cell, rc::Rc, str::FromStr};
     use tokio::{io, sync::mpsc::error::TryRecvError, task};
@@ -630,8 +632,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_outbound_retry_on_connect_error() {
-        let connector = MockPeerConnector::default();
-
         let retriable_errors = [
             io::ErrorKind::ConnectionRefused,
             io::ErrorKind::ConnectionReset,
@@ -643,6 +643,7 @@ mod tests {
         ];
 
         for error_kind in retriable_errors {
+            let connector = MockPeerConnector::default();
             // with 1 retry left
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
@@ -677,8 +678,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_no_outbound_retry_on_connect_error() {
-        let connector = MockPeerConnector::default();
-
         let non_retriable_errors = [
             io::ErrorKind::PermissionDenied,
             io::ErrorKind::AlreadyExists,
@@ -688,6 +687,7 @@ mod tests {
         ];
 
         for error_kind in non_retriable_errors {
+            let connector = MockPeerConnector::default();
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Other,
@@ -705,8 +705,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn test_run_connection_reconnect() {
-        let connector = MockPeerConnector::default();
-
         let retriable_errors = [
             io::ErrorKind::ConnectionRefused,
             io::ErrorKind::ConnectionReset,
@@ -715,13 +713,10 @@ mod tests {
             io::ErrorKind::AddrInUse,
             io::ErrorKind::AddrNotAvailable,
             io::ErrorKind::Interrupted,
-            io::ErrorKind::PermissionDenied,
-            io::ErrorKind::AlreadyExists,
-            io::ErrorKind::InvalidInput,
-            io::ErrorKind::InvalidData,
         ];
 
         for error_kind in retriable_errors {
+            let connector = MockPeerConnector::default();
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Pex,
@@ -740,25 +735,26 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_run_connection_no_reconnect_on_error_other() {
-        let connector = MockPeerConnector::default();
+    async fn test_run_connection_no_reconnect_on_fatal_error() {
+        let fatal_errors = [io::ErrorKind::Other, io::ErrorKind::Unsupported];
 
-        let error_kind = io::ErrorKind::Other;
+        for error_kind in fatal_errors {
+            let connector = MockPeerConnector::default();
+            let peer = DiscoveredPeer {
+                addr: addr!("127.0.0.1:8080"),
+                origin: PeerOrigin::Pex,
+                reconnects_left: Some(1),
+            };
+            connector.expect_discovered(peer.clone(), None);
+            connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
+            connector.run_connection_for(sec!(6));
+            connector.expect_no_reconnect();
 
-        let peer = DiscoveredPeer {
-            addr: addr!("127.0.0.1:8080"),
-            origin: PeerOrigin::Pex,
-            reconnects_left: Some(1),
-        };
-        connector.expect_discovered(peer.clone(), None);
-        connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
-        connector.run_connection_for(sec!(6));
-        connector.expect_no_reconnect();
-
-        let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), error_kind);
+            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), error_kind);
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -799,14 +795,26 @@ mod tests {
                 connector.on_discovered_timeout();
                 connector.expect_no_reconnect();
 
+                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
                 let task_handle = task::spawn_local({
                     let connector = connector.clone();
                     let peer = peer.clone();
-                    async move { outgoing_pwp_connection(peer, &*connector, mock_permit()).await }
+                    async move {
+                        outgoing_pwp_connection(
+                            peer,
+                            &*connector,
+                            ConnectPermit {
+                                addr: addr!("127.0.0.1:8080"),
+                                disconnect_reporter,
+                            },
+                        )
+                        .await
+                    }
                 });
                 assert!(!task_handle.is_finished());
 
                 time::sleep(sec!(15)).await;
+                assert!(permit_drop_receiver.next().now_or_never().is_none());
                 assert!(!task_handle.is_finished());
 
                 connector.expect_reconnect(DiscoveredPeer {
@@ -814,6 +822,7 @@ mod tests {
                     ..peer.clone()
                 });
                 task::yield_now().await;
+                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
                 assert!(task_handle.is_finished());
                 let error = task_handle.await.unwrap().unwrap_err();
                 assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -839,12 +848,27 @@ mod tests {
                 );
                 connector.expect_no_reconnect();
 
+                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
                 let task_handle = task::spawn_local({
                     let connector = connector.clone();
                     let peer = peer.clone();
-                    async move { outgoing_pwp_connection(peer, &*connector, mock_permit()).await }
+                    async move {
+                        outgoing_pwp_connection(
+                            peer,
+                            &*connector,
+                            ConnectPermit {
+                                addr: addr!("127.0.0.1:8080"),
+                                disconnect_reporter,
+                            },
+                        )
+                        .await
+                    }
                 });
                 assert!(!task_handle.is_finished());
+                assert!(permit_drop_receiver.next().now_or_never().is_none());
+
+                task::yield_now().await;
+                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
 
                 time::sleep(sec!(15)).await;
                 assert!(!task_handle.is_finished());
@@ -881,14 +905,31 @@ mod tests {
                 connector.run_connection_for(sec!(6));
                 connector.expect_no_reconnect();
 
+                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
                 let task_handle = task::spawn_local({
                     let connector = connector.clone();
                     let peer = peer.clone();
-                    async move { outgoing_pwp_connection(peer, &*connector, mock_permit()).await }
+                    async move {
+                        outgoing_pwp_connection(
+                            peer,
+                            &*connector,
+                            ConnectPermit {
+                                addr: addr!("127.0.0.1:8080"),
+                                disconnect_reporter,
+                            },
+                        )
+                        .await
+                    }
                 });
                 assert!(!task_handle.is_finished());
 
-                time::sleep(sec!(6 + 1)).await;
+                time::sleep(sec!(6)).await;
+                assert!(permit_drop_receiver.next().now_or_never().is_none());
+
+                task::yield_now().await;
+                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
+
+                time::sleep(sec!(1)).await;
                 assert!(!task_handle.is_finished());
 
                 connector.expect_reconnect(peer);
