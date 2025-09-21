@@ -103,8 +103,8 @@ fn main() -> io::Result<()> {
             output_dir,
             dht_cmds,
             SnapshotLogger,
-            pwp_worker.runtime_handle(),
-            storage_worker.runtime_handle(),
+            pwp_worker.runtime_handle().clone(),
+            storage_worker.runtime_handle().clone(),
             !cli.no_upnp,
         ))?;
 

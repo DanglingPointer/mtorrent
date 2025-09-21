@@ -70,8 +70,8 @@ pub mod rt {
     }
 
     impl Handle {
-        pub fn runtime_handle(&self) -> runtime::Handle {
-            self.rt_handle.clone()
+        pub fn runtime_handle(&self) -> &runtime::Handle {
+            &self.rt_handle
         }
     }
 
@@ -124,6 +124,40 @@ pub fn with_runtime(config: rt::Config) -> rt::Handle {
             stop_receiver.await.unwrap();
         });
     });
+
+    rt::Handle {
+        stop_signal: Some(stop_sender),
+        rt_handle,
+        _simple_handle: simple_handle,
+    }
+}
+
+pub fn with_local_runtime(config: rt::Config) -> rt::Handle {
+    let mut builder = runtime::Builder::new_current_thread();
+    builder.max_blocking_threads(config.max_blocking_threads);
+    if config.io_enabled {
+        builder.enable_io();
+    }
+    if config.time_enabled {
+        builder.enable_time();
+    }
+
+    let name = config.name.clone();
+    let (handle_sender, handle_receiver) = oneshot::channel::<runtime::Handle>();
+    let (stop_sender, stop_receiver) = oneshot::channel::<()>();
+
+    let simple_handle = without_runtime(From::from(config), move || {
+        builder
+            .build_local(Default::default())
+            .unwrap_or_else(|_| panic!("Failed to build runtime '{name}'"))
+            .block_on(async move {
+                let handle = runtime::Handle::current();
+                handle_sender.send(handle).unwrap_or_else(|_| unreachable!());
+                stop_receiver.await.unwrap_or_else(|_| unreachable!());
+            });
+    });
+
+    let rt_handle = handle_receiver.blocking_recv().expect("Failed to get runtime handle");
 
     rt::Handle {
         stop_signal: Some(stop_sender),
