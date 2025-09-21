@@ -1,4 +1,5 @@
 use clap::Parser;
+use local_async_utils::prelude::*;
 use mtorrent::app;
 use mtorrent::app::dht;
 use mtorrent::utils::listener;
@@ -6,6 +7,7 @@ use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -29,6 +31,8 @@ struct Cli {
 struct SnapshotLogger;
 
 impl listener::StateListener for SnapshotLogger {
+    const INTERVAL: Duration = sec!(10);
+
     fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
         log::info!("Periodic state dump:\n{snapshot}");
     }
@@ -99,7 +103,7 @@ fn main() -> io::Result<()> {
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
             peer_id,
-            &cli.metainfo_uri,
+            cli.metainfo_uri,
             output_dir,
             dht_cmds,
             SnapshotLogger,

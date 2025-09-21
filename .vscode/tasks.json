@@ -52,6 +52,32 @@
 		},
 		{
 			"type": "cargo",
+			"command": "tauri",
+			"args": [
+				"dev",
+				"--no-watch",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "none",
+			"label": "rust: tauri dev"
+		},
+		{
+			"type": "cargo",
+			"command": "tauri",
+			"args": [
+				"build",
+				"--no-bundle",
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build",
+			"label": "rust: tauri build"
+		},
+		{
+			"type": "cargo",
 			"command": "llvm-cov",
 			"args": [
 				"nextest",

@@ -147,10 +147,10 @@ pub async fn periodic_metadata_check(
     Ok(with_ctx!(|ctx| mem::take(&mut ctx.reachable_peers)))
 }
 
-pub async fn periodic_state_dump(
+pub async fn periodic_state_dump<L: StateListener>(
     mut ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
-    state_listener: &mut impl StateListener,
+    state_listener: &mut L,
     _canceller: DropGuard,
 ) {
     define_with_ctx!(ctx_handle);
@@ -173,7 +173,7 @@ pub async fn periodic_state_dump(
     });
 
     // first tick after 5s because of integration tests
-    let mut interval = time::interval_at(time::Instant::now() + sec!(5), sec!(10));
+    let mut interval = time::interval_at(time::Instant::now() + sec!(5), L::INTERVAL);
 
     loop {
         interval.tick().await;

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tauri App</title>
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+  <main class="container">
+    <header class="app-header">
+      <h1>mtorrent</h1>
+      <div class="brand-row">
+        <a href="https://tauri.app" target="_blank">
+          <img src="/assets/tauri.svg" class="logo tauri" alt="Tauri logo" />
+        </a>
+        <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript" target="_blank">
+          <img src="/assets/javascript.svg" class="logo vanilla" alt="JavaScript logo" />
+        </a>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs-bar">
+      <div class="tabs-scroll" id="tabs-scroll"></div>
+      <button id="add-tab" title="New download tab">+</button>
+    </nav>
+
+    <section id="tabs-container" class="tabs-container"></section>
+  </main>
+</body>
+
+</html>

@@ -1,8 +1,10 @@
 use mtorrent_core::pwp::{PeerOrigin, PeerState};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt, net::SocketAddr};
+use std::{collections::BTreeMap, fmt, net::SocketAddr, time::Duration};
 
 pub trait StateListener {
+    const INTERVAL: Duration;
+
     fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>);
 }
 

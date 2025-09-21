@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 #[expect(clippy::too_many_arguments)]
 pub async fn single_torrent(
     local_peer_id: PeerId,
-    metainfo_uri: &str,
+    metainfo_uri: String,
     output_dir: impl AsRef<Path>,
     dht_handle: Option<dht::CommandSink>,
     mut listener: impl listener::StateListener,
@@ -62,7 +62,7 @@ pub async fn single_torrent(
         listener_addr
     };
 
-    if Path::new(metainfo_uri).is_file() {
+    if Path::new(&metainfo_uri).is_file() {
         main_stage(
             local_peer_id,
             listener_addr,

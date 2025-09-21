@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["mtorrent", "mtorrent-core", "mtorrent-dht", "mtorrent-utils"]
+members = [
+    "mtorrent",
+    "mtorrent-core",
+    "mtorrent-dht",
+    "mtorrent-utils",
+    "mtorrent-gui/src-tauri",
+]
 
 [workspace.package]
 version = "0.3.4"
