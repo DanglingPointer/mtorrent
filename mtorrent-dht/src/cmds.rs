@@ -22,6 +22,8 @@ pub enum Command {
         /// Peer wire protocol port of the local peer.
         local_peer_port: u16,
     },
+    /// Shut down the DHT system.
+    Shutdown,
 }
 
 /// Command receiver used internally by the DHT code.
