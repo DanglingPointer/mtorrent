@@ -13,7 +13,7 @@ use local_async_utils::prelude::*;
 use mtorrent_utils::{debug_stopwatch, warn_stopwatch};
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::ops::ControlFlow::*;
+use std::ops::ControlFlow::{self, *};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -78,7 +78,7 @@ impl Processor {
                 select! {
                     biased;
                     $(cmd = $commands.next() => match cmd {
-                        Some(cmd) => Continue(self.handle_command(cmd)),
+                        Some(cmd) => self.handle_command(cmd),
                         None => Break(()),
                     },)?
                     event = self.node_event_receiver.recv() => match event {
@@ -265,7 +265,7 @@ impl Processor {
         }
     }
 
-    fn handle_command(&mut self, cmd: Command) {
+    fn handle_command(&mut self, cmd: Command) -> ControlFlow<()> {
         log::info!("Processing command: {cmd:?}");
         match cmd {
             Command::AddNode { addr } => {
@@ -276,6 +276,7 @@ impl Processor {
                             .run_until_cancelled_owned(probe_node(addr, self.task_ctx.clone())),
                     );
                 }
+                Continue(())
             }
             Command::FindPeers {
                 info_hash,
@@ -286,27 +287,27 @@ impl Processor {
                     .peers
                     .get_peers(info_hash.into())
                     .try_for_each(|addr| callback.try_send(*addr))
-                    .is_err()
+                    .is_ok()
                 {
-                    log::warn!("Not starting search as callback channel is closed");
-                    return;
+                    let search = SearchTask::new(
+                        info_hash.into(),
+                        local_peer_port,
+                        self.task_ctx.clone(),
+                        callback,
+                        self.peer_sender.clone(),
+                    );
+                    let initial_nodes: Vec<Node> = self
+                        .node_table
+                        .get_closest_nodes(&info_hash.into(), RoutingTable::BUCKET_SIZE * 3)
+                        .cloned()
+                        .collect();
+                    task::spawn_local(
+                        search.run(initial_nodes.into_iter(), self.canceller.child_token()),
+                    );
                 }
-                let search = SearchTask::new(
-                    info_hash.into(),
-                    local_peer_port,
-                    self.task_ctx.clone(),
-                    callback,
-                    self.peer_sender.clone(),
-                );
-                let initial_nodes: Vec<Node> = self
-                    .node_table
-                    .get_closest_nodes(&info_hash.into(), RoutingTable::BUCKET_SIZE * 3)
-                    .cloned()
-                    .collect();
-                task::spawn_local(
-                    search.run(initial_nodes.into_iter(), self.canceller.child_token()),
-                );
+                Continue(())
             }
+            Command::Shutdown => Break(()),
         }
     }
 }
