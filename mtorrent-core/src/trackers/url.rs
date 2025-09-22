@@ -1,4 +1,4 @@
-use derive_more::Deref;
+use derive_more::{Debug, Deref};
 use serde::{Deserialize, Serialize, Serializer, de::IntoDeserializer};
 use std::str::FromStr;
 
@@ -11,10 +11,12 @@ pub enum TrackerUrl {
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord, Deref)]
 #[deref(forward)]
+#[debug("{_0}")]
 pub struct Http(String);
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord, Deref)]
 #[deref(forward)]
+#[debug("{_0}")]
 pub struct Udp(String);
 
 impl Serialize for TrackerUrl {
