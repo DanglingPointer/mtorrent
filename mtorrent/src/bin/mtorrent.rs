@@ -6,6 +6,7 @@ use mtorrent::utils::listener;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -33,8 +34,9 @@ struct SnapshotLogger;
 impl listener::StateListener for SnapshotLogger {
     const INTERVAL: Duration = sec!(10);
 
-    fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
+    fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) -> ControlFlow<()> {
         log::info!("Periodic state dump:\n{snapshot}");
+        ControlFlow::Continue(())
     }
 }
 

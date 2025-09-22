@@ -4,7 +4,7 @@ use futures_util::FutureExt;
 use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::{ip, upnp};
+use mtorrent_utils::{info_stopwatch, ip, upnp};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -127,7 +127,8 @@ async fn preliminary_stage(
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
-    let info_hash: [u8; 20] = *magnet_link.info_hash();
+    let _sw =
+        info_stopwatch!("Preliminary stage for torrent '{}'", magnet_link.name().unwrap_or("n/a"));
 
     let (tracker_client, trackers_mgr) = trackers::init();
     pwp_runtime.spawn(trackers_mgr.run());
@@ -139,6 +140,8 @@ async fn preliminary_stage(
     let metainfo_filepath = metainfo_dir
         .as_ref()
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
+
+    let info_hash: [u8; 20] = *magnet_link.info_hash();
 
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
@@ -214,7 +217,7 @@ async fn main_stage(
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
-    let info_hash: [u8; 20] = *metainfo.info_hash();
+    let _sw = info_stopwatch!("Main stage for torrent '{}'", metainfo.name().unwrap_or("n/a"));
 
     let content_dir = output_dir
         .as_ref()
@@ -232,6 +235,8 @@ async fn main_stage(
     pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
+
+    let info_hash: [u8; 20] = *metainfo.info_hash();
 
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;

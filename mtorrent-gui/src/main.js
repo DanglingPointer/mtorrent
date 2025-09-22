@@ -89,7 +89,7 @@ async function startDownload(panel, tabBtn) {
   form.querySelectorAll('input, button').forEach(el => el.disabled = true);
 
   try {
-    await invoke('launch_download', { metainfoUri: uri, outputDir, callback: channel });
+    await invoke('start_download', { metainfoUri: uri, outputDir, callback: channel });
   } catch (e) {
     channel.onmessage(`Failed to start: ${e}`);
   }
@@ -107,6 +107,11 @@ function addNewTab(autoActivate = true) {
 
   btn.addEventListener('click', (e) => {
     if ((e.target).classList.contains('close')) {
+      // Stop download
+      const uri = panel.querySelector('input[name="uri"]').value.trim();
+      if (uri) {
+        invoke('stop_download', { metainfoUri: uri }).catch(() => { /* ignore */ });
+      }
       // Close tab
       panel.remove();
       btn.remove();
