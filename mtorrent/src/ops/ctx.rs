@@ -135,11 +135,15 @@ pub async fn periodic_metadata_check(
     define_with_ctx!(ctx_handle);
 
     let mut interval = time::interval(sec!(1));
-    while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
+    loop {
         interval.tick().await;
-        with_ctx!(|ctx| {
-            state_listener.on_snapshot(preliminary_snapshot(ctx));
+        let finished = with_ctx!(|ctx| {
+            state_listener.on_snapshot(preliminary_snapshot(ctx)).is_break()
+                || ctrl::verify_metadata(ctx)
         });
+        if finished {
+            break;
+        }
     }
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
@@ -147,10 +151,10 @@ pub async fn periodic_metadata_check(
     Ok(with_ctx!(|ctx| mem::take(&mut ctx.reachable_peers)))
 }
 
-pub async fn periodic_state_dump(
+pub async fn periodic_state_dump<L: StateListener>(
     mut ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
-    state_listener: &mut impl StateListener,
+    state_listener: &mut L,
     _canceller: DropGuard,
 ) {
     define_with_ctx!(ctx_handle);
@@ -173,7 +177,7 @@ pub async fn periodic_state_dump(
     });
 
     // first tick after 5s because of integration tests
-    let mut interval = time::interval_at(time::Instant::now() + sec!(5), sec!(10));
+    let mut interval = time::interval_at(time::Instant::now() + sec!(5), L::INTERVAL);
 
     loop {
         interval.tick().await;
@@ -185,8 +189,7 @@ pub async fn periodic_state_dump(
             ) {
                 log::warn!("Failed to save state to file: {e}");
             }
-            state_listener.on_snapshot(main_snapshot(ctx));
-            ctrl::is_finished(ctx)
+            state_listener.on_snapshot(main_snapshot(ctx)).is_break() || ctrl::is_finished(ctx)
         });
         if finished {
             break;
