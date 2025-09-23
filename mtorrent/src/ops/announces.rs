@@ -46,7 +46,11 @@ fn update_tracker_urls<'a>(
 
     match config::load_trackers(&config_dir) {
         Ok(loaded_trackers) => {
-            all_trackers.extend(loaded_trackers);
+            for tracker in loaded_trackers {
+                if !all_trackers.contains(&tracker) {
+                    all_trackers.push(tracker);
+                }
+            }
         }
         Err(e) => {
             log::warn!("Failed to load trackers from file: {e}");
@@ -256,7 +260,11 @@ mod tests {
         }
 
         {
-            let supplied_trackers = ["http://tracker1.com", "udp://tracker.tiny-vps.com:6969"];
+            let supplied_trackers = [
+                "http://tracker1.com",
+                "udp://tracker.tiny-vps.com:6969",
+                "udp://open.stealth.si:80/announce",
+            ];
 
             let updated_trackers = update_tracker_urls(supplied_trackers, config_dir);
 
@@ -265,8 +273,8 @@ mod tests {
                 vec![
                     "http://tracker1.com".parse().unwrap(),
                     "udp://tracker.tiny-vps.com:6969".parse().unwrap(),
-                    "https://example.com".parse().unwrap(),
                     "udp://open.stealth.si:80".parse().unwrap(),
+                    "https://example.com".parse().unwrap(),
                 ]
             );
         }
