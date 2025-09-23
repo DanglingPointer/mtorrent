@@ -64,8 +64,8 @@
 
 .tab-btn {
   position: relative;
-  background: #ddd;
-  border: 1px solid #bbb;
+  /* background: #ddd; */
+  /* border: 1px solid #bbb; */
   padding: 0.35rem 0.75rem;
   border-radius: 4px 4px 0 0;
   cursor: pointer;
@@ -76,8 +76,8 @@
 }
 
 .tab-btn.active {
-  background: #fff;
-  border-bottom-color: #fff;
+  /* background: #fff; */
+  /* border-bottom-color: #fff; */
   font-weight: 600;
 }
 
@@ -103,7 +103,7 @@
   flex: 1 1 auto;
   position: relative;
   border: 1px solid #bbb;
-  background: #fff;
+  /* background: #fff; */
   border-radius: 0 4px 4px 4px;
   display: flex;
   flex-direction: column;
