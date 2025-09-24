@@ -143,6 +143,7 @@ function addNewTab(autoActivate = true) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.dataset.theme = 'dark';
   document.getElementById('add-tab').addEventListener('click', () => addNewTab(true));
   addNewTab(true); // initial tab
 });
