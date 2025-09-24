@@ -37,6 +37,8 @@
   --color-focus-ring: #396cd8;
   --color-link: #396cd8;
   --color-link-hover: #274e9d;
+  --color-brand-mtorrent: #396cd8;
+  --color-brand-mtorrent-accent: #5a9bff;
   --color-shadow-rgb: 0 0 0;
 
   /* Tabs */
@@ -88,6 +90,18 @@
   background-color: var(--color-bg);
 }
 
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  /* remove outer window scrollbar */
+}
+
 /* Dark theme override (explicit, not automatic) */
 :root[data-theme="dark"] {
   --color-bg: #1e2429;
@@ -102,6 +116,8 @@
   --color-focus-ring: #5a9bff;
   --color-link: #5a9bff;
   --color-link-hover: #81b6ff;
+  --color-brand-mtorrent: #5a9bff;
+  --color-brand-mtorrent-accent: #81b6ff;
   --color-tab-bg: #2a333b;
   --color-tab-bg-active: #303b44;
   --color-tab-border: var(--color-border);
@@ -150,6 +166,9 @@
   display: flex;
   align-items: center;
   gap: 1rem;
+  justify-content: center;
+  /* center header contents horizontally */
+  text-align: center;
 }
 
 .app-header h1 {
@@ -231,6 +250,8 @@
   padding: 0;
   margin: 0;
   color: var(--color-text);
+  overflow: hidden;
+  /* contain inner scroll */
 }
 
 .tab-panel {
@@ -240,6 +261,8 @@
   flex-direction: column;
   padding: 0.75rem;
   gap: 0.75rem;
+  overflow: auto;
+  /* internal scrolling instead of body */
 }
 
 .tab-panel.hidden {
@@ -337,6 +360,15 @@
 
 .logo.tauri:hover {
   filter: drop-shadow(0 0 2em #24c8db);
+}
+
+.logo.mtorrent {
+  filter: drop-shadow(0 0 0 rgba(0 0 0 / 0));
+  transition: filter .5s ease;
+}
+
+.logo.mtorrent:hover {
+  filter: drop-shadow(0 0 1.25em var(--color-brand-mtorrent-accent));
 }
 
 .row {

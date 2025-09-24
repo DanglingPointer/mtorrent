@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="160" height="160" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">mtorrent logo</title>
+  <desc id="desc">Abstract swarm circle with stylized m and torrent data blocks.</desc>
+  <defs>
+    <linearGradient id="g1" x1="20" y1="20" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5a9bff" />
+      <stop offset="55%" stop-color="#396cd8" />
+      <stop offset="100%" stop-color="#274e9d" />
+    </linearGradient>
+    <linearGradient id="g2" x1="40" y1="30" x2="120" y2="130" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#81b6ff" />
+      <stop offset="100%" stop-color="#396cd8" />
+    </linearGradient>
+    <clipPath id="clip">
+      <circle cx="80" cy="80" r="72" />
+    </clipPath>
+  </defs>
+  <!-- Outer ring representing distributed swarm -->
+  <circle cx="80" cy="80" r="72" stroke="url(#g1)" stroke-width="8" fill="none" />
+  <!-- Inner data blocks (torrent pieces) -->
+  <g clip-path="url(#clip)" opacity="0.55">
+    <g stroke="#5a9bff" stroke-width="2">
+      <rect x="28" y="50" width="18" height="18" rx="3" />
+      <rect x="54" y="50" width="18" height="18" rx="3" />
+      <rect x="80" y="50" width="18" height="18" rx="3" />
+      <rect x="106" y="50" width="18" height="18" rx="3" />
+      <rect x="41" y="74" width="18" height="18" rx="3" />
+      <rect x="67" y="74" width="18" height="18" rx="3" />
+      <rect x="93" y="74" width="18" height="18" rx="3" />
+      <rect x="54" y="98" width="18" height="18" rx="3" />
+      <rect x="80" y="98" width="18" height="18" rx="3" />
+    </g>
+  </g>
+  <!-- Stylized m (torrent flow) -->
+  <path d="M44 108V56c0-4.418 3.582-8 8-8h0.8c3.02 0 5.73 1.706 7.084 4.426L80 96l20.116-43.574A8.5 8.5 0 0 1 107.8 48H108c4.418 0 8 3.582 8 8v52" fill="none" stroke="url(#g2)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
