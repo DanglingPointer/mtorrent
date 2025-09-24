@@ -4,6 +4,7 @@ use mtorrent::utils::listener::{StateListener, StateSnapshot};
 use mtorrent_dht as dht;
 use mtorrent_utils::{peer_id::PeerId, worker};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -45,6 +46,16 @@ fn start_download(
     state: tauri::State<'_, State>,
 ) {
     let token = Arc::new(());
+    match state.active_downloads.lock().unwrap().entry(metainfo_uri.clone()) {
+        Entry::Occupied(_) => {
+            _ = callback.send("Failed to start download: already in progress".to_owned());
+            return;
+        }
+        Entry::Vacant(entry) => {
+            _ = callback.send("Loading...".to_owned());
+            entry.insert(token.clone());
+        }
+    }
     tokio::task::spawn_local(
         app::main::single_torrent(
             state.peer_id,
@@ -53,7 +64,7 @@ fn start_download(
             Some(state.dht_cmd_sender.clone()),
             Listener {
                 callback: callback.clone(),
-                canceller: token.clone(),
+                canceller: token,
             },
             state.pwp_runtime_handle.clone(),
             state.storage_runtime_handle.clone(),
@@ -66,7 +77,6 @@ fn start_download(
             });
         }),
     );
-    state.active_downloads.lock().unwrap().insert(metainfo_uri, token);
 }
 
 #[tauri::command(async)]

@@ -83,7 +83,7 @@ async function startDownload(panel, tabBtn) {
     textarea.value = msg;
   };
 
-  titleEl.textContent = 'Download in progress...';
+  titleEl.textContent = 'Download in progress';
   tabBtn.querySelector('.label').textContent = uri.slice(0, 12) || `Tab ${panel.dataset.tabId}`;
   form.classList.add('disabled');
   form.querySelectorAll('input, button').forEach(el => el.disabled = true);
