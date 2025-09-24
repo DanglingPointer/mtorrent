@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.danglingpointer.mtorrent-gui",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "ui"
   },
   "app": {
     "withGlobalTauri": true,
