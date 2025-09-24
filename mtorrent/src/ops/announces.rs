@@ -6,8 +6,8 @@ use local_async_utils::prelude::*;
 use mtorrent_core::input::Metainfo;
 use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_core::trackers::*;
-use std::iter;
 use std::path::Path;
+use std::{io, iter};
 use tokio::time::{self, Instant};
 
 pub async fn make_periodic_announces(
@@ -105,9 +105,12 @@ async fn announce_periodically(
                 time::sleep_until(reannounce_at).await;
             }
             Err(e) => {
-                log::warn!("Announce to {url:?} failed: {e}. Removing tracker from config");
-                _ = config::remove_tracker(config_dir, &url)
-                    .inspect_err(|e| log::error!("Failed to remove tracker from config: {e}"));
+                if e.kind() != io::ErrorKind::BrokenPipe {
+                    // BrokenPipe means TrackerManager is shutting down
+                    log::warn!("Announce to {url:?} failed: {e}. Removing tracker from config");
+                    _ = config::remove_tracker(config_dir, &url)
+                        .inspect_err(|e| log::error!("Failed to remove tracker from config: {e}"));
+                }
                 return;
             }
         }
