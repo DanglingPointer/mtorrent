@@ -18,6 +18,9 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
+    - run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
     - run: cargo fmt --check --verbose
 
   lint:
@@ -32,8 +35,8 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
-    - run: cargo clippy --all-targets --all-features -- -D warnings
-    - run: cargo clippy --release --all-targets --all-features -- -D warnings
+    - run: cargo clippy --all-targets --all-features --workspace --exclude "mtorrent-gui" -- -D warnings
+    - run: cargo clippy --release --all-targets --all-features --workspace --exclude "mtorrent-gui" -- -D warnings
 
   build:
     name: Build release
@@ -45,7 +48,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
-    - run: cargo build --release --all-targets --verbose
+    - run: cargo build --release --all-targets --verbose --workspace --exclude "mtorrent-gui"
 
   test:
     name: Run tests
@@ -60,13 +63,29 @@ jobs:
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest
-    - run: cargo nextest run --no-run
-    - run: cargo nextest run --all-targets --all-features --no-fail-fast --failure-output=final
+    - run: cargo nextest run --no-run --workspace --exclude "mtorrent-gui"
+    - run: cargo nextest run --all-targets --all-features --no-fail-fast --failure-output=final --workspace --exclude "mtorrent-gui"
 
   doctest:
-    name: Documentation tests
+    name: Doc tests
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
+    - run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
     - run: cargo test --doc
+
+  gui:
+    name: Build and lint GUI
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
+    - run: cargo clippy --package "mtorrent-gui" -- -D warnings
+    - run: cargo install tauri-cli --version "^2.0.0" --locked
+    - run: cargo tauri build --no-bundle

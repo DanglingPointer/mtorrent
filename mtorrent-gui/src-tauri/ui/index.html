@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tauri App</title>
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+  <main class="container">
+    <header class="app-header">
+      <div class="brand-row">
+        <a href="https://crates.io/crates/mtorrent" target="_blank">
+          <img src="/assets/mtorrent.svg" class="logo mtorrent" alt="mtorrent logo" title="mtorrent" />
+        </a>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs-bar">
+      <div class="tabs-scroll" id="tabs-scroll"></div>
+      <button id="add-tab" title="New download tab">+</button>
+    </nav>
+
+    <section id="tabs-container" class="tabs-container"></section>
+  </main>
+</body>
+
+</html>
