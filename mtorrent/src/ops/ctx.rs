@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::rc::Rc;
-use std::{fs, io, mem};
+use std::{cmp, fs, io, mem};
 use tokio::time;
 use tokio_util::sync::DropGuard;
 
@@ -126,24 +126,24 @@ impl MainCtx {
     }
 }
 
-pub async fn periodic_metadata_check(
+pub async fn periodic_metadata_check<L: StateListener>(
     mut ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
-    state_listener: &mut impl StateListener,
+    state_listener: &mut L,
     _canceller: DropGuard,
 ) -> io::Result<impl IntoIterator<Item = SocketAddr> + 'static> {
     define_with_ctx!(ctx_handle);
 
-    let mut interval = time::interval(sec!(1));
-    loop {
-        interval.tick().await;
-        let finished = with_ctx!(|ctx| {
+    let mut check_finished = || {
+        with_ctx!(|ctx| {
             state_listener.on_snapshot(preliminary_snapshot(ctx)).is_break()
                 || ctrl::verify_metadata(ctx)
-        });
-        if finished {
-            break;
-        }
+        })
+    };
+
+    let mut timer = time::interval(cmp::min(sec!(1), L::INTERVAL));
+    while !check_finished() {
+        timer.tick().await;
     }
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
@@ -176,12 +176,12 @@ pub async fn periodic_state_dump<L: StateListener>(
         }
     });
 
-    // first tick after 5s because of integration tests
-    let mut interval = time::interval_at(time::Instant::now() + sec!(5), L::INTERVAL);
+    // sleep for 5s because of integration tests
+    #[cfg(debug_assertions)]
+    time::sleep(sec!(5)).await;
 
-    loop {
-        interval.tick().await;
-        let finished = with_ctx!(|ctx| {
+    let mut check_finished = || {
+        with_ctx!(|ctx| {
             if let Err(e) = config::save_state(
                 &outputdir,
                 ctx.metainfo.info_hash(),
@@ -190,10 +190,12 @@ pub async fn periodic_state_dump<L: StateListener>(
                 log::warn!("Failed to save state to file: {e}");
             }
             state_listener.on_snapshot(main_snapshot(ctx)).is_break() || ctrl::is_finished(ctx)
-        });
-        if finished {
-            break;
-        }
+        })
+    };
+
+    let mut timer = time::interval(L::INTERVAL);
+    while !check_finished() {
+        timer.tick().await;
     }
 }
 
