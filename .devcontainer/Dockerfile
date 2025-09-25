@@ -21,4 +21,4 @@ RUN groupadd --gid $USER_GID $USERNAME \
 USER $USERNAME
 
 # install test coverage tools as non-root
-RUN cargo install cargo-llvm-cov
+RUN curl -LsSf https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar xzf - -C ${CARGO_HOME:-/usr/local/cargo}/bin
