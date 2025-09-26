@@ -50,7 +50,9 @@ impl PieceInfo {
 
     /// Get length of a given piece in bytes.
     pub fn piece_len(&self, piece_index: usize) -> usize {
-        if piece_index + 1 == self.pieces.len() && self.total_length % self.piece_length != 0 {
+        if piece_index + 1 == self.pieces.len()
+            && !self.total_length.is_multiple_of(self.piece_length)
+        {
             self.total_length % self.piece_length
         } else {
             self.piece_length

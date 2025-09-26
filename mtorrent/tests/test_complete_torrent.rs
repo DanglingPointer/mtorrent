@@ -201,7 +201,7 @@ impl Seeder {
         .unwrap();
         while let Ok(msg) = rx.receive_message().await {
             if let pwp::ExtendedMessage::MetadataRequest { piece } = msg {
-                if index % 2 == 0 {
+                if index.is_multiple_of(2) {
                     tx.send_message((
                         pwp::ExtendedMessage::MetadataReject { piece },
                         pwp::Extension::Metadata.local_id(),

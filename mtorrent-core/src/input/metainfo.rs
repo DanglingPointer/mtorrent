@@ -142,10 +142,10 @@ fn try_get_length_path_pair(e: &benc::Element) -> Option<(usize, PathBuf)> {
     fn path_from_list(list: &Vec<benc::Element>) -> PathBuf {
         let mut ret = PathBuf::new();
         for e in list {
-            if let benc::Element::ByteString(data) = e {
-                if let Ok(text) = str::from_utf8(data) {
-                    ret.push(text);
-                }
+            if let benc::Element::ByteString(data) = e
+                && let Ok(text) = str::from_utf8(data)
+            {
+                ret.push(text);
             }
         }
         ret

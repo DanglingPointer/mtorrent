@@ -77,10 +77,8 @@ async fn dht_main(
         Ok(socket) => socket,
     };
 
-    if use_upnp {
-        if let Err(e) = start_upnp(local_port).await {
-            log::error!("UPnP for DHT failed: {e}");
-        }
+    if use_upnp && let Err(e) = start_upnp(local_port).await {
+        log::error!("UPnP for DHT failed: {e}");
     }
 
     let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
