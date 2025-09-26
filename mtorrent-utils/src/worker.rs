@@ -185,4 +185,18 @@ mod tests {
         }
         panic!("Worker failed to exit within 10 sec");
     }
+
+    #[test]
+    fn test_local_rt_worker_handle_doesnt_block_forever() {
+        let max_end_time = Instant::now() + sec!(10);
+        let handle = thread::spawn(move || {
+            let _worker_hnd = with_local_runtime(Default::default());
+        });
+        while Instant::now() < max_end_time {
+            if handle.is_finished() {
+                return;
+            }
+        }
+        panic!("Worker failed to exit within 10 sec");
+    }
 }
