@@ -1,5 +1,6 @@
 use mtorrent_core::{data, input};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::{fs, io, iter};
 
 pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
@@ -41,6 +42,14 @@ pub fn create_metainfo_storage(
         io::Error::new(io::ErrorKind::InvalidInput, "metainfo file has no filename")
     })?;
     Ok(data::new_async_storage(parent, iter::once((metainfo_filelen, PathBuf::from(filename))))?)
+}
+
+pub fn get_torrent_name(uri: impl AsRef<str>) -> Option<String> {
+    if let Ok(magnet) = input::MagnetLink::from_str(uri.as_ref()) {
+        magnet.name().map(ToOwned::to_owned)
+    } else {
+        Path::new(uri.as_ref()).file_stem().map(|s| s.display().to_string())
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +120,17 @@ mod tests {
         assert_eq!(0, count_files(parent_dir).unwrap());
 
         fs::remove_dir_all(parent_dir).unwrap();
+    }
+
+    #[test]
+    fn test_get_torrent_name() {
+        let uri = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9&dn=Dune.Part.Two.2024.1080p.HD-TS.X264-EMIN3M%5BTGx%5D&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Fp4p.arenabg.com%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fopentor.org%3A2710%2Fannounce&tr=udp%3A%2F%2Ftracker.dler.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fuploads.gamecoast.net%3A6969%2Fannounce&tr=https%3A%2F%2Ftracker.foreverpirates.co%3A443%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=http%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce&tr=udp%3A%2F%2Fopentracker.i2p.rocks%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.internetwarriors.net%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fcoppersurfer.tk%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.zer0day.to%3A1337%2Fannounce";
+        assert_eq!(
+            get_torrent_name(uri),
+            Some("Dune.Part.Two.2024.1080p.HD-TS.X264-EMIN3M[TGx]".to_owned())
+        );
+
+        let uri = "tests/assets/screenshots_bad_tracker.torrent";
+        assert_eq!(get_torrent_name(uri), Some("screenshots_bad_tracker".to_owned()));
     }
 }
