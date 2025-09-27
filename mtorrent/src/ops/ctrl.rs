@@ -2,6 +2,7 @@ use super::ctx;
 use local_async_utils::prelude::*;
 use mtorrent_core::input;
 use mtorrent_core::pwp;
+use mtorrent_utils::benc;
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
@@ -257,15 +258,15 @@ pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
 pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
     if ctx.metainfo_pieces.is_empty() || !ctx.metainfo_pieces.all() {
         false
+    } else if let Ok(bencode) = benc::Element::from_bytes(&ctx.metainfo)
+        && let Some(metainfo) = input::Metainfo::from_bencode(bencode, ctx.metainfo.len())
+        && metainfo.info_hash() == ctx.magnet.info_hash()
+    {
+        true
     } else {
-        match input::Metainfo::new(&ctx.metainfo) {
-            Some(metainfo) if metainfo.info_hash() == ctx.magnet.info_hash() => true,
-            _ => {
-                log::error!("Discarding corrupt metainfo");
-                ctx.metainfo_pieces.fill(false);
-                false
-            }
-        }
+        log::error!("Discarding corrupt metainfo");
+        ctx.metainfo_pieces.fill(false);
+        false
     }
 }
 

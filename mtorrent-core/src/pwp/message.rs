@@ -631,7 +631,7 @@ impl ExtendedHandshake {
             }
             Dictionary(tmp)
         };
-        root.to_bytes()
+        root.encode()
     }
 }
 
@@ -706,7 +706,7 @@ impl PeerExchangeData {
         root.insert(Self::KEY_DROPPED_V4.into(), ByteString(dropped_ipv4));
         root.insert(Self::KEY_DROPPED_V6.into(), ByteString(dropped_ipv6));
 
-        Dictionary(root).to_bytes()
+        Dictionary(root).encode()
     }
 }
 
@@ -787,12 +787,12 @@ impl MetadataMsg {
             MetadataMsg::Request { piece } => {
                 root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_REQUEST.into()));
                 root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
-                Dictionary(root).to_bytes()
+                Dictionary(root).encode()
             }
             MetadataMsg::Reject { piece } => {
                 root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_REJECT.into()));
                 root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
-                Dictionary(root).to_bytes()
+                Dictionary(root).encode()
             }
             MetadataMsg::Block {
                 piece,
@@ -802,7 +802,7 @@ impl MetadataMsg {
                 root.insert(Self::KEY_TYPE.into(), Integer(Self::TYPE_BLOCK.into()));
                 root.insert(Self::KEY_PIECE.into(), Integer(piece as i64));
                 root.insert(Self::KEY_TOTAL_SIZE.into(), Integer(total_size as i64));
-                let header = Dictionary(root).to_bytes();
+                let header = Dictionary(root).encode();
                 let header_len = header.len();
                 let data_len = data.len();
                 // add header in front of data

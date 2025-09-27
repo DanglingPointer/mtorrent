@@ -599,7 +599,7 @@ async fn start_tracker<'a>(
         let mut root = BTreeMap::new();
         root.insert(peers_key, peers_value);
         root.insert(interval_key, interval_value);
-        benc::Element::Dictionary(root).to_bytes()
+        benc::Element::Dictionary(root).encode()
     };
 
     let mut server = mockito::Server::new_with_opts_async(mockito::ServerOpts {

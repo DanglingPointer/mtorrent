@@ -140,7 +140,7 @@ impl<'s> Future for Egress<'s> {
                     }
                     Some((message, dst_addr)) => {
                         let bencode = benc::Element::from(message);
-                        *pending = Some((bencode.to_bytes(), dst_addr));
+                        *pending = Some((bencode.encode(), dst_addr));
                     }
                 },
                 Some((data, dest_addr)) => {
@@ -200,7 +200,7 @@ mod tests {
             ),
         };
         sender_sock
-            .send_to(&benc::Element::from(sent_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(sent_msg).encode(), receiver_addr)
             .await
             .unwrap();
         let (receved_msg, src_addr) = timeout(sec!(5), rx_channel.recv()).await.unwrap().unwrap();
@@ -247,7 +247,7 @@ mod tests {
             ),
         };
         good_sender
-            .send_to(&benc::Element::from(sent_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(sent_msg).encode(), receiver_addr)
             .await
             .unwrap();
 
@@ -370,7 +370,7 @@ mod tests {
             ),
         };
         sender_sock
-            .send_to(&benc::Element::from(sent_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(sent_msg).encode(), receiver_addr)
             .await
             .unwrap();
         let (receved_msg, src_addr) = timeout(sec!(5), rx_channel.recv()).await.unwrap().unwrap();
@@ -394,7 +394,7 @@ mod tests {
             ),
         };
         sender_sock
-            .send_to(&benc::Element::from(sent_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(sent_msg).encode(), receiver_addr)
             .await
             .unwrap();
         let (receved_msg, src_addr) = timeout(sec!(5), rx_channel.recv()).await.unwrap().unwrap();
@@ -491,7 +491,7 @@ mod tests {
             ),
         };
         first_sender
-            .send_to(&benc::Element::from(first_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(first_msg).encode(), receiver_addr)
             .await
             .unwrap();
 
@@ -506,7 +506,7 @@ mod tests {
             ),
         };
         second_sender
-            .send_to(&benc::Element::from(dropped_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(dropped_msg).encode(), receiver_addr)
             .await
             .unwrap();
 
@@ -531,7 +531,7 @@ mod tests {
             ),
         };
         second_sender
-            .send_to(&benc::Element::from(last_msg).to_bytes(), receiver_addr)
+            .send_to(&benc::Element::from(last_msg).encode(), receiver_addr)
             .await
             .unwrap();
 

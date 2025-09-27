@@ -27,7 +27,7 @@ impl Element {
         Ok((entity, src.len() - rest.len()))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Vec<u8> {
         let mut dest = Vec::<u8>::new();
         write_element(self, &mut dest);
         dest
@@ -128,17 +128,13 @@ impl From<ParseError> for io::Error {
 }
 
 pub fn convert_dictionary(src: BTreeMap<Element, Element>) -> BTreeMap<String, Element> {
-    fn to_string_key(pair: (Element, Element)) -> Option<(String, Element)> {
-        let (key, value) = pair;
-        match key {
-            Element::ByteString(data) => {
-                if let Ok(text) = String::from_utf8(data) {
-                    Some((text, value))
-                } else {
-                    None
-                }
-            }
-            _ => None,
+    fn to_string_key((key, value): (Element, Element)) -> Option<(String, Element)> {
+        if let Element::ByteString(data) = key
+            && let Ok(text) = String::from_utf8(data)
+        {
+            Some((text, value))
+        } else {
+            None
         }
     }
     src.into_iter().filter_map(to_string_key).collect()
@@ -266,7 +262,7 @@ mod tests {
         assert_eq!(Element::Integer(-42), entity);
         assert!(rest.is_empty());
 
-        assert_eq!(input, entity.to_bytes().as_slice());
+        assert_eq!(input, entity.encode().as_slice());
     }
 
     #[test]
@@ -308,7 +304,7 @@ mod tests {
         assert_eq!(Element::ByteString(Vec::from(b"A simple string".as_slice())), entity);
         assert!(rest.is_empty());
 
-        assert_eq!(input, entity.to_bytes().as_slice());
+        assert_eq!(input, entity.encode().as_slice());
     }
 
     #[test]
@@ -322,7 +318,7 @@ mod tests {
         assert_eq!(Element::ByteString(Vec::from("Добрый день!".as_bytes())), entity);
         assert!(rest.is_empty());
 
-        assert_eq!(input.as_bytes(), entity.to_bytes().as_slice());
+        assert_eq!(input.as_bytes(), entity.encode().as_slice());
     }
 
     #[test]
@@ -336,7 +332,7 @@ mod tests {
         assert_eq!(Element::ByteString(Vec::from([0xf1, 0xf2, 0xf3, 0xf4].as_slice())), entity);
         assert!(rest.is_empty());
 
-        assert_eq!(&input, entity.to_bytes().as_slice());
+        assert_eq!(&input, entity.encode().as_slice());
     }
 
     #[test]
@@ -370,7 +366,7 @@ mod tests {
             panic!("Not a list");
         }
 
-        assert_eq!(input.as_bytes(), entity.to_bytes().as_slice());
+        assert_eq!(input.as_bytes(), entity.encode().as_slice());
     }
 
     #[test]
@@ -410,7 +406,7 @@ mod tests {
             panic!("Not a list");
         }
 
-        assert_eq!(&input, entity.to_bytes().as_slice());
+        assert_eq!(&input, entity.encode().as_slice());
     }
 
     #[test]
@@ -436,7 +432,7 @@ mod tests {
             panic!("Not a dictionary");
         }
 
-        assert_eq!(input.as_bytes(), entity.to_bytes().as_slice());
+        assert_eq!(input.as_bytes(), entity.encode().as_slice());
     }
 
     #[test]
@@ -479,7 +475,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(input.as_bytes(), entity.0.to_bytes().as_slice());
+        assert_eq!(input.as_bytes(), entity.0.encode().as_slice());
     }
 
     #[test]

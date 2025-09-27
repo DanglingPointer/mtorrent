@@ -116,7 +116,7 @@ pub fn save_state(
     let bencode = Element::Dictionary(root);
 
     let config_path = config_dir.as_ref().join(FILENAME_STATE);
-    fs::write(config_path, bencode.to_bytes())?;
+    fs::write(config_path, bencode.encode())?;
     Ok(())
 }
 

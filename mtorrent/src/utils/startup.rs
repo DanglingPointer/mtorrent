@@ -5,9 +5,7 @@ use std::{fs, io, iter};
 
 pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
-    let file_content = fs::read(metainfo_filepath)?;
-    let metainfo = input::Metainfo::new(&file_content)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid metainfo file"))?;
+    let metainfo = input::Metainfo::from_file(metainfo_filepath)?;
     Ok(metainfo)
 }
 
@@ -74,8 +72,7 @@ mod tests {
 
     #[test]
     fn test_read_metainfo_and_spawn_files() {
-        let data = fs::read("tests/assets/example.torrent").unwrap();
-        let info = input::Metainfo::new(&data).unwrap();
+        let info = input::Metainfo::from_file("tests/assets/example.torrent").unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_files_output";
         let filedir = Path::new(parent_dir).join("files");
@@ -100,8 +97,7 @@ mod tests {
 
     #[test]
     fn test_read_metainfo_and_spawn_single_file() {
-        let data = fs::read("tests/assets/pcap.torrent").unwrap();
-        let info = input::Metainfo::new(&data).unwrap();
+        let info = input::Metainfo::from_file("tests/assets/pcap.torrent").unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
         let filedir = Path::new(parent_dir).join("files");

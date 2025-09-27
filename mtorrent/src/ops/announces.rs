@@ -204,8 +204,7 @@ mod tests {
             }
         }
 
-        let data = fs::read("tests/assets/example.torrent").unwrap();
-        let info = Metainfo::new(&data).unwrap();
+        let info = Metainfo::from_file("tests/assets/example.torrent").unwrap();
 
         let mut http_iter = trackers_from_metainfo(&info).filter_map(get_http_tracker_addr);
         assert_eq!("http://tracker.trackerfix.com:80/announce", http_iter.next().unwrap());
@@ -219,8 +218,7 @@ mod tests {
         assert!(udp_trackers.contains("tracker.fatkhoala.org:13780"));
         assert!(udp_trackers.contains("tracker.tallpenguin.org:15760"));
 
-        let data = fs::read("tests/assets/pcap.torrent").unwrap();
-        let info = Metainfo::new(&data).unwrap();
+        let info = Metainfo::from_file("tests/assets/pcap.torrent").unwrap();
 
         let mut http_iter = trackers_from_metainfo(&info).filter_map(get_http_tracker_addr);
         assert_eq!("http://localhost:8000/announce", http_iter.next().unwrap());

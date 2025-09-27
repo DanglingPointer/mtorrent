@@ -2,8 +2,8 @@ use mtorrent_utils::benc;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
-use std::str;
+use std::path::{Path, PathBuf};
+use std::{fs, io, str};
 
 /// Low-level represention of a parsed metainfo file.
 pub struct Metainfo {
@@ -20,48 +20,47 @@ impl Hash for Metainfo {
 }
 
 impl Metainfo {
-    /// Parse bencoded bytes.
-    pub fn new(file_content: &[u8]) -> Option<Self> {
-        Self::from_full_metainfo(file_content)
-            .or_else(|| Self::from_incomplete_metainfo(file_content))
+    /// Read and parse metainfo file.
+    pub fn from_file(metainfo_file: impl AsRef<Path>) -> io::Result<Self> {
+        let content = fs::read(metainfo_file)?;
+        let bencode = benc::Element::from_bytes(&content)?;
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("Metainfo file content:\n{bencode}");
+        }
+        Self::from_bencode(bencode, content.len()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "unexpected metainfo bencode")
+        })
     }
 
-    fn from_full_metainfo(file_content: &[u8]) -> Option<Self> {
-        let root_entity = benc::Element::from_bytes(file_content).ok()?;
-        log::debug!("Metainfo file content:\n{root_entity}");
-        let (root_dictionary, info_element) = match root_entity {
-            benc::Element::Dictionary(mut root) => {
-                let info_key: benc::Element = benc::Element::from("info");
-                let info = root.remove(&info_key);
-                (Some(root), info)
-            }
-            _ => (None, None),
+    /// Create metainfo from parsed bencode and its length in bytes.
+    pub fn from_bencode(mut parsed: benc::Element, bencoded_bytes: usize) -> Option<Self> {
+        let (root, info) = if let benc::Element::Dictionary(d) = &mut parsed
+            && let Some(info) = d.remove(&"info".into())
+        {
+            (Some(parsed), info)
+        } else {
+            (None, parsed)
         };
-        let info_element = info_element?;
-        let info_hash = Sha1::from(info_element.to_bytes()).digest().bytes();
-        match (root_dictionary, info_element) {
-            (Some(root), benc::Element::Dictionary(info)) => Some(Metainfo {
-                root: benc::convert_dictionary(root),
-                info: benc::convert_dictionary(info),
-                info_hash,
-                size: file_content.len(),
-            }),
-            _ => None,
-        }
-    }
 
-    fn from_incomplete_metainfo(file_content: &[u8]) -> Option<Self> {
-        let info_element = benc::Element::from_bytes(file_content).ok()?;
-        let info_hash = Sha1::from(info_element.to_bytes()).digest().bytes();
-        match info_element {
-            benc::Element::Dictionary(info) => Some(Metainfo {
-                root: Default::default(),
-                info: benc::convert_dictionary(info),
-                info_hash,
-                size: file_content.len(),
-            }),
-            _ => None,
-        }
+        let info_hash = Sha1::from(info.encode()).digest().bytes();
+
+        let info = match info {
+            benc::Element::Dictionary(d) => benc::convert_dictionary(d),
+            _ => return None,
+        };
+
+        let root = match root {
+            None => BTreeMap::new(),
+            Some(benc::Element::Dictionary(d)) => benc::convert_dictionary(d),
+            _ => return None,
+        };
+
+        Some(Self {
+            root,
+            info,
+            info_hash,
+            size: bencoded_bytes,
+        })
     }
 
     /// The announce URL of the tracker
@@ -185,12 +184,11 @@ fn try_get_string_iter(e: &benc::Element) -> Option<impl Iterator<Item = &str>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::Path};
+    use std::path::Path;
 
     #[test]
     fn test_read_example_torrent_file() {
-        let data = fs::read("../mtorrent/tests/assets/example.torrent").unwrap();
-        let info = Metainfo::new(&data).unwrap();
+        let info = Metainfo::from_file("../mtorrent/tests/assets/example.torrent").unwrap();
 
         let announce = info.announce().unwrap();
         assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {announce}");
@@ -387,8 +385,7 @@ mod tests {
 
     #[test]
     fn test_read_torrent_file_without_announce_list() {
-        let data = fs::read("../mtorrent/tests/assets/pcap.torrent").unwrap();
-        let info = Metainfo::new(&data).unwrap();
+        let info = Metainfo::from_file("../mtorrent/tests/assets/pcap.torrent").unwrap();
 
         let announce = info.announce().unwrap();
         assert_eq!("http://localhost:8000/announce", announce, "announce: {announce}");
@@ -399,7 +396,8 @@ mod tests {
     #[test]
     fn test_read_incomplete_metainfo_file() {
         let data = fs::read("../mtorrent/tests/assets/incomplete.torrent").unwrap();
-        let info = Metainfo::new(&data).unwrap();
+        let info =
+            Metainfo::from_bencode(benc::Element::from_bytes(&data).unwrap(), data.len()).unwrap();
 
         let expected_info_hash: &[u8; 20] = &[
             209, 68, 239, 216, 66, 44, 231, 247, 155, 34, 252, 154, 11, 67, 23, 64, 149, 2, 72, 89,
