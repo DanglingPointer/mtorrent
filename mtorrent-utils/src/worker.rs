@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 use std::{io, thread};
 use tokio::runtime;
 use tokio::sync::{Notify, oneshot};
@@ -51,6 +52,7 @@ pub mod rt {
         pub time_enabled: bool,
         pub stack_size: usize,
         pub max_blocking_threads: usize,
+        pub shutdown_timeout: Duration,
     }
 
     impl Default for Config {
@@ -61,6 +63,7 @@ pub mod rt {
                 time_enabled: false,
                 stack_size: 128 * 1024,
                 max_blocking_threads: 1,
+                shutdown_timeout: Duration::ZERO,
             }
         }
     }
@@ -113,11 +116,13 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let rt = builder.max_blocking_threads(config.max_blocking_threads).build()?;
     let rt_handle = rt.handle().clone();
 
+    let shutdown_timeout = config.shutdown_timeout;
     let stop_signal = Arc::new(Notify::const_new());
     let stop_notified = stop_signal.clone().notified_owned();
 
     let simple_handle = without_runtime(From::from(config), move || {
         rt.block_on(stop_notified);
+        rt.shutdown_timeout(shutdown_timeout);
     })?;
 
     Ok(rt::Handle {
@@ -138,19 +143,23 @@ pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     }
 
     let name = config.name.clone();
+    let shutdown_timeout = config.shutdown_timeout;
+
     let (handle_sender, handle_receiver) = oneshot::channel::<runtime::Handle>();
     let stop_signal = Arc::new(Notify::const_new());
     let stop_notified = stop_signal.clone().notified_owned();
 
     let simple_handle = without_runtime(From::from(config), move || {
-        builder
+        let rt = builder
             .build_local(Default::default())
-            .unwrap_or_else(|_| panic!("Failed to build runtime '{name}'"))
-            .block_on(async move {
-                let handle = runtime::Handle::current();
-                handle_sender.send(handle).unwrap_or_else(|_| unreachable!());
-                stop_notified.await;
-            });
+            .unwrap_or_else(|_| panic!("Failed to build runtime '{name}'"));
+
+        rt.block_on(async move {
+            let handle = runtime::Handle::current();
+            handle_sender.send(handle).unwrap_or_else(|_| unreachable!());
+            stop_notified.await;
+        });
+        rt.shutdown_timeout(shutdown_timeout);
     })?;
 
     let rt_handle = handle_receiver
@@ -172,13 +181,30 @@ mod tests {
 
     #[test]
     fn test_rt_worker_handle_doesnt_block_forever() {
-        let max_end_time = Instant::now() + sec!(10);
+        let max_end_time = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let _worker_hnd = with_runtime(Default::default()).expect("build worker");
         });
         while Instant::now() < max_end_time {
             if handle.is_finished() {
-                handle.join().expect("thread panicked");
+                handle.join().expect("DON'T PANIC");
+                return;
+            }
+        }
+        panic!("Worker failed to exit within 10 sec");
+    }
+
+    #[test]
+    fn test_rt_worker_doesnt_wait_for_blocking_tasks() {
+        let max_end_time = Instant::now() + sec!(5);
+        let handle = thread::spawn(move || {
+            let worker = with_runtime(Default::default()).expect("build worker");
+            worker.runtime_handle().spawn_blocking(|| std::thread::sleep(min!(1)));
+        });
+
+        while Instant::now() < max_end_time {
+            if handle.is_finished() {
+                handle.join().expect("DON'T PANIC");
                 return;
             }
         }
@@ -187,13 +213,30 @@ mod tests {
 
     #[test]
     fn test_local_rt_worker_handle_doesnt_block_forever() {
-        let max_end_time = Instant::now() + sec!(10);
+        let max_end_time = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let _worker_hnd = with_local_runtime(Default::default()).expect("build worker");
         });
         while Instant::now() < max_end_time {
             if handle.is_finished() {
-                handle.join().expect("thread panicked");
+                handle.join().expect("DON'T PANIC");
+                return;
+            }
+        }
+        panic!("Worker failed to exit within 10 sec");
+    }
+
+    #[test]
+    fn test_local_rt_worker_doesnt_wait_for_blocking_tasks() {
+        let max_end_time = Instant::now() + sec!(5);
+        let handle = thread::spawn(move || {
+            let worker = with_local_runtime(Default::default()).expect("build worker");
+            worker.runtime_handle().spawn_blocking(|| std::thread::sleep(min!(1)));
+        });
+
+        while Instant::now() < max_end_time {
+            if handle.is_finished() {
+                handle.join().expect("DON'T PANIC");
                 return;
             }
         }
