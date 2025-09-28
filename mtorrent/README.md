@@ -2,7 +2,7 @@
 [![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
 
 # mtorrent
-Lightweight CLI Bittorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general.
+Lightweight CLI Bittorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general. For GUI version see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
 
 # Installation
 Download the latest pre-compiled binary for Linux or Windows here: https://github.com/DanglingPointer/mtorrent/releases/latest

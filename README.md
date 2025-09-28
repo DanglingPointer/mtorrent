@@ -2,12 +2,14 @@
 [![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
 
 # mtorrent
-CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently runs 4 threads in total). Blazingly fast, incredibly robust and very impressive in general.
+Lightweight BitTorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general.
+
+This repo contains reusable library crates and a CLI executable. For GUI version see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
 
 ## Useful links
 - https://wiki.theory.org/BitTorrentSpecification
 - https://www.bittorrent.org/beps/bep_0000.html
-- https://codethechange.stanford.edu/guides/guide_kademlia.html (Kademlia)
+- https://codethechange.stanford.edu/guides/guide_kademlia.html
 
 ## Progress
 #### Required:
@@ -27,7 +29,7 @@ CLI Bittorrent client in Rust. Based on Tokio (without a threadpool, currently r
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
 - [ ] [BitTorrent v2](http://bittorrent.org/beps/bep_0052.html)
 
-## Building
+## Build
 
 Build on Linux using the provided dev container. Install Docker, then run `./cargo.sh [args]` where `args` is the arguments to `cargo` (e.g. `./cargo.sh build --release`).
 
