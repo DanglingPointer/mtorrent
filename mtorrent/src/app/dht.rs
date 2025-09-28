@@ -12,7 +12,7 @@ pub fn launch_node_runtime(
     max_concurrent_queries: Option<usize>,
     config_dir: PathBuf,
     use_upnp: bool,
-) -> (worker::simple::Handle, dht::CommandSink) {
+) -> io::Result<(worker::simple::Handle, dht::CommandSink)> {
     let (cmd_sender, cmd_server) = dht::setup_commands();
 
     let worker_handle = worker::without_runtime(
@@ -34,9 +34,9 @@ pub fn launch_node_runtime(
                     use_upnp,
                 ));
         },
-    );
+    )?;
 
-    (worker_handle, cmd_sender)
+    Ok((worker_handle, cmd_sender))
 }
 
 async fn start_upnp(local_port: u16) -> io::Result<()> {

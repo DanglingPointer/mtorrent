@@ -80,18 +80,18 @@ fn main() -> io::Result<()> {
         io_enabled: false,
         time_enabled: false,
         ..Default::default()
-    });
+    })?;
 
     let pwp_worker = worker::with_runtime(worker::rt::Config {
         name: "pwp".to_owned(),
         io_enabled: true,
         time_enabled: true,
         ..Default::default()
-    });
+    })?;
 
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
         let (dht_worker, dht_cmds) =
-            dht::launch_node_runtime(6881, None, output_dir.clone(), !cli.no_upnp);
+            dht::launch_node_runtime(6881, None, output_dir.clone(), !cli.no_upnp)?;
         (Some(dht_worker), Some(dht_cmds))
     } else {
         (None, None)

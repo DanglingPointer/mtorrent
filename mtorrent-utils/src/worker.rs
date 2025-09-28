@@ -1,5 +1,7 @@
-use std::thread;
-use tokio::{runtime, sync::oneshot};
+use std::sync::Arc;
+use std::{io, thread};
+use tokio::runtime;
+use tokio::sync::{Notify, oneshot};
 
 pub mod simple {
     use super::*;
@@ -12,7 +14,7 @@ pub mod simple {
     impl Default for Config {
         fn default() -> Self {
             Self {
-                name: "Unnamed".to_string(),
+                name: "mtorrent-worker".to_owned(),
                 stack_size: 128 * 1024,
             }
         }
@@ -54,7 +56,7 @@ pub mod rt {
     impl Default for Config {
         fn default() -> Self {
             Self {
-                name: "Unnamed".to_string(),
+                name: "mtorrent-worker".to_owned(),
                 io_enabled: false,
                 time_enabled: false,
                 stack_size: 128 * 1024,
@@ -64,7 +66,7 @@ pub mod rt {
     }
 
     pub struct Handle {
-        pub(super) stop_signal: Option<oneshot::Sender<()>>,
+        pub(super) stop_signal: Arc<Notify>,
         pub(super) rt_handle: runtime::Handle,
         pub(super) _simple_handle: simple::Handle,
     }
@@ -77,9 +79,7 @@ pub mod rt {
 
     impl Drop for Handle {
         fn drop(&mut self) {
-            if let Some(stop_signal) = self.stop_signal.take() {
-                let _ = stop_signal.send(());
-            }
+            self.stop_signal.notify_one();
         }
     }
 }
@@ -87,24 +87,22 @@ pub mod rt {
 pub fn without_runtime<F: FnOnce() + Send + 'static>(
     config: simple::Config,
     f: F,
-) -> simple::Handle {
-    let name = config.name.clone();
-    let th_handle = thread::Builder::new()
-        .stack_size(config.stack_size)
-        .name(name.clone())
-        .spawn(move || {
+) -> io::Result<simple::Handle> {
+    let name = config.name;
+    let th_handle = thread::Builder::new().stack_size(config.stack_size).name(name.clone()).spawn(
+        move || {
             log::debug!("Worker '{name}' started");
             f();
             log::debug!("Worker '{name}' stopped");
-        })
-        .unwrap_or_else(|_| panic!("Failed to spawn thread for '{}'", config.name));
+        },
+    )?;
 
-    simple::Handle {
+    Ok(simple::Handle {
         th_handle: Some(th_handle),
-    }
+    })
 }
 
-pub fn with_runtime(config: rt::Config) -> rt::Handle {
+pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     if config.io_enabled {
         builder.enable_io();
@@ -112,27 +110,24 @@ pub fn with_runtime(config: rt::Config) -> rt::Handle {
     if config.time_enabled {
         builder.enable_time();
     }
-    let rt = builder
-        .max_blocking_threads(config.max_blocking_threads)
-        .build()
-        .unwrap_or_else(|_| panic!("Failed to build runtime '{}'", config.name));
+    let rt = builder.max_blocking_threads(config.max_blocking_threads).build()?;
     let rt_handle = rt.handle().clone();
 
-    let (stop_sender, stop_receiver) = oneshot::channel::<()>();
-    let simple_handle = without_runtime(From::from(config), move || {
-        rt.block_on(async move {
-            stop_receiver.await.unwrap();
-        });
-    });
+    let stop_signal = Arc::new(Notify::const_new());
+    let stop_notified = stop_signal.clone().notified_owned();
 
-    rt::Handle {
-        stop_signal: Some(stop_sender),
+    let simple_handle = without_runtime(From::from(config), move || {
+        rt.block_on(stop_notified);
+    })?;
+
+    Ok(rt::Handle {
+        stop_signal,
         rt_handle,
         _simple_handle: simple_handle,
-    }
+    })
 }
 
-pub fn with_local_runtime(config: rt::Config) -> rt::Handle {
+pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     builder.max_blocking_threads(config.max_blocking_threads);
     if config.io_enabled {
@@ -144,7 +139,8 @@ pub fn with_local_runtime(config: rt::Config) -> rt::Handle {
 
     let name = config.name.clone();
     let (handle_sender, handle_receiver) = oneshot::channel::<runtime::Handle>();
-    let (stop_sender, stop_receiver) = oneshot::channel::<()>();
+    let stop_signal = Arc::new(Notify::const_new());
+    let stop_notified = stop_signal.clone().notified_owned();
 
     let simple_handle = without_runtime(From::from(config), move || {
         builder
@@ -153,17 +149,19 @@ pub fn with_local_runtime(config: rt::Config) -> rt::Handle {
             .block_on(async move {
                 let handle = runtime::Handle::current();
                 handle_sender.send(handle).unwrap_or_else(|_| unreachable!());
-                stop_receiver.await.unwrap_or_else(|_| unreachable!());
+                stop_notified.await;
             });
-    });
+    })?;
 
-    let rt_handle = handle_receiver.blocking_recv().expect("Failed to get runtime handle");
+    let rt_handle = handle_receiver
+        .blocking_recv()
+        .map_err(|_| io::Error::other("failed to build runtime"))?;
 
-    rt::Handle {
-        stop_signal: Some(stop_sender),
+    Ok(rt::Handle {
+        stop_signal,
         rt_handle,
         _simple_handle: simple_handle,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -176,10 +174,11 @@ mod tests {
     fn test_rt_worker_handle_doesnt_block_forever() {
         let max_end_time = Instant::now() + sec!(10);
         let handle = thread::spawn(move || {
-            let _worker_hnd = with_runtime(Default::default());
+            let _worker_hnd = with_runtime(Default::default()).expect("build worker");
         });
         while Instant::now() < max_end_time {
             if handle.is_finished() {
+                handle.join().expect("thread panicked");
                 return;
             }
         }
@@ -190,10 +189,11 @@ mod tests {
     fn test_local_rt_worker_handle_doesnt_block_forever() {
         let max_end_time = Instant::now() + sec!(10);
         let handle = thread::spawn(move || {
-            let _worker_hnd = with_local_runtime(Default::default());
+            let _worker_hnd = with_local_runtime(Default::default()).expect("build worker");
         });
         while Instant::now() < max_end_time {
             if handle.is_finished() {
+                handle.join().expect("thread panicked");
                 return;
             }
         }
