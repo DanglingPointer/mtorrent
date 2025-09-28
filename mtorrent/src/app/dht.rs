@@ -5,36 +5,32 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use tokio::net::UdpSocket;
-use tokio::{join, runtime, task};
+use tokio::{join, task};
 
 pub fn launch_node_runtime(
     local_port: u16,
     max_concurrent_queries: Option<usize>,
     config_dir: PathBuf,
     use_upnp: bool,
-) -> io::Result<(worker::simple::Handle, dht::CommandSink)> {
+) -> io::Result<(worker::rt::Handle, dht::CommandSink)> {
     let (cmd_sender, cmd_server) = dht::setup_commands();
 
-    let worker_handle = worker::without_runtime(
-        worker::simple::Config {
-            name: "dht".to_owned(),
-            ..Default::default()
-        },
-        move || {
-            runtime::Builder::new_current_thread()
-                .max_blocking_threads(1) // should not be using these
-                .enable_all()
-                .build_local(Default::default())
-                .expect("Failed to build DHT runtime")
-                .block_on(dht_main(
-                    cmd_server,
-                    local_port,
-                    config_dir,
-                    max_concurrent_queries,
-                    use_upnp,
-                ));
-        },
-    )?;
+    let worker_handle = worker::with_local_runtime(worker::rt::Config {
+        name: "dht".to_owned(),
+        io_enabled: true,
+        time_enabled: true,
+        ..Default::default()
+    })?;
+    worker_handle.runtime_handle().spawn(async move {
+        // spawn_local() must be called from the dht thread
+        task::spawn_local(dht_main(
+            cmd_server,
+            local_port,
+            config_dir,
+            max_concurrent_queries,
+            use_upnp,
+        ));
+    });
 
     Ok((worker_handle, cmd_sender))
 }
