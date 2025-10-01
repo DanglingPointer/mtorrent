@@ -31,3 +31,6 @@ ipconfig = "0.3.2"
 static_assertions = { workspace = true }
 tokio-test = { workspace = true }
 simple_logger = { workspace = true }
+
+[lints]
+workspace = true

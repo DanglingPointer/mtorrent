@@ -132,6 +132,7 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     })
 }
 
+#[cfg(tokio_unstable)]
 pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     builder.max_blocking_threads(config.max_blocking_threads);
