@@ -3,7 +3,7 @@ resolver = "3"
 members = ["mtorrent", "mtorrent-core", "mtorrent-dht", "mtorrent-utils"]
 
 [workspace.package]
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 authors = ["Mikhail Vasilyev <mikail.vasilyev@gmail.com>"]
 repository = "https://github.com/DanglingPointer/mtorrent"
