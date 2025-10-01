@@ -61,7 +61,7 @@ impl<const SIZE: usize> Bucket<SIZE> {
 
 const BUCKET_COUNT: usize = bits_of::<U160>();
 
-/// A fully pre-allocated Kademlia routing table as defined in https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf.
+/// A fully pre-allocated Kademlia routing table as defined in <https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf>.
 /// Shouldn't be put on stack due to its size. The table enforces uniqueness of node IDs, but not of their addresses.
 ///
 /// A bucket at index `i` contains nodes whose distance to the `local_id` is `2^(159-i) <= d < 2^(160-i)`.

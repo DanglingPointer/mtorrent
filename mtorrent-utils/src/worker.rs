@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
 use tokio::runtime;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::Notify;
+#[cfg(tokio_unstable)]
+use tokio::sync::oneshot;
 
 pub mod simple {
     use super::*;
