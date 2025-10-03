@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tokio::net::UdpSocket;
 use tokio::{join, task};
 
-pub fn launch_node_runtime(
+pub fn launch_dht_node_runtime(
     local_port: u16,
     max_concurrent_queries: Option<usize>,
     config_dir: PathBuf,

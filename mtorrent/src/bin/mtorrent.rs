@@ -91,7 +91,7 @@ fn main() -> io::Result<()> {
 
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
         let (dht_worker, dht_cmds) =
-            dht::launch_node_runtime(6881, None, output_dir.clone(), !cli.no_upnp)?;
+            dht::launch_dht_node_runtime(6881, None, output_dir.clone(), !cli.no_upnp)?;
         (Some(dht_worker), Some(dht_cmds))
     } else {
         (None, None)
@@ -104,14 +104,20 @@ fn main() -> io::Result<()> {
         .enable_all()
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
-            peer_id,
             cli.metainfo_uri,
-            output_dir,
-            dht_cmds,
             SnapshotLogger,
-            pwp_worker.runtime_handle().clone(),
-            storage_worker.runtime_handle().clone(),
-            !cli.no_upnp,
+            app::main::Config {
+                local_peer_id: peer_id,
+                config_dir: output_dir.clone(),
+                output_dir,
+                use_upnp: !cli.no_upnp,
+                listener_port: None,
+            },
+            app::main::Context {
+                dht_handle: dht_cmds,
+                pwp_runtime: pwp_worker.runtime_handle().clone(),
+                storage_runtime: storage_worker.runtime_handle().clone(),
+            },
         ))?;
 
     Ok(())

@@ -13,16 +13,25 @@ use tokio::sync::broadcast;
 use tokio::{runtime, task};
 use tokio_util::sync::CancellationToken;
 
-#[expect(clippy::too_many_arguments)]
+pub struct Config {
+    pub local_peer_id: PeerId,
+    pub output_dir: PathBuf,
+    pub config_dir: PathBuf,
+    pub use_upnp: bool,
+    pub listener_port: Option<u16>,
+}
+
+pub struct Context {
+    pub dht_handle: Option<dht::CommandSink>,
+    pub pwp_runtime: runtime::Handle,
+    pub storage_runtime: runtime::Handle,
+}
+
 pub async fn single_torrent(
-    local_peer_id: PeerId,
     metainfo_uri: String,
-    output_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CommandSink>,
     mut listener: impl listener::StateListener,
-    pwp_runtime: runtime::Handle,
-    storage_runtime: runtime::Handle,
-    use_upnp: bool,
+    cfg: Config,
+    ctx: Context,
 ) -> io::Result<()> {
     #[cfg(debug_assertions)]
     {
@@ -32,21 +41,23 @@ pub async fn single_torrent(
             std::process::exit(1);
         }));
     }
-    let listener_addr =
-        SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), ip::port_from_hash(&metainfo_uri));
+    let listener_addr = SocketAddr::new(
+        Ipv4Addr::UNSPECIFIED.into(),
+        cfg.listener_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri)),
+    );
     // get public ip to send correct listening port to trackers and peers later
-    let public_pwp_ip = if use_upnp {
+    let public_pwp_ip = if cfg.use_upnp {
         match upnp::PortOpener::new(
             SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into(),
             upnp::PortMappingProtocol::TCP,
-            None,
+            cfg.listener_port,
         )
         .await
         {
             Ok(port_opener) => {
                 let public_ip = port_opener.external_ip();
                 log::info!("UPnP for PWP succeeded, public ip: {public_ip}");
-                pwp_runtime.spawn(async move {
+                ctx.pwp_runtime.spawn(async move {
                     if let Err(e) = port_opener.run_continuous_renewal().await {
                         log::error!("UPnP port renewal for PWP failed: {e}");
                     }
@@ -64,42 +75,40 @@ pub async fn single_torrent(
 
     if Path::new(&metainfo_uri).is_file() {
         main_stage(
-            local_peer_id,
+            cfg.local_peer_id,
             listener_addr,
             public_pwp_ip,
             metainfo_uri,
-            output_dir,
-            dht_handle,
+            cfg.output_dir,
+            cfg.config_dir,
             &mut listener,
-            pwp_runtime,
-            storage_runtime,
+            ctx,
             std::iter::empty(),
         )
         .await?;
     } else {
         let (metainfo_filepath, peers) = preliminary_stage(
-            local_peer_id,
+            cfg.local_peer_id,
             listener_addr,
             public_pwp_ip,
             metainfo_uri,
-            &output_dir,
-            &output_dir,
-            dht_handle.clone(),
+            &cfg.output_dir,
+            cfg.config_dir.to_owned(),
             &mut listener,
-            pwp_runtime.clone(),
+            ctx.dht_handle.clone(),
+            ctx.pwp_runtime.clone(),
         )
         .await?;
         log::info!("Metadata downloaded successfully, starting content download");
         main_stage(
-            local_peer_id,
+            cfg.local_peer_id,
             listener_addr,
             public_pwp_ip,
             metainfo_filepath,
-            &output_dir,
-            dht_handle,
+            &cfg.output_dir,
+            cfg.config_dir.to_owned(),
             &mut listener,
-            pwp_runtime,
-            storage_runtime,
+            ctx,
             peers,
         )
         .await?;
@@ -116,10 +125,10 @@ async fn preliminary_stage(
     listener_addr: SocketAddr,
     public_pwp_ip: SocketAddr,
     magnet_link: impl AsRef<str>,
-    config_dir: impl AsRef<Path>,
     metainfo_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CommandSink>,
+    config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
+    dht_handle: Option<dht::CommandSink>,
     pwp_runtime: runtime::Handle,
 ) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
     let magnet_link: input::MagnetLink = magnet_link
@@ -182,7 +191,7 @@ async fn preliminary_stage(
         ctx.clone(),
         tracker_client,
         peer_reporter.clone(),
-        PathBuf::from(config_dir.as_ref()),
+        config_dir,
     ));
 
     tasks.spawn_local(async move {
@@ -209,10 +218,9 @@ async fn main_stage(
     public_pwp_ip: SocketAddr,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
-    dht_handle: Option<dht::CommandSink>,
+    config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
-    pwp_runtime: runtime::Handle,
-    storage_runtime: runtime::Handle,
+    handles: Context,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
@@ -225,14 +233,14 @@ async fn main_stage(
 
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir)?;
-    storage_runtime.spawn(content_storage_server.run());
+    handles.storage_runtime.spawn(content_storage_server.run());
 
     let (metainfo_storage, metainfo_storage_server) =
         startup::create_metainfo_storage(&metainfo_filepath)?;
-    storage_runtime.spawn(metainfo_storage_server.run());
+    handles.storage_runtime.spawn(metainfo_storage_server.run());
 
     let (tracker_client, trackers_mgr) = trackers::init();
-    pwp_runtime.spawn(trackers_mgr.run());
+    handles.pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
 
@@ -249,7 +257,7 @@ async fn main_stage(
                 content_storage,
                 metainfo_storage,
                 ctx_handle: ctx.clone(),
-                pwp_worker_handle: pwp_runtime.clone(),
+                pwp_worker_handle: handles.pwp_runtime.clone(),
                 peer_reporter: peer_reporter.clone(),
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
             }),
@@ -258,7 +266,7 @@ async fn main_stage(
         });
     tasks.spawn_local(connect_throttle.run());
 
-    dht_handle.map(|dht_cmds| {
+    handles.dht_handle.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
             dht_cmds,
@@ -267,7 +275,7 @@ async fn main_stage(
         ))
     });
 
-    pwp_runtime.spawn(
+    handles.pwp_runtime.spawn(
         ops::run_pwp_listener(listener_addr, peer_reporter.clone(), canceller.clone()).map(
             |result| match result {
                 Ok(_) => (),
@@ -280,7 +288,7 @@ async fn main_stage(
         ctx.clone(),
         tracker_client,
         peer_reporter.clone(),
-        PathBuf::from(output_dir.as_ref()),
+        config_dir,
     ));
 
     let extra_peers: Vec<_> = extra_peers.into_iter().collect();
