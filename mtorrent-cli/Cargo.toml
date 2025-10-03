@@ -1,0 +1,30 @@
+[package]
+name = "mtorrent-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+default-run = "mtorrent-cli"
+
+[dependencies]
+mtorrent = { workspace = true }
+mtorrent-dht = { workspace = true }
+mtorrent-utils = { workspace = true }
+mtorrent-core = { workspace = true }  # for dht_node binary
+
+log = { workspace = true }
+local_async_utils = { workspace = true }
+tokio = { workspace = true }
+simple_logger = { workspace = true }
+clap = { version = "4.5.40", features = ["derive"] }
+
+
+[dev-dependencies]
+futures-util = { workspace = true }
+mockito = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

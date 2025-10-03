@@ -1,37 +1,22 @@
 [![CI](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
 [![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
+[![docs.rs](https://img.shields.io/docsrs/mtorrent)](https://docs.rs/mtorrent/latest)
 
 # mtorrent
-Lightweight CLI Bittorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general. For GUI version see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
+Lightweight Bittorrent client engine in Rust. Blazingly fast, incredibly robust and very impressive in general. This is a high-level library crate, for executables see below:
+- CLI version: [`mtorrent-cli`](https://github.com/DanglingPointer/mtorrent/tree/master/mtorrent-cli).
+- GUI version: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
 
-# Installation
-Download the latest pre-compiled binary for Linux or Windows here: https://github.com/DanglingPointer/mtorrent/releases/latest
+For low-level library components, see [`mtorrent-core`](https://crates.io/crates/mtorrent-core), [`mtorrent-dht`](https://crates.io/crates/mtorrent-dht) and [`mtorrent-utils`](https://crates.io/crates/mtorrent-utils).
 
-Alternatively, compile locally using the following commands:
-- Linux: `RUSTFLAGS="--cfg=tokio_unstable" cargo install mtorrent`
-- Windows: `$env:RUSTFLAGS="--cfg=tokio_unstable"; cargo install mtorrent`
+## Installation
+Download the latest pre-compiled executable for Linux or Windows here:
+- CLI version: https://github.com/DanglingPointer/mtorrent/releases/latest
+- GUI version: https://github.com/DanglingPointer/mtorrent-gui/releases/latest
 
-# Features
+## Features
 - Peer Wire Protocol over IPv4 and IPv6
 - HTTP and UDP trackers over IPv4 and IPv6
 - Peer Exchange extension
 - Magnet links and metadata exchange
 - DHT
-
-# Usage
-```
-$ mtorrent --help
-Fast and lightweight CLI BitTorrent client in Rust
-
-Usage: mtorrent [OPTIONS] <METAINFO_URI>
-
-Arguments:
-  <METAINFO_URI>  Magnet link or path to a .torrent file
-
-Options:
-  -o, --output <PATH>  Output folder
-      --no-upnp        Disable UPnP
-      --no-dht         Disable DHT
-  -h, --help           Print help
-  -V, --version        Print version
-```

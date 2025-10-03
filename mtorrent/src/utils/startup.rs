@@ -72,7 +72,8 @@ mod tests {
 
     #[test]
     fn test_read_metainfo_and_spawn_files() {
-        let info = input::Metainfo::from_file("tests/assets/example.torrent").unwrap();
+        let info =
+            input::Metainfo::from_file("../mtorrent-cli/tests/assets/example.torrent").unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_files_output";
         let filedir = Path::new(parent_dir).join("files");
@@ -97,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_read_metainfo_and_spawn_single_file() {
-        let info = input::Metainfo::from_file("tests/assets/pcap.torrent").unwrap();
+        let info = input::Metainfo::from_file("../mtorrent-cli/tests/assets/pcap.torrent").unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
         let filedir = Path::new(parent_dir).join("files");
@@ -126,7 +127,7 @@ mod tests {
             Some("Dune.Part.Two.2024.1080p.HD-TS.X264-EMIN3M[TGx]".to_owned())
         );
 
-        let uri = "tests/assets/screenshots_bad_tracker.torrent";
+        let uri = "../mtorrent-cli/tests/assets/screenshots_bad_tracker.torrent";
         assert_eq!(get_torrent_name(uri), Some("screenshots_bad_tracker".to_owned()));
     }
 }

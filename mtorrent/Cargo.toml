@@ -1,20 +1,13 @@
 [package]
 name = "mtorrent"
-description = "Fast and lightweight CLI BitTorrent client in Rust"
-categories = [
-    "asynchronous",
-    "network-programming",
-    "command-line-utilities",
-    "security",
-]
+description = "Fast and lightweight BitTorrent client in Rust"
+categories = ["asynchronous", "network-programming", "security"]
 keywords = ["bittorrent", "torrent", "client", "p2p", "protocol"]
-exclude = ["/tests/", "/src/bin/prettyprint.rs", "/src/bin/dht_node.rs"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
-default-run = "mtorrent"
 
 [dependencies]
 mtorrent-core = { workspace = true }
@@ -28,15 +21,9 @@ tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
-thiserror = { workspace = true }
-bytes = { workspace = true }
 derive_more = { workspace = true }
-simple_logger = { workspace = true }
-sha1_smol = { workspace = true }
-clap = { version = "4.5.40", features = ["derive"] }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
 simple_logger = { workspace = true }
-mockito = { workspace = true }
 mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }
