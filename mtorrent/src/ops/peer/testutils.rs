@@ -135,7 +135,9 @@ impl PeerBuilder {
         self,
     ) -> (ctx::Handle<ctx::MainCtx>, LocalBoxFuture<'static, io::Result<()>>) {
         let metainfo = startup::read_metainfo(
-            self.metainfo_uri.as_deref().unwrap_or("tests/assets/zeroed_example.torrent"),
+            self.metainfo_uri
+                .as_deref()
+                .unwrap_or("../mtorrent-cli/tests/assets/zeroed_example.torrent"),
         )
         .unwrap();
         let content_storage = if let Some(content_path) = self.content_path {

@@ -693,7 +693,7 @@ async fn test_download_and_upload_multifile_torrent() {
         let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
         let data_dir = "tests/assets/screenshots";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(metainfo_file)
             .arg("-o")
             .arg(output_dir)
@@ -736,7 +736,7 @@ async fn test_download_and_upload_multifile_torrent() {
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
-            process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+            process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
                 .arg(metainfo_file)
                 .arg("-o")
                 .arg(output_dir)
@@ -770,7 +770,7 @@ async fn test_download_and_upload_multifile_torrent() {
         let output_dir = "test_accept_1_leech_and_upload_multifile_torrent";
         let data_dir = "tests/assets";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(metainfo_file)
             .arg("-o")
             .arg(data_dir)
@@ -808,7 +808,7 @@ async fn test_download_and_upload_monofile_torrent() {
         let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
         let data_dir = "tests/assets/pcap";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(metainfo_file)
             .arg("-o")
             .arg(output_dir)
@@ -851,7 +851,7 @@ async fn test_download_and_upload_monofile_torrent() {
 
         let mtorrent = task::spawn(async move {
             time::sleep(sec!(2)).await; // wait for listening peers to launch
-            process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+            process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
                 .arg(metainfo_file)
                 .arg("-o")
                 .arg(output_dir)
@@ -885,7 +885,7 @@ async fn test_download_and_upload_monofile_torrent() {
         let output_dir = "test_accept_1_leech_and_upload_monofile_torrent";
         let data_dir = "tests/assets";
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(metainfo_file)
             .arg("-o")
             .arg(data_dir)
@@ -938,7 +938,7 @@ async fn test_download_torrent_from_magnet_link() {
 
     let mtorrent = task::spawn(async move {
         time::sleep(sec!(2)).await; // wait for listening peers to launch
-        process::Command::new(env!("CARGO_BIN_EXE_mtorrent"))
+        process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(magnet_link)
             .arg("-o")
             .arg(output_dir)

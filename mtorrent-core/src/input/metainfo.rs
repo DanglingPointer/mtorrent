@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_read_example_torrent_file() {
-        let info = Metainfo::from_file("../mtorrent/tests/assets/example.torrent").unwrap();
+        let info = Metainfo::from_file("../mtorrent-cli/tests/assets/example.torrent").unwrap();
 
         let announce = info.announce().unwrap();
         assert_eq!("http://tracker.trackerfix.com:80/announce", announce, "announce: {announce}");
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_read_torrent_file_without_announce_list() {
-        let info = Metainfo::from_file("../mtorrent/tests/assets/pcap.torrent").unwrap();
+        let info = Metainfo::from_file("../mtorrent-cli/tests/assets/pcap.torrent").unwrap();
 
         let announce = info.announce().unwrap();
         assert_eq!("http://localhost:8000/announce", announce, "announce: {announce}");
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_read_incomplete_metainfo_file() {
-        let data = fs::read("../mtorrent/tests/assets/incomplete.torrent").unwrap();
+        let data = fs::read("../mtorrent-cli/tests/assets/incomplete.torrent").unwrap();
         let info =
             Metainfo::from_bencode(benc::Element::from_bytes(&data).unwrap(), data.len()).unwrap();
 
