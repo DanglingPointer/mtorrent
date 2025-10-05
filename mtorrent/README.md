@@ -4,7 +4,7 @@
 
 # mtorrent
 Lightweight Bittorrent client engine in Rust. Blazingly fast, incredibly robust and very impressive in general. This is a high-level library crate, for executables see below:
-- CLI version: [`mtorrent-cli`](https://github.com/DanglingPointer/mtorrent/tree/master/mtorrent-cli).
+- CLI version: [`mtorrent-cli`](https://crates.io/crates/mtorrent-cli).
 - GUI version: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
 
 For low-level library components, see [`mtorrent-core`](https://crates.io/crates/mtorrent-core), [`mtorrent-dht`](https://crates.io/crates/mtorrent-dht) and [`mtorrent-utils`](https://crates.io/crates/mtorrent-utils).

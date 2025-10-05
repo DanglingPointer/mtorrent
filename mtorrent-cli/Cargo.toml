@@ -1,5 +1,14 @@
 [package]
 name = "mtorrent-cli"
+description = "Fast and lightweight CLI BitTorrent client in Rust"
+categories = [
+    "asynchronous",
+    "network-programming",
+    "command-line-utilities",
+    "security",
+]
+keywords = ["bittorrent", "torrent", "client", "p2p", "protocol"]
+exclude = ["/tests/", "/src/bin/"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

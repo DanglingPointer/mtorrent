@@ -20,10 +20,10 @@ Alternatively, compile locally using the following commands:
 
 # Usage
 ```
-$ mtorrent --help
+$ mtorrent-cli --help
 Fast and lightweight CLI BitTorrent client in Rust
 
-Usage: mtorrent [OPTIONS] <METAINFO_URI>
+Usage: mtorrent-cli [OPTIONS] <METAINFO_URI>
 
 Arguments:
   <METAINFO_URI>  Magnet link or path to a .torrent file
