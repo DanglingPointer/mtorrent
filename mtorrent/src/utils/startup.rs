@@ -3,15 +3,16 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io, iter};
 
-pub fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
+pub(crate) fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let metainfo = input::Metainfo::from_file(metainfo_filepath)?;
     Ok(metainfo)
 }
 
+#[doc(hidden)]
 pub fn create_content_storage(
     metainfo: &input::Metainfo,
-    filedir: impl AsRef<Path>,
+    content_parent_dir: impl AsRef<Path>,
 ) -> io::Result<(data::StorageClient, data::StorageServer)> {
     let total_size = metainfo
         .length()
@@ -19,16 +20,20 @@ pub fn create_content_storage(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no total length in metainfo"))?;
 
     if let Some(files) = metainfo.files() {
-        Ok(data::new_async_storage(filedir, files)?)
+        Ok(data::new_async_storage(content_parent_dir, files)?)
     } else {
         let name = match metainfo.name() {
             Some(s) => s.to_string(),
             None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
         };
-        Ok(data::new_async_storage(filedir, iter::once((total_size, PathBuf::from(name))))?)
+        Ok(data::new_async_storage(
+            content_parent_dir,
+            iter::once((total_size, PathBuf::from(name))),
+        )?)
     }
 }
 
+#[doc(hidden)]
 pub fn create_metainfo_storage(
     metainfo_path: impl AsRef<Path>,
 ) -> io::Result<(data::StorageClient, data::StorageServer)> {
@@ -42,6 +47,9 @@ pub fn create_metainfo_storage(
     Ok(data::new_async_storage(parent, iter::once((metainfo_filelen, PathBuf::from(filename))))?)
 }
 
+/// Name of the torrent being downloaded. If `uri` is a magnet link, the name field
+/// in the magnet link is used. If `uri` is a path to a `.torrent` file, the filename
+/// without extension is used. If no name can be determined, `None` is returned.
 pub fn get_torrent_name(uri: impl AsRef<str>) -> Option<String> {
     if let Ok(magnet) = input::MagnetLink::from_str(uri.as_ref()) {
         magnet.name().map(ToOwned::to_owned)

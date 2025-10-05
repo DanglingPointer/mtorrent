@@ -93,10 +93,10 @@ async fn announce_periodically(
 ) {
     loop {
         let request = handler.generate_request();
-        log::debug!("Announcing to {url:?}");
+        log::debug!("Announcing to {url:?}: {request:?}");
         match tracker_client.announce(url.clone(), request).await {
             Ok(mut response) => {
-                log::info!("Received response from {url:?}: {response:?}");
+                log::info!("Announce response from {url:?}: {response:?}");
                 handler.preprocess_response(&mut response);
                 let reannounce_at = Instant::now() + response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {

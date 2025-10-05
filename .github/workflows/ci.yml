@@ -44,7 +44,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    needs: prechecks
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable

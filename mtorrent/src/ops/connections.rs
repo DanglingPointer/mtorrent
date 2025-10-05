@@ -147,8 +147,11 @@ impl<H: ConnectHandler> ConnectThrottle<H> {
     }
 
     fn on_peer_disconnected(&mut self, peer: SocketAddr) {
-        let _removed = self.connected_peers.remove(&peer);
-        debug_assert!(_removed, "Disconnected peer {peer} was not in connected_peers set");
+        let removed = self.connected_peers.remove(&peer);
+        if !removed {
+            log::error!("Disconnected peer {peer} was not registered as connected");
+            debug_assert!(false);
+        }
     }
 
     async fn on_peer_discovered(&mut self, peer: DiscoveredPeer) {
@@ -165,7 +168,7 @@ impl<H: ConnectHandler> ConnectThrottle<H> {
             };
             self.handler.handle_discovered_peer(peer, permit);
         } else {
-            log::debug!("Ignoring discovered peer {} (already connected)", peer.addr);
+            log::debug!("Ignoring discovered peer {} (already exists)", peer.addr);
         }
     }
 }

@@ -17,6 +17,7 @@ pub enum PeerOrigin {
 
 /// The current state of the download of data from a remote peer.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadState {
     pub am_interested: bool,
     pub peer_choking: bool,
@@ -48,6 +49,7 @@ impl fmt::Display for DownloadState {
 
 /// The current state of the update of data to a remote peer.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UploadState {
     pub am_choking: bool,
     pub peer_interested: bool,

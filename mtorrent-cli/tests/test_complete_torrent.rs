@@ -1,6 +1,7 @@
 use futures_util::future;
 use local_async_utils::prelude::*;
 use mtorrent::utils::startup;
+use mtorrent_core::input;
 use mtorrent_core::{data, input::Metainfo, pwp};
 use mtorrent_utils::{benc, ip};
 use std::collections::{BTreeMap, HashSet};
@@ -519,7 +520,7 @@ async fn launch_peers<P: Peer>(
     mode: ConnectionMode,
     extensions_enabled: bool,
 ) {
-    let metainfo = Rc::new(startup::read_metainfo(metainfo_file).unwrap());
+    let metainfo = Rc::new(input::Metainfo::from_file(metainfo_file).unwrap());
 
     assert!(files_parentdir.as_ref().is_dir() == P::NEEDS_INPUT_DATA);
 

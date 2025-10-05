@@ -13,20 +13,31 @@ use tokio::sync::broadcast;
 use tokio::{runtime, task};
 use tokio_util::sync::CancellationToken;
 
+/// Configuration for a single torrent download.
 pub struct Config {
     pub local_peer_id: PeerId,
+    /// Parent directory for the downloaded content.
     pub output_dir: PathBuf,
+    /// Directory for saving logs and persistent state (e.g. known trackers).
     pub config_dir: PathBuf,
+    /// Whether to use UPnP for NATS traversal.
     pub use_upnp: bool,
+    /// Local TCP port used for peer wire protocol sockets (both inbound and outbound).
     pub listener_port: Option<u16>,
 }
 
+/// Context for a single torrent download.
 pub struct Context {
+    /// Handle to the DHT system if present.
     pub dht_handle: Option<dht::CommandSink>,
+    /// Handle to a Tokio runtime that will be used for peer wire protocol I/O and communication with trackers.
     pub pwp_runtime: runtime::Handle,
+    /// Handle to a Tokio runtime that will be used to perform filesystem operations on the downloaded data.
     pub storage_runtime: runtime::Handle,
 }
 
+/// Download a single torrent given a magnet link or a path to its metainfo file.
+/// This function will exit once the download is complete or a fatal error has occurred.
 pub async fn single_torrent(
     metainfo_uri: String,
     mut listener: impl listener::StateListener,

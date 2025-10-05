@@ -168,15 +168,7 @@ impl QueryManager {
             // erase the corresponding timeout
             self.pending_timeouts.retain(|pt| pt.tid != tid);
         } else {
-            log::debug!(
-                "Received orphaned {} message from {}",
-                match msg.data {
-                    MessageData::Response(_) => "response",
-                    MessageData::Error(_) => "error",
-                    MessageData::Query(_) => unreachable!(),
-                },
-                src_addr
-            );
+            // orphaned message: likely due to retransmissions or cancellation
         }
         Ok(())
     }

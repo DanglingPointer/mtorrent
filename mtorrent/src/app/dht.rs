@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use tokio::net::UdpSocket;
 use tokio::{join, task};
 
+/// Spawn a thread with a Tokio runtime running the DHT system, and return handle to it.
 pub fn launch_dht_node_runtime(
     local_port: u16,
     max_concurrent_queries: Option<usize>,
