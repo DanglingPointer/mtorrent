@@ -11,6 +11,14 @@ pub trait StateListener {
     fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) -> ControlFlow<()>;
 }
 
+impl<L: StateListener> StateListener for &mut L {
+    const INTERVAL: Duration = L::INTERVAL;
+
+    fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) -> ControlFlow<()> {
+        L::on_snapshot(*self, snapshot)
+    }
+}
+
 /// Snapshot of the current state of the download.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

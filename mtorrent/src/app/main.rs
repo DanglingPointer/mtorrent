@@ -5,6 +5,7 @@ use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, ip, upnp};
+use std::borrow::Borrow;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,7 @@ pub struct Config {
     pub output_dir: PathBuf,
     /// Directory for saving logs and persistent state (e.g. known trackers).
     pub config_dir: PathBuf,
-    /// Whether to use UPnP for NATS traversal.
+    /// Whether to use UPnP for port mapping.
     pub use_upnp: bool,
     /// Local TCP port used for peer wire protocol sockets (both inbound and outbound).
     pub listener_port: Option<u16>,
@@ -34,17 +35,17 @@ pub struct Context {
     pub dht_handle: Option<dht::CommandSink>,
     /// Handle to a Tokio runtime that will be used for peer wire protocol I/O and communication with trackers.
     pub pwp_runtime: runtime::Handle,
-    /// Handle to a Tokio runtime that will be used to perform filesystem operations on the downloaded data.
+    /// Handle to a Tokio runtime that will be used for scheduling filesystem operations on the downloaded data.
     pub storage_runtime: runtime::Handle,
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
 /// This function will exit once the download is complete or a fatal error has occurred.
 pub async fn single_torrent(
-    metainfo_uri: String,
+    metainfo_uri: impl AsRef<str>,
     mut listener: impl listener::StateListener,
     cfg: Config,
-    ctx: Context,
+    ctx: impl Borrow<Context>,
 ) -> io::Result<()> {
     #[cfg(debug_assertions)]
     {
@@ -54,9 +55,11 @@ pub async fn single_torrent(
             std::process::exit(1);
         }));
     }
+    let ctx: &Context = ctx.borrow();
+
     let listener_addr = SocketAddr::new(
         Ipv4Addr::UNSPECIFIED.into(),
-        cfg.listener_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri)),
+        cfg.listener_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
     );
     // get public ip to send correct listening port to trackers and peers later
     let public_pwp_ip = if cfg.use_upnp {
@@ -86,12 +89,12 @@ pub async fn single_torrent(
         listener_addr
     };
 
-    if Path::new(&metainfo_uri).is_file() {
+    if Path::new(metainfo_uri.as_ref()).is_file() {
         main_stage(
             cfg.local_peer_id,
             listener_addr,
             public_pwp_ip,
-            metainfo_uri,
+            metainfo_uri.as_ref(),
             cfg.output_dir,
             cfg.config_dir,
             &mut listener,
@@ -108,8 +111,8 @@ pub async fn single_torrent(
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
             &mut listener,
-            ctx.dht_handle.clone(),
-            ctx.pwp_runtime.clone(),
+            ctx.dht_handle.as_ref(),
+            &ctx.pwp_runtime,
         )
         .await?;
         log::info!("Metadata downloaded successfully, starting content download");
@@ -141,8 +144,8 @@ async fn preliminary_stage(
     metainfo_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
-    dht_handle: Option<dht::CommandSink>,
-    pwp_runtime: runtime::Handle,
+    dht_handle: Option<&dht::CommandSink>,
+    pwp_runtime: &runtime::Handle,
 ) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
@@ -185,7 +188,7 @@ async fn preliminary_stage(
     dht_handle.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
-            dht_cmds,
+            dht_cmds.clone(),
             peer_reporter.clone(),
             public_pwp_ip.port(),
         ))
@@ -233,9 +236,11 @@ async fn main_stage(
     output_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
-    handles: Context,
+    handles: impl Borrow<Context>,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
 ) -> io::Result<()> {
+    let handles: &Context = handles.borrow();
+
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
     let _sw = info_stopwatch!("Main stage for torrent '{}'", metainfo.name().unwrap_or("n/a"));
@@ -279,10 +284,10 @@ async fn main_stage(
         });
     tasks.spawn_local(connect_throttle.run());
 
-    handles.dht_handle.map(|dht_cmds| {
+    handles.dht_handle.as_ref().map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
-            dht_cmds,
+            dht_cmds.clone(),
             peer_reporter.clone(),
             public_pwp_ip.port(),
         ))

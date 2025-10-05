@@ -117,7 +117,7 @@ fn main() -> io::Result<()> {
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
             cli.metainfo_uri,
-            SnapshotLogger,
+            &mut SnapshotLogger,
             app::main::Config {
                 local_peer_id: peer_id,
                 config_dir: local_data_dir,
