@@ -69,8 +69,12 @@ fn main() -> io::Result<()> {
     };
 
     let config_dir = env::current_dir()?;
-    let (_worker, cmds) =
-        app::dht::launch_dht_node_runtime(6881, args.parallel_queries, config_dir, !args.no_upnp)?;
+    let (_worker, cmds) = app::dht::launch_dht_node_runtime(app::dht::Config {
+        local_port: 6881,
+        max_concurrent_queries: args.parallel_queries,
+        config_dir,
+        use_upnp: !args.no_upnp,
+    })?;
 
     for node in extra_nodes {
         cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();

@@ -75,6 +75,14 @@ fn main() -> io::Result<()> {
         }
     };
 
+    let local_data_dir = match dirs_next::data_local_dir()
+        .or_else(dirs_next::data_dir)
+        .or_else(dirs_next::config_dir)
+    {
+        Some(dir) => dir,
+        None => std::env::current_dir()?,
+    };
+
     let storage_worker = worker::with_runtime(worker::rt::Config {
         name: "storage".to_owned(),
         io_enabled: false,
@@ -90,8 +98,12 @@ fn main() -> io::Result<()> {
     })?;
 
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
-        let (dht_worker, dht_cmds) =
-            dht::launch_dht_node_runtime(6881, None, output_dir.clone(), !cli.no_upnp)?;
+        let (dht_worker, dht_cmds) = dht::launch_dht_node_runtime(dht::Config {
+            local_port: 6881,
+            max_concurrent_queries: None,
+            config_dir: local_data_dir.clone(),
+            use_upnp: !cli.no_upnp,
+        })?;
         (Some(dht_worker), Some(dht_cmds))
     } else {
         (None, None)
@@ -108,7 +120,7 @@ fn main() -> io::Result<()> {
             SnapshotLogger,
             app::main::Config {
                 local_peer_id: peer_id,
-                config_dir: output_dir.clone(),
+                config_dir: local_data_dir,
                 output_dir,
                 use_upnp: !cli.no_upnp,
                 listener_port: None,

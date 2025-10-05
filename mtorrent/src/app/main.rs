@@ -14,6 +14,7 @@ use tokio::{runtime, task};
 use tokio_util::sync::CancellationToken;
 
 /// Configuration for a single torrent download.
+#[derive(Debug, Clone)]
 pub struct Config {
     pub local_peer_id: PeerId,
     /// Parent directory for the downloaded content.
@@ -27,6 +28,7 @@ pub struct Config {
 }
 
 /// Context for a single torrent download.
+#[derive(Clone)]
 pub struct Context {
     /// Handle to the DHT system if present.
     pub dht_handle: Option<dht::CommandSink>,

@@ -7,13 +7,22 @@ use std::path::PathBuf;
 use tokio::net::UdpSocket;
 use tokio::{join, task};
 
+/// Startup configuration for the DHT system.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Local UDP port to bind to.
+    pub local_port: u16,
+    /// Maximum number of outbound DHT queries in flight.
+    /// If `None`, use a default value.
+    pub max_concurrent_queries: Option<usize>,
+    /// Directory for storing DHT-related data.
+    pub config_dir: PathBuf,
+    /// Whether to use UPnP for port mapping.
+    pub use_upnp: bool,
+}
+
 /// Spawn a thread with a Tokio runtime running the DHT system, and return handle to it.
-pub fn launch_dht_node_runtime(
-    local_port: u16,
-    max_concurrent_queries: Option<usize>,
-    config_dir: PathBuf,
-    use_upnp: bool,
-) -> io::Result<(worker::rt::Handle, dht::CommandSink)> {
+pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, dht::CommandSink)> {
     let (cmd_sender, cmd_server) = dht::setup_commands();
 
     let worker_handle = worker::with_local_runtime(worker::rt::Config {
@@ -26,10 +35,10 @@ pub fn launch_dht_node_runtime(
         // spawn_local() must be called from the dht thread
         task::spawn_local(dht_main(
             cmd_server,
-            local_port,
-            config_dir,
-            max_concurrent_queries,
-            use_upnp,
+            cfg.local_port,
+            cfg.config_dir,
+            cfg.max_concurrent_queries,
+            cfg.use_upnp,
         ));
     });
 
