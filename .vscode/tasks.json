@@ -3,6 +3,17 @@
 	"tasks": [
 		{
 			"type": "cargo",
+			"command": "update",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"label": "rust: cargo update",
+			"runOptions": {
+				"runOn": "folderOpen"
+			}
+		},
+		{
+			"type": "cargo",
 			"command": "build",
 			"args": [
 				"--release",
@@ -39,19 +50,6 @@
 		},
 		{
 			"type": "cargo",
-			"command": "nextest",
-			"args": [
-				"run",
-				"${input:testName}",
-			],
-			"problemMatcher": [
-				"$rustc"
-			],
-			"group": "test",
-			"label": "rust: run single test"
-		},
-		{
-			"type": "cargo",
 			"command": "llvm-cov",
 			"args": [
 				"nextest",
@@ -69,21 +67,6 @@
 			"args": [
 				"--all-targets",
 				"--all-features",
-				"--",
-				"-Dwarnings",
-			],
-			"problemMatcher": [
-				"$rustc"
-			],
-			"group": "none",
-			"label": "rust: cargo clippy"
-		},
-		{
-			"type": "cargo",
-			"command": "clippy",
-			"args": [
-				"--all-targets",
-				"--all-features",
 				"--release",
 				"--",
 				"-Dwarnings",
@@ -93,29 +76,6 @@
 			],
 			"group": "none",
 			"label": "rust: cargo clippy --release"
-		},
-		{
-			"type": "cargo",
-			"command": "install",
-			"args": [
-				"--bin=mtorrent",
-				"--path=mtorrent",
-				"--profile=release",
-			],
-			"problemMatcher": [
-				"$rustc"
-			],
-			"group": "none",
-			"label": "rust: cargo install mtorrent"
-		}
-	],
-	"inputs": [
-		{
-			"id": "testName",
-			"type": "promptString",
-			"default": "${selectedText}",
-			"description": "Test name"
-			// "command": "rust-analyzer.run",
 		}
 	]
 }
