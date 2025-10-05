@@ -5,6 +5,8 @@ mod url;
 use futures_util::TryFutureExt;
 use local_async_utils::sec;
 use mtorrent_utils::peer_id::PeerId;
+use std::collections::HashMap;
+use std::iter;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use std::{io, net::SocketAddr};
@@ -51,14 +53,17 @@ pub struct ScrapeRequest {
 /// Parsed entry from a scrape response.
 #[derive(Debug)]
 pub struct ScrapeResponseEntry {
+    /// Currently active seeders
     pub seeders: usize,
-    pub completed: usize,
+    /// Currently active leechers
     pub leechers: usize,
+    /// All-time downloaded count
+    pub downloaded: usize,
 }
 
 /// Parsed scrape response.
 #[derive(Debug)]
-pub struct ScrapeResponse(pub Vec<ScrapeResponseEntry>);
+pub struct ScrapeResponse(pub HashMap<[u8; 20], ScrapeResponseEntry>);
 
 struct Request<Request, Response> {
     url: TrackerUrl,
@@ -173,6 +178,7 @@ impl TrackerManager {
                             });
                         } else {
                             log::debug!("Not doing HTTP announce - no client");
+                            _ = request.responder.send(Err(io::Error::other("no HTTP client")));
                         }
                     }
                     TrackerUrl::Udp(addr) => {
@@ -184,12 +190,29 @@ impl TrackerManager {
                         });
                     }
                 },
-                Command::Scrape(request) => {
-                    _ = request.responder.send(Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "scrape is not implemented",
-                    )));
-                }
+                Command::Scrape(request) => match request.url {
+                    TrackerUrl::Http(url) => {
+                        if let Some(client) = http_client.clone() {
+                            spawn_child_task!(async move {
+                                let result = do_http_scrape(&client, &url, request.data).await;
+                                _ = request.responder.send(result).inspect_err(|_| {
+                                    log::warn!("Failed to send back http scrape result")
+                                });
+                            });
+                        } else {
+                            log::debug!("Not doing HTTP scrape - no client");
+                            _ = request.responder.send(Err(io::Error::other("no HTTP client")));
+                        }
+                    }
+                    TrackerUrl::Udp(addr) => {
+                        spawn_child_task!(async move {
+                            let result = do_udp_scrape(&addr, request.data).await;
+                            _ = request.responder.send(result).inspect_err(|_| {
+                                log::warn!("Failed to send back udp scrape result")
+                            });
+                        });
+                    }
+                },
             }
         }
         canceller.cancel();
@@ -231,36 +254,66 @@ async fn do_http_announce(
     })
 }
 
+async fn do_http_scrape(
+    client: &http::TrackerClient,
+    url: &str,
+    data: ScrapeRequest,
+) -> io::Result<ScrapeResponse> {
+    let mut request = http::TrackerRequestBuilder::try_from(url)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))?;
+    for info_hash in &data.info_hashes {
+        request.info_hash(info_hash);
+    }
+    let response = client.scrape(request).await?;
+
+    Ok(ScrapeResponse(
+        response
+            .files
+            .into_iter()
+            .map(|(info_hash, entry)| {
+                (
+                    info_hash,
+                    ScrapeResponseEntry {
+                        seeders: entry.complete,
+                        downloaded: entry.downloaded,
+                        leechers: entry.incomplete,
+                    },
+                )
+            })
+            .collect(),
+    ))
+}
+
+async fn new_udp_client(tracker_addr_str: &str) -> io::Result<udp::TrackerConnection> {
+    async fn bind_and_connect_socket(
+        bind_addr: &SocketAddr,
+        remote_addr: &SocketAddr,
+    ) -> io::Result<UdpSocket> {
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.connect(&remote_addr).await?;
+        Ok(socket)
+    }
+
+    for tracker_addr in net::lookup_host(tracker_addr_str).await? {
+        let local_ip = match &tracker_addr {
+            SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
+            SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+        };
+        let local_addr = SocketAddr::new(local_ip, 0);
+        if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr)
+            .and_then(udp::TrackerConnection::from_connected_socket)
+            .await
+        {
+            return Ok(client);
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::ConnectionRefused, "failed to connect to tracker"))
+}
+
 async fn do_udp_announce(
     tracker_addr: &str,
     data: AnnounceRequest,
 ) -> io::Result<AnnounceResponse> {
-    async fn new_udp_client(tracker_addr_str: &str) -> io::Result<udp::TrackerConnection> {
-        async fn bind_and_connect_socket(
-            bind_addr: &SocketAddr,
-            remote_addr: &SocketAddr,
-        ) -> io::Result<UdpSocket> {
-            let socket = UdpSocket::bind(bind_addr).await?;
-            socket.connect(&remote_addr).await?;
-            Ok(socket)
-        }
-
-        for tracker_addr in net::lookup_host(tracker_addr_str).await? {
-            let local_ip = match &tracker_addr {
-                SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-                SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
-            };
-            let local_addr = SocketAddr::new(local_ip, 0);
-            if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr)
-                .and_then(udp::TrackerConnection::from_connected_socket)
-                .await
-            {
-                return Ok(client);
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::ConnectionRefused, "failed to connect to tracker"))
-    }
-
     let mut client = new_udp_client(tracker_addr).await?;
 
     let request = udp::AnnounceRequest {
@@ -282,6 +335,30 @@ async fn do_udp_announce(
         interval: sec!(response.interval as u64),
         peers: response.ips,
     })
+}
+
+async fn do_udp_scrape(tracker_addr: &str, data: ScrapeRequest) -> io::Result<ScrapeResponse> {
+    let mut client = new_udp_client(tracker_addr).await?;
+
+    let request = udp::ScrapeRequest {
+        info_hashes: data.info_hashes.clone(),
+    };
+    let response = client.do_scrape_request(request).await?;
+
+    Ok(ScrapeResponse(
+        iter::zip(data.info_hashes, response.0)
+            .map(|(info_hash, entry)| {
+                (
+                    info_hash,
+                    ScrapeResponseEntry {
+                        seeders: entry.seeders as usize,
+                        downloaded: entry.completed as usize,
+                        leechers: entry.leechers as usize,
+                    },
+                )
+            })
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -309,6 +386,18 @@ mod tests {
             0x1a, 0xe9, // port
             0xc0, 0xa8, 0x00, 0x01, // ip
             0x1a, 0xe8, // port
+        ];
+        response[4..8].copy_from_slice(transaction_id);
+        response
+    }
+
+    fn udp_scrape_response(transaction_id: &[u8]) -> [u8; 20] {
+        let mut response = [
+            0x00, 0x00, 0x00, 0x02, // action
+            0x00, 0x00, 0x00, 0x00, // transaction id
+            0x00, 0x00, 0x00, 0x05, // seeders
+            0x00, 0x00, 0x00, 0x32, // completed
+            0x00, 0x00, 0x00, 0x0a, // leechers
         ];
         response[4..8].copy_from_slice(transaction_id);
         response
@@ -353,6 +442,41 @@ mod tests {
                 "127.0.0.1:50049".parse().unwrap()
             ]
         );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_http_scrape_success() {
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+                .mock("GET", "/scrape")
+                .with_status(200)
+                .with_body(b"d5:filesd20:hhhhhhhhhhhhhhhhhhhhd8:completei5e10:downloadedi50e10:incompletei10eeee")
+                .match_query("info_hash=hhhhhhhhhhhhhhhhhhhh")
+                .create_async()
+                .await;
+
+        let response = client
+            .scrape(
+                format!("{}/announce", server.url()).parse().unwrap(),
+                ScrapeRequest {
+                    info_hashes: vec![[b'h'; 20]],
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.0.len(), 1, "{:?}", response);
+        let entry = response
+            .0
+            .get(&[b'h'; 20])
+            .unwrap_or_else(|| panic!("no requested info hash in: {response:?}"));
+        assert_eq!(entry.seeders, 5);
+        assert_eq!(entry.leechers, 10);
+        assert_eq!(entry.downloaded, 50);
         mock.assert_async().await;
     }
 
@@ -450,5 +574,111 @@ mod tests {
                 "192.168.0.1:6888".parse().unwrap()
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_udp_tracker_scrape() {
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let tracker_addr = server_socket.local_addr().unwrap();
+
+        let client_task = task::spawn(async move {
+            client
+                .scrape(
+                    format!("udp://{tracker_addr}").parse().unwrap(),
+                    ScrapeRequest {
+                        info_hashes: vec![[b'g'; 20]],
+                    },
+                )
+                .await
+        });
+
+        let mut recv_buffer = [0u8; 1024];
+        let (bytes_read, client_addr) =
+            time::timeout(sec!(5), server_socket.recv_from(&mut recv_buffer))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(bytes_read, 16);
+        let connect_request = &recv_buffer[..16];
+
+        let connect_response = udp_connect_response(&connect_request[12..]);
+        server_socket.send_to(&connect_response, client_addr).await.unwrap();
+
+        let (bytes_read, _) = time::timeout(sec!(5), server_socket.recv_from(&mut recv_buffer))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes_read, 36);
+        let scrape_request = &recv_buffer[..36];
+
+        let scrape_response = udp_scrape_response(&scrape_request[12..16]);
+        server_socket.send_to(&scrape_response, client_addr).await.unwrap();
+
+        let result = time::timeout(sec!(5), client_task).await.unwrap().unwrap();
+        let response = result.unwrap();
+
+        assert_eq!(response.0.len(), 1, "{:?}", response);
+        let entry = response
+            .0
+            .get(&[b'g'; 20])
+            .unwrap_or_else(|| panic!("no requested info hash in: {response:?}"));
+        assert_eq!(entry.seeders, 5);
+        assert_eq!(entry.leechers, 10);
+        assert_eq!(entry.downloaded, 50);
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_scrape_against_real_http_tracker() {
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+
+        let response = client
+            .scrape(
+                "https://torrent.ubuntu.com/announce".parse().unwrap(),
+                ScrapeRequest {
+                    info_hashes: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(!response.0.is_empty(), "{response:?}");
+        // for (info_hash, entry) in response.0 {
+        //     assert!(entry.downloaded >= entry.seeders, "{info_hash:?}: {entry:?}");
+        // }
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_scrape_against_real_udp_tracker() {
+        let info_hash = [
+            30, 189, 61, 191, 187, 37, 193, 51, 63, 81, 201, 156, 126, 230, 112, 252, 42, 23, 39,
+            201,
+        ];
+
+        let (client, mgr) = init();
+        task::spawn(mgr.run());
+
+        let response = client
+            .scrape(
+                "udp://open.stealth.si:80".parse().unwrap(),
+                ScrapeRequest {
+                    info_hashes: vec![info_hash],
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.0.len(), 1, "{response:?}");
+
+        let entry = response
+            .0
+            .get(&info_hash)
+            .unwrap_or_else(|| panic!("no requested info hash in: {response:?}"));
+        assert!(entry.downloaded >= entry.seeders, "{info_hash:?}: {entry:?}");
     }
 }

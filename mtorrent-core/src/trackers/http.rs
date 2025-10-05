@@ -1,7 +1,7 @@
 use local_async_utils::prelude::*;
 use mtorrent_utils::{benc, ip};
 use reqwest::Url;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::{fmt, io, str};
 use thiserror::Error;
@@ -65,11 +65,10 @@ impl TrackerClient {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn scrape(
         &self,
         request_builder: TrackerRequestBuilder,
-    ) -> Result<benc::Element, Error> {
+    ) -> Result<ScrapeResponseContent, Error> {
         let scrape_url = request_builder.build_scrape().ok_or(Error::Unsupported)?;
         log::debug!("Sending scrape request to {scrape_url}");
 
@@ -78,8 +77,10 @@ impl TrackerClient {
         let bencoded = benc::Element::from_bytes(&response_data)?;
         log::debug!("Scrape response: {bencoded}");
 
-        // TODO: parse response
-        Ok(bencoded)
+        let response = ScrapeResponseContent::try_from(bencoded)
+            .map_err(|s| Error::Benc(benc::ParseError::ExternalError(s.into())))?;
+
+        Ok(response)
     }
 }
 
@@ -192,6 +193,70 @@ impl TrackerRequestBuilder {
 }
 
 // -------------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ScrapeResponseEntry {
+    #[expect(dead_code)]
+    pub name: Option<String>,
+    pub complete: usize,
+    pub downloaded: usize,
+    pub incomplete: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrapeResponseContent {
+    pub files: HashMap<[u8; 20], ScrapeResponseEntry>,
+}
+
+impl TryFrom<benc::Element> for ScrapeResponseContent {
+    type Error = &'static str;
+
+    fn try_from(bencode: benc::Element) -> Result<Self, Self::Error> {
+        fn convert_entry(value: benc::Element) -> Option<ScrapeResponseEntry> {
+            let benc::Element::Dictionary(entry) = value else {
+                return None;
+            };
+            let mut entry = benc::convert_dictionary(entry);
+
+            if let Some(benc::Element::Integer(complete)) = entry.remove("complete")
+                && let Some(benc::Element::Integer(downloaded)) = entry.remove("downloaded")
+                && let Some(benc::Element::Integer(incomplete)) = entry.remove("incomplete")
+            {
+                Some(ScrapeResponseEntry {
+                    name: entry.remove("name").and_then(|e| match e {
+                        benc::Element::ByteString(name) => String::from_utf8(name).ok(),
+                        _ => None,
+                    }),
+                    complete: complete.try_into().ok()?,
+                    downloaded: downloaded.try_into().ok()?,
+                    incomplete: incomplete.try_into().ok()?,
+                })
+            } else {
+                None
+            }
+        }
+
+        let benc::Element::Dictionary(mut root) = bencode else {
+            return Err("root element is not a dictionary");
+        };
+
+        let Some(benc::Element::Dictionary(files)) = root.remove(&"files".to_owned().into()) else {
+            return Err("no 'files' in the root dictionary");
+        };
+
+        let mut ret = HashMap::with_capacity(files.len());
+        for (key, value) in files {
+            if let benc::Element::ByteString(info_hash) = key
+                && let Ok(info_hash) = <[u8; 20]>::try_from(info_hash)
+                && let Some(entry) = convert_entry(value)
+            {
+                ret.insert(info_hash, entry);
+            }
+        }
+
+        Ok(Self { files: ret })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AnnounceResponseContent {
@@ -389,6 +454,7 @@ mod tests {
             uri.unwrap().as_str()
         );
     }
+
     #[test]
     fn test_unsupported_scrape_uri() {
         let url_base = "http://example.com";
@@ -441,40 +507,27 @@ mod tests {
 
         let request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
         let response = client.scrape(request).await.unwrap_or_else(|e| panic!("Scrape error: {e}"));
+        assert!(!response.files.is_empty());
 
-        if let benc::Element::Dictionary(root) = response {
-            for (key, files) in root {
-                if let benc::Element::Dictionary(torrents) = files {
-                    for (info_hash_bytes, info) in torrents {
-                        if let benc::Element::ByteString(info_hash) = info_hash_bytes {
-                            println!("Announce for torrent: {info}");
-                            let mut request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
-                            request
-                                .info_hash(&info_hash)
-                                .peer_id(&[b'm'; 20])
-                                .bytes_left(0)
-                                .bytes_uploaded(0)
-                                .bytes_downloaded(0)
-                                // .compact_support()
-                                .port(6666);
+        for (info_hash, info) in response.files {
+            println!("Announce for torrent: {info:?}");
+            let mut request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
+            request
+                .info_hash(&info_hash)
+                .peer_id(&[b'm'; 20])
+                .bytes_left(0)
+                .bytes_uploaded(0)
+                .bytes_downloaded(0)
+                // .compact_support()
+                .port(6666);
 
-                            let response = client
-                                .announce(request)
-                                .await
-                                .unwrap_or_else(|e| panic!("Announce error: {e}"));
+            let response =
+                client.announce(request).await.unwrap_or_else(|e| panic!("Announce error: {e}"));
 
-                            let peer_count = response.peers().unwrap().len();
-                            let seeders = response.complete().unwrap();
-                            let leechers = response.incomplete().unwrap();
-                            assert!(peer_count <= seeders + leechers);
-                        }
-                    }
-                } else {
-                    panic!("'{key}' value is not a dictionary");
-                }
-            }
-        } else {
-            panic!("Scrape response is not a dictionary");
+            let peer_count = response.peers().unwrap().len();
+            let seeders = response.complete().unwrap();
+            let leechers = response.incomplete().unwrap();
+            assert!(peer_count <= seeders + leechers);
         }
     }
 }

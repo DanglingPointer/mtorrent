@@ -72,7 +72,6 @@ impl TrackerConnection {
         .await?
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn do_scrape_request(
         &mut self,
         request_data: ScrapeRequest,
@@ -592,6 +591,33 @@ mod tests {
             "[2002:db8:85a3:0:8a2e:370:7335:0]:6888".parse::<SocketAddr>().unwrap(),
             parsed.ips[1]
         );
+    }
+
+    #[test]
+    fn test_parse_scrape_response() {
+        let response = [
+            0x00, 0x00, 0x00, 0x02, // action
+            0x00, 0x00, 0x00, 0x0f, // transaction id
+            0x00, 0x00, 0x00, 0x02, // seeders
+            0x00, 0x00, 0x00, 0x03, // completed
+            0x00, 0x00, 0x00, 0x01, // leechers
+            0x00, 0x00, 0x00, 0x05, // seeders
+            0x00, 0x00, 0x00, 0x07, // completed
+            0x00, 0x00, 0x00, 0x04, // leechers
+        ];
+
+        let parsed = parse_response(&response, 15, &Ipv4Addr::LOCALHOST.into()).unwrap();
+        let parsed = match parsed {
+            AnyResponse::Scrape(response) => response,
+            _ => panic!("Wrong message type"),
+        };
+        assert_eq!(2, parsed.0.len());
+        assert_eq!(2, parsed.0[0].seeders);
+        assert_eq!(3, parsed.0[0].completed);
+        assert_eq!(1, parsed.0[0].leechers);
+        assert_eq!(5, parsed.0[1].seeders);
+        assert_eq!(7, parsed.0[1].completed);
+        assert_eq!(4, parsed.0[1].leechers);
     }
 
     #[test]
