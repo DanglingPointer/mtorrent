@@ -10,7 +10,9 @@ pub mod simple {
     use super::*;
 
     pub struct Config {
+        /// Name of the worker thread.
         pub name: String,
+        /// Stack size of the worker thread.
         pub stack_size: usize,
     }
 
@@ -32,11 +34,14 @@ pub mod simple {
         }
     }
 
+    /// Handle to a worker thread.
+    /// Dropping the handle will block until the thread exits.
     pub struct Handle {
         pub(super) th_handle: Option<thread::JoinHandle<()>>,
     }
 
     impl Drop for Handle {
+        /// Blocks until the worker thread exits.
         fn drop(&mut self) {
             if let Some(th_handle) = self.th_handle.take() {
                 let _ = th_handle.join();
@@ -49,11 +54,17 @@ pub mod rt {
     use super::*;
 
     pub struct Config {
+        /// Name of the worker thread.
         pub name: String,
-        pub io_enabled: bool,
-        pub time_enabled: bool,
+        /// Stack size of the worker thread.
         pub stack_size: usize,
+        /// See [`tokio::runtime::Builder::enable_io`].
+        pub io_enabled: bool,
+        /// See [`tokio::runtime::Builder::enable_time`].
+        pub time_enabled: bool,
+        /// See [`tokio::runtime::Builder::max_blocking_threads`].
         pub max_blocking_threads: usize,
+        /// See [`tokio::runtime::Runtime::shutdown_timeout`].
         pub shutdown_timeout: Duration,
     }
 
@@ -70,6 +81,8 @@ pub mod rt {
         }
     }
 
+    /// Handle to a worker thread running a Tokio runtime.
+    /// Dropping the handle will signal the runtime to shut down, then block until the thread exits.
     pub struct Handle {
         pub(super) stop_signal: Arc<Notify>,
         pub(super) rt_handle: runtime::Handle,
@@ -77,18 +90,21 @@ pub mod rt {
     }
 
     impl Handle {
+        /// Get a reference to the Tokio runtime handle.
         pub fn runtime_handle(&self) -> &runtime::Handle {
             &self.rt_handle
         }
     }
 
     impl Drop for Handle {
+        /// Sends shutdown signal to the Tokio runtime, then blocks until the worker thread exits.
         fn drop(&mut self) {
             self.stop_signal.notify_one();
         }
     }
 }
 
+/// Create a worker thread running the provided closure.
 pub fn without_runtime<F: FnOnce() + Send + 'static>(
     config: simple::Config,
     f: F,
@@ -107,6 +123,7 @@ pub fn without_runtime<F: FnOnce() + Send + 'static>(
     })
 }
 
+/// Create a worker thread running a [`tokio::runtime::Runtime`] with the specified configuration.
 pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     if config.io_enabled {
@@ -134,6 +151,7 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     })
 }
 
+/// Create a worker thread running a [`tokio::runtime::LocalRuntime`] with the specified configuration.
 #[cfg(tokio_unstable)]
 pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
