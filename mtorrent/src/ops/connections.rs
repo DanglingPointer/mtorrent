@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 pub struct DiscoveredPeer {
     pub addr: SocketAddr,
     pub origin: PeerOrigin,
-    pub reconnects_left: Option<usize>,
+    pub attempts_made: usize,
 }
 
 #[derive(Debug)]
@@ -67,7 +67,7 @@ impl PeerReporter {
         self.report_discovered(DiscoveredPeer {
             addr,
             origin,
-            reconnects_left: None,
+            attempts_made: 0,
         })
         .await
     }
@@ -251,16 +251,15 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
             .await
             .unwrap_or_else(|e| Err(io::Error::from(e)));
 
-    let reconnects_left = peer.reconnects_left.unwrap_or(C::MAX_CONNECT_RETRIES);
     let (download_chans, upload_chans, extended_chans) = match connect_result {
         Ok(channels) => channels,
         Err(e) => {
-            if reconnects_left > 0 && !is_fatal_error(&e) {
+            if peer.attempts_made < C::MAX_CONNECT_RETRIES && !is_fatal_error(&e) {
                 drop(permit); // free up a slot for other peers
                 time::sleep_until(connect_deadline).await;
                 connector
                     .schedule_reconnect(DiscoveredPeer {
-                        reconnects_left: Some(reconnects_left - 1),
+                        attempts_made: peer.attempts_made + 1,
                         ..peer
                     })
                     .await;
@@ -325,7 +324,7 @@ async fn incoming_pwp_connection<C: PeerConnector>(
             .schedule_reconnect(DiscoveredPeer {
                 addr: peer_addr,
                 origin: PeerOrigin::Listener,
-                reconnects_left: Some(C::MAX_CONNECT_RETRIES),
+                attempts_made: 0,
             })
             .await;
     }
@@ -424,7 +423,7 @@ mod tests {
                 let peer1 = DiscoveredPeer {
                     addr: addr!("1.1.1.1:1111"),
                     origin: PeerOrigin::Other,
-                    reconnects_left: Some(3),
+                    attempts_made: 0,
                 };
                 assert!(reporter.report_discovered(peer1.clone()).await);
 
@@ -445,7 +444,7 @@ mod tests {
                 let peer2 = DiscoveredPeer {
                     addr: addr!("1.1.1.1:2222"),
                     origin: PeerOrigin::Other,
-                    reconnects_left: Some(3),
+                    attempts_made: 0,
                 };
                 assert!(reporter.report_discovered(peer2.clone()).await);
 
@@ -467,7 +466,7 @@ mod tests {
                 let peer3 = DiscoveredPeer {
                     addr: addr!("1.1.1.1:3333"),
                     origin: PeerOrigin::Other,
-                    reconnects_left: Some(3),
+                    attempts_made: 0,
                 };
                 assert!(reporter.report_discovered(peer3.clone()).await);
 
@@ -651,11 +650,11 @@ mod tests {
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Other,
-                reconnects_left: Some(1),
+                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES - 1,
             };
             connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
             connector.expect_reconnect(DiscoveredPeer {
-                reconnects_left: Some(0),
+                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
                 ..peer.clone()
             });
 
@@ -666,7 +665,7 @@ mod tests {
 
             // with no retries left
             let peer = DiscoveredPeer {
-                reconnects_left: Some(0),
+                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
                 ..peer
             };
             connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
@@ -694,7 +693,7 @@ mod tests {
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Other,
-                reconnects_left: Some(1),
+                attempts_made: 0,
             };
             connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
             connector.expect_no_reconnect();
@@ -723,7 +722,7 @@ mod tests {
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Pex,
-                reconnects_left: Some(1),
+                attempts_made: 0,
             };
             connector.expect_discovered(peer.clone(), None);
             connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
@@ -746,7 +745,7 @@ mod tests {
             let peer = DiscoveredPeer {
                 addr: addr!("127.0.0.1:8080"),
                 origin: PeerOrigin::Pex,
-                reconnects_left: Some(1),
+                attempts_made: 0,
             };
             connector.expect_discovered(peer.clone(), None);
             connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
@@ -769,7 +768,7 @@ mod tests {
         let peer = DiscoveredPeer {
             addr: addr!("127.0.0.1:8080"),
             origin: PeerOrigin::Pex,
-            reconnects_left: Some(1),
+            attempts_made: 0,
         };
         connector.expect_discovered(peer.clone(), None);
         connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
@@ -791,7 +790,7 @@ mod tests {
                 let peer = DiscoveredPeer {
                     addr: addr!("127.0.0.1:8080"),
                     origin: PeerOrigin::Pex,
-                    reconnects_left: Some(1),
+                    attempts_made: 0,
                 };
 
                 connector.expect_discovered(peer.clone(), None);
@@ -821,7 +820,7 @@ mod tests {
                 assert!(!task_handle.is_finished());
 
                 connector.expect_reconnect(DiscoveredPeer {
-                    reconnects_left: Some(0),
+                    attempts_made: 1,
                     ..peer.clone()
                 });
                 task::yield_now().await;
@@ -842,7 +841,7 @@ mod tests {
                 let peer = DiscoveredPeer {
                     addr: addr!("127.0.0.1:8080"),
                     origin: PeerOrigin::Pex,
-                    reconnects_left: Some(1),
+                    attempts_made: 0,
                 };
 
                 connector.expect_discovered(
@@ -877,7 +876,7 @@ mod tests {
                 assert!(!task_handle.is_finished());
 
                 connector.expect_reconnect(DiscoveredPeer {
-                    reconnects_left: Some(0),
+                    attempts_made: 1,
                     ..peer.clone()
                 });
                 task::yield_now().await;
@@ -897,7 +896,7 @@ mod tests {
                 let peer = DiscoveredPeer {
                     addr: addr!("127.0.0.1:8080"),
                     origin: PeerOrigin::Pex,
-                    reconnects_left: Some(1),
+                    attempts_made: 0,
                 };
 
                 connector.expect_discovered(peer.clone(), None);
@@ -953,12 +952,12 @@ mod tests {
         let mut peer = DiscoveredPeer {
             addr: addr!("127.0.0.1:8080"),
             origin: PeerOrigin::Other,
-            reconnects_left: None,
+            attempts_made: 0,
         };
 
         for i in 1..MockPeerConnector::MAX_CONNECT_RETRIES {
             let modified_peer = DiscoveredPeer {
-                reconnects_left: Some(MockPeerConnector::MAX_CONNECT_RETRIES - i),
+                attempts_made: i,
                 ..peer.clone()
             };
             connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
@@ -972,7 +971,7 @@ mod tests {
         }
 
         let peer = DiscoveredPeer {
-            reconnects_left: Some(0),
+            attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
             ..peer
         };
         connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
