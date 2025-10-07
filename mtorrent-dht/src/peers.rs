@@ -1,7 +1,7 @@
 use super::u160::U160;
 use local_async_utils::prelude::*;
+use mtorrent_utils::bounded_fifo_set::BoundedFifoSet;
 use sha1_smol::Sha1;
-use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -13,44 +13,31 @@ struct Peer {
 }
 
 /// A FIFO queue with each entry containing a peer's address and the info hash of their torrent.
-pub struct PeerTable {
-    ringbuf: VecDeque<Peer>,
-    set: HashSet<Peer>, // for performance
-}
+pub struct PeerTable(BoundedFifoSet<Peer>);
 
 impl PeerTable {
     const MAX_CAPACITY: usize = 1024 * 4;
 
     pub fn new() -> Self {
-        Self {
-            ringbuf: VecDeque::with_capacity(Self::MAX_CAPACITY),
-            set: HashSet::with_capacity(Self::MAX_CAPACITY + 1),
-        }
+        Self(BoundedFifoSet::new(Self::MAX_CAPACITY))
     }
 
     pub fn add_record(&mut self, info_hash: U160, peer_addr: SocketAddr) {
-        let peer = Peer {
+        self.0.insert_or_replace(Peer {
             info_hash,
             addr: peer_addr,
-        };
-        if self.set.insert(peer.clone()) {
-            if self.ringbuf.len() == Self::MAX_CAPACITY {
-                let popped = self.ringbuf.pop_front().unwrap();
-                self.set.remove(&popped);
-            }
-            self.ringbuf.push_back(peer);
-        }
+        });
     }
 
     pub fn get_peers(&self, info_hash: U160) -> impl Iterator<Item = &SocketAddr> + '_ {
-        self.ringbuf
+        self.0
             .iter()
             .rev()
             .filter_map(move |peer| (peer.info_hash == info_hash).then_some(&peer.addr))
     }
 
     pub fn get_ipv4_peers(&self, info_hash: U160) -> impl Iterator<Item = &SocketAddrV4> + '_ {
-        self.ringbuf.iter().rev().filter_map(move |peer| match &peer.addr {
+        self.0.iter().rev().filter_map(move |peer| match &peer.addr {
             SocketAddr::V4(addr) if peer.info_hash == info_hash => Some(addr),
             _ => None,
         })
@@ -226,30 +213,30 @@ mod tests {
                 SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port as u16),
             );
         }
-        assert_eq!(pt.ringbuf.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.set.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.ringbuf.front().unwrap().addr.port(), 10u16);
-        assert_eq!(pt.ringbuf.back().unwrap().addr.port(), (PeerTable::MAX_CAPACITY + 9) as u16);
+        assert_eq!(pt.0.len(), PeerTable::MAX_CAPACITY);
+        assert_eq!(pt.0.iter().next().unwrap().addr.port(), 10u16);
+        assert_eq!(
+            pt.0.iter().next_back().unwrap().addr.port(),
+            (PeerTable::MAX_CAPACITY + 9) as u16
+        );
 
         // insert the same peer multiple times
         pt.add_record([1u8; 20].into(), "1.1.1.1:12345".parse().unwrap());
         pt.add_record([1u8; 20].into(), "1.1.1.1:12345".parse().unwrap());
         pt.add_record([1u8; 20].into(), "1.1.1.1:12345".parse().unwrap());
 
-        assert_eq!(pt.ringbuf.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.set.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.ringbuf.front().unwrap().addr.port(), 11u16);
-        assert_eq!(pt.ringbuf.back().unwrap().addr.port(), 12345);
+        assert_eq!(pt.0.len(), PeerTable::MAX_CAPACITY);
+        assert_eq!(pt.0.iter().next().unwrap().addr.port(), 11u16);
+        assert_eq!(pt.0.iter().next_back().unwrap().addr.port(), 12345);
         assert_eq!(pt.get_peers([0u8; 20].into()).count(), PeerTable::MAX_CAPACITY - 1);
         assert_eq!(pt.get_peers([1u8; 20].into()).count(), 1);
 
         // reinsert a peer that has been removed
         pt.add_record([0u8; 20].into(), SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0));
 
-        assert_eq!(pt.ringbuf.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.set.len(), PeerTable::MAX_CAPACITY);
-        assert_eq!(pt.ringbuf.front().unwrap().addr.port(), 12u16);
-        assert_eq!(pt.ringbuf.back().unwrap().addr.port(), 0);
+        assert_eq!(pt.0.len(), PeerTable::MAX_CAPACITY);
+        assert_eq!(pt.0.iter().next().unwrap().addr.port(), 12u16);
+        assert_eq!(pt.0.iter().next_back().unwrap().addr.port(), 0);
         assert_eq!(pt.get_peers([0u8; 20].into()).count(), PeerTable::MAX_CAPACITY - 1);
         assert_eq!(pt.get_peers([1u8; 20].into()).count(), 1);
     }
