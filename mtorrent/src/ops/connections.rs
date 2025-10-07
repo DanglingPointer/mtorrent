@@ -2,6 +2,7 @@ use derive_more::Debug;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::{DownloadChannels, ExtendedChannels, PeerOrigin, UploadChannels};
+use mtorrent_utils::bounded_fifo_set::BoundedFifoSet;
 use rand::Rng;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -47,6 +48,7 @@ pub fn connect_control<H: ConnectHandler + 'static>(
         reporter,
         ConnectThrottle {
             connected_peers: HashSet::with_capacity(cmp::min(512, handler.max_connections())),
+            known_peers_fifo: BoundedFifoSet::new(512),
             discovered_peers_receiver: discovered_rx,
             accepted_peers_receiver: accepted_rx,
             disconnected_peers_receiver: disconnect_rx,
@@ -96,6 +98,7 @@ impl Drop for ConnectPermit {
 
 pub struct ConnectThrottle<H> {
     connected_peers: HashSet<SocketAddr>,
+    known_peers_fifo: BoundedFifoSet<SocketAddr>,
 
     discovered_peers_receiver: mpsc::Receiver<DiscoveredPeer>,
     accepted_peers_receiver: mpsc::Receiver<AcceptedPeer>,
@@ -136,6 +139,7 @@ impl<H: ConnectHandler> ConnectThrottle<H> {
     fn on_peer_accepted(&mut self, peer: AcceptedPeer) {
         if self.connected_peers.len() < self.handler.max_connections() {
             self.connected_peers.insert(peer.addr);
+            self.known_peers_fifo.insert_or_replace(peer.addr);
             let permit = ConnectPermit {
                 addr: peer.addr,
                 disconnect_reporter: self.disconnect_reporter.clone(),
@@ -161,15 +165,19 @@ impl<H: ConnectHandler> ConnectThrottle<H> {
             };
             self.on_peer_disconnected(disconnected);
         }
-        if self.connected_peers.insert(peer.addr) {
-            let permit = ConnectPermit {
-                addr: peer.addr,
-                disconnect_reporter: self.disconnect_reporter.clone(),
-            };
-            self.handler.handle_discovered_peer(peer, permit);
-        } else {
-            log::debug!("Ignoring discovered peer {} (already exists)", peer.addr);
+        if peer.attempts_made == 0 && !self.known_peers_fifo.insert_or_replace(peer.addr) {
+            log::debug!("Ignoring discovered peer {}: known peer and not a reconnect", peer.addr);
+            return;
         }
+        if !self.connected_peers.insert(peer.addr) {
+            log::debug!("Ignoring discovered peer {}: already connecting/connected", peer.addr);
+            return;
+        }
+        let permit = ConnectPermit {
+            addr: peer.addr,
+            disconnect_reporter: self.disconnect_reporter.clone(),
+        };
+        self.handler.handle_discovered_peer(peer, permit);
     }
 }
 
@@ -287,7 +295,12 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         drop(permit);
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
-        connector.schedule_reconnect(peer).await;
+        connector
+            .schedule_reconnect(DiscoveredPeer {
+                attempts_made: 1,
+                ..peer
+            })
+            .await;
     }
 
     run_result
@@ -324,7 +337,7 @@ async fn incoming_pwp_connection<C: PeerConnector>(
             .schedule_reconnect(DiscoveredPeer {
                 addr: peer_addr,
                 origin: PeerOrigin::Listener,
-                attempts_made: 0,
+                attempts_made: 1,
             })
             .await;
     }
@@ -396,10 +409,13 @@ mod tests {
         };
     }
 
-    struct MockHandler(tokio::sync::mpsc::UnboundedSender<(DiscoveredPeer, ConnectPermit)>);
+    struct MockHandler {
+        discovered_sender: tokio::sync::mpsc::UnboundedSender<(DiscoveredPeer, ConnectPermit)>,
+        max_connections: usize,
+    }
     impl ConnectHandler for MockHandler {
         fn handle_discovered_peer(&mut self, peer: DiscoveredPeer, permit: ConnectPermit) {
-            self.0.send((peer, permit)).unwrap();
+            self.discovered_sender.send((peer, permit)).unwrap();
         }
 
         fn handle_accepted_peer(&mut self, _peer: AcceptedPeer, _permit: ConnectPermit) {
@@ -407,7 +423,7 @@ mod tests {
         }
 
         fn max_connections(&self) -> usize {
-            2
+            self.max_connections
         }
     }
 
@@ -416,7 +432,10 @@ mod tests {
         task::LocalSet::new()
             .run_until(async {
                 let (tx, mut rx) = mpsc::unbounded_channel();
-                let (reporter, throttle) = connect_control(|_| MockHandler(tx));
+                let (reporter, throttle) = connect_control(|_| MockHandler {
+                    discovered_sender: tx,
+                    max_connections: 2,
+                });
                 task::spawn_local(throttle.run());
 
                 // discover peer 1
@@ -429,7 +448,7 @@ mod tests {
 
                 // get permit for peer 1
                 tokio::task::yield_now().await;
-                let (peer, permit1) = rx.try_recv().unwrap();
+                let (peer, _permit1) = rx.try_recv().unwrap();
                 assert_eq!(peer.addr, peer1.addr);
 
                 // re-discover peer 1
@@ -453,15 +472,6 @@ mod tests {
                 let (peer, permit2) = rx.try_recv().unwrap();
                 assert_eq!(peer.addr, peer2.addr);
 
-                // disconnect peer 1 and re-discover it again
-                drop(permit1);
-                assert!(reporter.report_discovered(peer1.clone()).await);
-
-                // get permit for peer 1
-                tokio::task::yield_now().await;
-                let (peer, _permit1) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer1.addr);
-
                 // discover peer 3
                 let peer3 = DiscoveredPeer {
                     addr: addr!("1.1.1.1:3333"),
@@ -478,10 +488,91 @@ mod tests {
                 // disconnect peer 2 and get permit for peer 3
                 drop(permit2);
                 tokio::task::yield_now().await;
-                let (peer, _permit3) = rx.try_recv().unwrap();
+                let (peer, permit3) = rx.try_recv().unwrap();
                 assert_eq!(peer.addr, peer3.addr);
 
+                // disconnect peer 3 and re-discover peer 2 again
+                drop(permit3);
+                assert!(reporter.report_discovered(peer2.clone()).await);
+
+                // no permit
+                tokio::task::yield_now().await;
+                let e = rx.try_recv().unwrap_err();
+                assert_eq!(e, TryRecvError::Empty);
+
+                // reconnect peer 2
+                assert!(
+                    reporter
+                        .report_discovered(DiscoveredPeer {
+                            attempts_made: 1,
+                            ..peer2
+                        })
+                        .await
+                );
+
+                // get permit for peer 2 retry
+                tokio::task::yield_now().await;
+                let (peer, _permit2) = rx.try_recv().unwrap();
+                assert_eq!(peer.addr, peer2.addr);
+
                 // no pending permits
+                tokio::task::yield_now().await;
+                let e = rx.try_recv().unwrap_err();
+                assert_eq!(e, TryRecvError::Empty);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_connect_ctrl_ignores_duplicates_when_known_peers_fifo_wraps_around() {
+        task::LocalSet::new()
+            .run_until(async {
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                let (reporter, mut throttle) = connect_control(|_| MockHandler {
+                    discovered_sender: tx,
+                    max_connections: 10,
+                });
+                throttle.known_peers_fifo = BoundedFifoSet::new(1);
+                task::spawn_local(throttle.run());
+
+                // discover peer 1
+                let peer1 = DiscoveredPeer {
+                    addr: addr!("1.1.1.1:1111"),
+                    origin: PeerOrigin::Other,
+                    attempts_made: 0,
+                };
+                assert!(reporter.report_discovered(peer1.clone()).await);
+
+                // get permit for peer 1
+                tokio::task::yield_now().await;
+                let (peer, _permit1) = rx.try_recv().unwrap();
+                assert_eq!(peer.addr, peer1.addr);
+
+                // discover peer 2
+                let peer2 = DiscoveredPeer {
+                    addr: addr!("1.1.1.1:2222"),
+                    origin: PeerOrigin::Other,
+                    attempts_made: 0,
+                };
+                assert!(reporter.report_discovered(peer2.clone()).await);
+
+                // get permit for peer 2
+                tokio::task::yield_now().await;
+                let (peer, _permit2) = rx.try_recv().unwrap();
+                assert_eq!(peer.addr, peer2.addr);
+
+                // re-discover peer 1
+                assert!(reporter.report_discovered(peer1.clone()).await);
+
+                // no permit
+                tokio::task::yield_now().await;
+                let e = rx.try_recv().unwrap_err();
+                assert_eq!(e, TryRecvError::Empty);
+
+                // re-discover peer 2
+                assert!(reporter.report_discovered(peer2.clone()).await);
+
+                // no permit
                 tokio::task::yield_now().await;
                 let e = rx.try_recv().unwrap_err();
                 assert_eq!(e, TryRecvError::Empty);
@@ -727,7 +818,10 @@ mod tests {
             connector.expect_discovered(peer.clone(), None);
             connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
             connector.run_connection_for(sec!(6));
-            connector.expect_reconnect(peer.clone());
+            connector.expect_reconnect(DiscoveredPeer {
+                attempts_made: 1,
+                ..peer.clone()
+            });
 
             let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
                 .await
@@ -934,7 +1028,10 @@ mod tests {
                 time::sleep(sec!(1)).await;
                 assert!(!task_handle.is_finished());
 
-                connector.expect_reconnect(peer);
+                connector.expect_reconnect(DiscoveredPeer {
+                    attempts_made: 1,
+                    ..peer
+                });
                 task::yield_now().await;
                 assert!(task_handle.is_finished());
                 let error = task_handle.await.unwrap().unwrap_err();
