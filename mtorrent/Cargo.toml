@@ -26,4 +26,7 @@ derive_more = { workspace = true }
 [dev-dependencies]
 tokio-test = { workspace = true }
 simple_logger = { workspace = true }
+mockall = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }

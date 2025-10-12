@@ -11,7 +11,7 @@ mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
 
-use super::connections::{AcceptedPeer, DiscoveredPeer, PeerConnector, PeerReporter};
+use super::connections::{PeerConnector, PeerReporter};
 use super::{ctrl, ctx};
 use local_async_utils::prelude::*;
 use mtorrent_core::{data, pwp};
@@ -191,16 +191,26 @@ pub struct MainConnectionData {
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
 }
 
-impl PeerConnector for Rc<MainConnectionData> {
-    const CONNECT_TIMEOUT: Duration = sec!(15);
+impl PeerConnector for MainConnectionData {
+    type PeerConnection =
+        (pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>);
 
-    const MAX_CONNECT_RETRIES: usize = 2;
+    fn max_connections(&self) -> usize {
+        200
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        sec!(15)
+    }
+
+    fn max_connect_retries(&self) -> usize {
+        2
+    }
 
     async fn outbound_connect_and_handshake(
         &self,
-        peer: DiscoveredPeer,
-    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
-    {
+        peer_addr: SocketAddr,
+    ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
 
@@ -213,7 +223,7 @@ impl PeerConnector for Rc<MainConnectionData> {
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
-            peer.addr,
+            peer_addr,
             local_port,
             &self.pwp_worker_handle,
         )
@@ -222,9 +232,9 @@ impl PeerConnector for Rc<MainConnectionData> {
 
     async fn inbound_connect_and_handshake(
         &self,
-        peer: AcceptedPeer,
-    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
-    {
+        peer_addr: SocketAddr,
+        stream: tokio::net::TcpStream,
+    ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
 
@@ -234,8 +244,8 @@ impl PeerConnector for Rc<MainConnectionData> {
             &local_peer_id,
             &info_hash,
             EXTENSION_PROTOCOL_ENABLED,
-            peer.addr,
-            peer.stream,
+            peer_addr,
+            stream,
             &self.pwp_worker_handle,
         )
         .await
@@ -244,15 +254,10 @@ impl PeerConnector for Rc<MainConnectionData> {
     async fn run_connection(
         &self,
         origin: pwp::PeerOrigin,
-        download_chans: pwp::DownloadChannels,
-        upload_chans: pwp::UploadChannels,
-        extended_chans: Option<pwp::ExtendedChannels>,
+        connection: Self::PeerConnection,
     ) -> io::Result<()> {
+        let (download_chans, upload_chans, extended_chans) = connection;
         run_peer_connection(origin, download_chans, upload_chans, extended_chans, self).await
-    }
-
-    async fn schedule_reconnect(&self, peer: DiscoveredPeer) {
-        self.peer_reporter.report_discovered(peer).await;
     }
 }
 
@@ -262,15 +267,11 @@ async fn run_metadata_download(
     origin: pwp::PeerOrigin,
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
-    extended_chans: Option<pwp::ExtendedChannels>,
+    extended_chans: pwp::ExtendedChannels,
     mut ctx_handle: PreliminaryHandle,
     peer_reporter: PeerReporter,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
-
-    let extended_chans = extended_chans.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
-    })?;
 
     async fn handle_download(download_chans: pwp::DownloadChannels) -> io::Result<()> {
         let pwp::DownloadChannels(tx, mut rx) = download_chans;
@@ -332,16 +333,25 @@ pub struct PreliminaryConnectionData {
     pub peer_reporter: PeerReporter,
 }
 
-impl PeerConnector for Rc<PreliminaryConnectionData> {
-    const CONNECT_TIMEOUT: Duration = sec!(5);
+impl PeerConnector for PreliminaryConnectionData {
+    type PeerConnection = (pwp::DownloadChannels, pwp::UploadChannels, pwp::ExtendedChannels);
 
-    const MAX_CONNECT_RETRIES: usize = 1;
+    fn max_connections(&self) -> usize {
+        50
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        sec!(5)
+    }
+
+    fn max_connect_retries(&self) -> usize {
+        1
+    }
 
     async fn outbound_connect_and_handshake(
         &self,
-        peer: DiscoveredPeer,
-    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
-    {
+        peer_addr: SocketAddr,
+    ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
 
@@ -350,45 +360,52 @@ impl PeerConnector for Rc<PreliminaryConnectionData> {
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        tcp::new_outbound_connection(
+        let (dl, ul, ext) = tcp::new_outbound_connection(
             &local_peer_id,
             &info_hash,
             true, // extension_protocol_enabled
-            peer.addr,
+            peer_addr,
             local_port,
             &self.pwp_worker_handle,
         )
-        .await
+        .await?;
+        let ext = ext.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
+        })?;
+        Ok((dl, ul, ext))
     }
 
     async fn inbound_connect_and_handshake(
         &self,
-        peer: AcceptedPeer,
-    ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>
-    {
+        peer_addr: SocketAddr,
+        stream: tokio::net::TcpStream,
+    ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
-        tcp::new_inbound_connection(
+        let (dl, ul, ext) = tcp::new_inbound_connection(
             &local_peer_id,
             &info_hash,
             true, // extension_protocol_enabled
-            peer.addr,
-            peer.stream,
+            peer_addr,
+            stream,
             &self.pwp_worker_handle,
         )
-        .await
+        .await?;
+        let ext = ext.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
+        })?;
+        Ok((dl, ul, ext))
     }
 
     async fn run_connection(
         &self,
         origin: pwp::PeerOrigin,
-        download_chans: pwp::DownloadChannels,
-        upload_chans: pwp::UploadChannels,
-        extended_chans: Option<pwp::ExtendedChannels>,
+        connection: Self::PeerConnection,
     ) -> io::Result<()> {
+        let (download_chans, upload_chans, extended_chans) = connection;
         run_metadata_download(
             origin,
             download_chans,
@@ -398,9 +415,5 @@ impl PeerConnector for Rc<PreliminaryConnectionData> {
             self.peer_reporter.clone(),
         )
         .await
-    }
-
-    async fn schedule_reconnect(&self, peer: DiscoveredPeer) {
-        self.peer_reporter.report_discovered(peer).await;
     }
 }

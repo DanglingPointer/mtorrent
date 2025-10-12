@@ -1,5 +1,4 @@
 use super::testutils::*;
-use crate::ops::AcceptedPeer;
 use crate::ops::PeerConnector;
 use crate::ops::PeerReporter;
 use crate::ops::ctx;
@@ -157,9 +156,8 @@ async fn run_listening_seeder(
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, addr) = listener.accept().await.unwrap();
-    let (dl_chan, ul_chan, ext_chan) =
-        data.inbound_connect_and_handshake(AcceptedPeer { addr, stream }).await?;
-    data.run_connection(pwp::PeerOrigin::Listener, dl_chan, ul_chan, ext_chan)
+    let (dl_chan, ul_chan, ext_chan) = data.inbound_connect_and_handshake(addr, stream).await?;
+    data.run_connection(pwp::PeerOrigin::Listener, (dl_chan, ul_chan, ext_chan))
         .await?;
 
     Ok(())

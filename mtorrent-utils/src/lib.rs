@@ -1,6 +1,7 @@
 pub mod bandwidth;
 pub mod benc;
 pub mod bounded_fifo_set;
+pub mod connect_throttle;
 pub mod ip;
 pub mod peer_id;
 pub mod stopwatch;

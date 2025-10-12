@@ -2,6 +2,8 @@ use std::collections::vec_deque::{IntoIter, Iter};
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
+/// Bounded fifo queue that ensures uniqueness of its elements.
+#[derive(Debug)]
 pub struct BoundedFifoSet<T> {
     ringbuf: VecDeque<T>,
     set: HashSet<T>, // for performance
@@ -9,6 +11,7 @@ pub struct BoundedFifoSet<T> {
 }
 
 impl<T> BoundedFifoSet<T> {
+    /// New [`BoundedFifoSet`] that can hold up to `capacity` elements.
     pub fn new(capacity: usize) -> Self {
         Self {
             ringbuf: VecDeque::with_capacity(capacity),
@@ -33,6 +36,8 @@ impl<T> BoundedFifoSet<T> {
 }
 
 impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
+    /// Add a new element unless it already exists.
+    /// Removes the oldest element if the maximum capacity has been reached.
     pub fn insert_or_replace(&mut self, item: T) -> bool {
         if self.set.insert(item.clone()) {
             if self.ringbuf.len() == self.max_capacity {
@@ -43,6 +48,16 @@ impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
             true
         } else {
             false
+        }
+    }
+}
+
+impl<T: Clone> Clone for BoundedFifoSet<T> {
+    fn clone(&self) -> Self {
+        Self {
+            ringbuf: self.ringbuf.clone(),
+            set: self.set.clone(),
+            max_capacity: self.max_capacity,
         }
     }
 }

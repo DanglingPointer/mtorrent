@@ -40,7 +40,7 @@ pub async fn run_dht_search(
         }
         while let Some(peer_addr) = result_receiver.recv().await {
             log::debug!("DHT discovered peer: {peer_addr}");
-            if !peer_reporter.report_discovered_new(peer_addr, PeerOrigin::Dht).await {
+            if !peer_reporter.report_discovered(peer_addr, PeerOrigin::Dht).await {
                 return;
             }
         }

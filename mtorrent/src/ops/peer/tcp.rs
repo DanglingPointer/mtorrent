@@ -1,4 +1,4 @@
-use super::super::{AcceptedPeer, PeerReporter};
+use super::super::PeerReporter;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp;
 use mtorrent_utils::peer_id::PeerId;
@@ -114,7 +114,7 @@ pub async fn run_listener(
         log::info!("TCP listener started on {}", listener.local_addr()?);
         loop {
             let (stream, addr) = listener.accept().await?;
-            peer_reporter.report_accepted(AcceptedPeer { addr, stream }).await;
+            peer_reporter.report_accepted(addr, stream).await;
         }
     };
     canceller.run_until_cancelled_owned(task).await.unwrap_or(Ok(()))

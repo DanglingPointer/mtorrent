@@ -1,134 +1,138 @@
 use derive_more::Debug;
-use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::{DownloadChannels, ExtendedChannels, PeerOrigin, UploadChannels};
-use mtorrent_utils::bounded_fifo_set::BoundedFifoSet;
+use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
 use rand::Rng;
-use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, io};
-use tokio::task;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
-use tokio::{net::TcpStream, select, sync::mpsc};
+use tokio::{select, task};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq, Hash))]
-pub struct DiscoveredPeer {
-    pub addr: SocketAddr,
-    pub origin: PeerOrigin,
-    pub attempts_made: usize,
+#[derive(Debug)]
+struct OutboundConnect {
+    addr: SocketAddr,
+    origin: PeerOrigin,
+    attempt: usize,
 }
 
 #[derive(Debug)]
-pub struct AcceptedPeer {
-    pub addr: SocketAddr,
-    pub stream: TcpStream,
-}
-
-pub trait ConnectHandler {
-    fn max_connections(&self) -> usize;
-    fn handle_discovered_peer(&mut self, peer: DiscoveredPeer, permit: ConnectPermit);
-    fn handle_accepted_peer(&mut self, peer: AcceptedPeer, permit: ConnectPermit);
-}
-
-pub fn connect_control<H: ConnectHandler + 'static>(
-    handler_factory: impl FnOnce(&PeerReporter) -> H,
-) -> (PeerReporter, ConnectThrottle<H>) {
-    let (discovered_tx, discovered_rx) = mpsc::channel(1);
-    let (accepted_tx, accepted_rx) = mpsc::channel(1);
-    let (disconnect_tx, disconnect_rx) = local_unbounded::channel();
-    let reporter = PeerReporter {
-        discovered_reporter: discovered_tx,
-        accepted_reporter: accepted_tx,
-    };
-    let handler = handler_factory(&reporter);
-    (
-        reporter,
-        ConnectThrottle {
-            connected_peers: HashSet::with_capacity(cmp::min(512, handler.max_connections())),
-            known_peers_fifo: BoundedFifoSet::new(512),
-            discovered_peers_receiver: discovered_rx,
-            accepted_peers_receiver: accepted_rx,
-            disconnected_peers_receiver: disconnect_rx,
-            disconnect_reporter: disconnect_tx,
-            handler,
-        },
-    )
+struct InboundConnect {
+    addr: SocketAddr,
+    stream: TcpStream,
 }
 
 #[derive(Clone)]
 pub struct PeerReporter {
-    discovered_reporter: mpsc::Sender<DiscoveredPeer>,
-    accepted_reporter: mpsc::Sender<AcceptedPeer>,
+    discovered_reporter: mpsc::Sender<OutboundConnect>,
+    accepted_reporter: mpsc::Sender<InboundConnect>,
 }
 
 impl PeerReporter {
-    pub async fn report_discovered_new(&self, addr: SocketAddr, origin: PeerOrigin) -> bool {
-        self.report_discovered(DiscoveredPeer {
-            addr,
-            origin,
-            attempts_made: 0,
-        })
-        .await
+    pub async fn report_discovered(&self, addr: SocketAddr, origin: PeerOrigin) -> bool {
+        self.discovered_reporter
+            .send(OutboundConnect {
+                addr,
+                origin,
+                attempt: 0,
+            })
+            .await
+            .is_ok()
     }
 
-    pub async fn report_discovered(&self, peer: DiscoveredPeer) -> bool {
-        self.discovered_reporter.send(peer).await.is_ok()
-    }
-
-    pub async fn report_accepted(&self, peer: AcceptedPeer) -> bool {
-        self.accepted_reporter.send(peer).await.is_ok()
+    pub async fn report_accepted(&self, addr: SocketAddr, stream: TcpStream) -> bool {
+        self.accepted_reporter.send(InboundConnect { addr, stream }).await.is_ok()
     }
 }
 
-#[derive(Debug)]
-pub struct ConnectPermit {
-    addr: SocketAddr,
-    #[debug(skip)]
-    disconnect_reporter: local_unbounded::Sender<SocketAddr>,
+#[cfg_attr(test, mockall::automock(type PeerConnection = i32;))]
+pub trait PeerConnector {
+    type PeerConnection;
+
+    fn max_connections(&self) -> usize;
+    fn connect_timeout(&self) -> Duration;
+    fn max_connect_retries(&self) -> usize;
+
+    fn outbound_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
+    fn inbound_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        stream: TcpStream,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
+    fn run_connection(
+        &self,
+        origin: PeerOrigin,
+        connection: Self::PeerConnection,
+    ) -> impl Future<Output = io::Result<()>>;
 }
 
-impl Drop for ConnectPermit {
-    fn drop(&mut self) {
-        _ = self.disconnect_reporter.send(self.addr);
-    }
+pub fn connect_control<C: PeerConnector + 'static>(
+    connector_factory: impl FnOnce(&PeerReporter) -> C,
+) -> (PeerReporter, ConnectControl<C>) {
+    let (discovered_tx, discovered_rx) = mpsc::channel(1);
+    let (accepted_tx, accepted_rx) = mpsc::channel(1);
+
+    let reporter = PeerReporter {
+        discovered_reporter: discovered_tx.clone(),
+        accepted_reporter: accepted_tx,
+    };
+    let connector = connector_factory(&reporter);
+    (
+        reporter,
+        ConnectControl {
+            reconnect_reporter: discovered_tx,
+            discovered_peers_receiver: discovered_rx,
+            accepted_peers_receiver: accepted_rx,
+            throttle: ConnectThrottle::new(connector.max_connections(), 512),
+            connector: Rc::new(connector),
+            canceller: CancellationToken::new(),
+        },
+    )
 }
 
-pub struct ConnectThrottle<H> {
-    connected_peers: HashSet<SocketAddr>,
-    known_peers_fifo: BoundedFifoSet<SocketAddr>,
-
-    discovered_peers_receiver: mpsc::Receiver<DiscoveredPeer>,
-    accepted_peers_receiver: mpsc::Receiver<AcceptedPeer>,
-
-    disconnected_peers_receiver: local_unbounded::Receiver<SocketAddr>,
-    disconnect_reporter: local_unbounded::Sender<SocketAddr>,
-
-    handler: H,
+pub struct ConnectControl<C: PeerConnector> {
+    reconnect_reporter: mpsc::Sender<OutboundConnect>,
+    discovered_peers_receiver: mpsc::Receiver<OutboundConnect>,
+    accepted_peers_receiver: mpsc::Receiver<InboundConnect>,
+    connector: Rc<C>,
+    throttle: ConnectThrottle,
+    canceller: CancellationToken,
 }
 
-impl<H: ConnectHandler> ConnectThrottle<H> {
+macro_rules! log {
+    ($e:expr, $($arg:tt)+) => {{
+        let lvl = if is_fatal_error(&$e) {
+            log::Level::Warn
+        } else {
+            log::Level::Debug
+        };
+        log::log!(lvl, $($arg)+);
+    }}
+}
+
+impl<C: PeerConnector + 'static> ConnectControl<C> {
     pub async fn run(mut self) {
         loop {
             select! {
                 biased;
-                disconnected = self.disconnected_peers_receiver.next() => {
-                    match disconnected {
-                        Some(peer) => self.on_peer_disconnected(peer),
-                        None => unreachable!(),
-                    }
-                }
                 accepted = self.accepted_peers_receiver.recv() => {
                     match accepted {
-                        Some(peer) => self.on_peer_accepted(peer),
+                        Some(peer) => self.handle_accepted(peer),
                         None => return,
                     }
                 }
                 discovered = self.discovered_peers_receiver.recv() => {
                     match discovered {
-                        Some(peer) => self.on_peer_discovered(peer).await,
+                        Some(peer) => self.handle_discovered(peer).await,
                         None => return,
                     }
                 }
@@ -136,90 +140,54 @@ impl<H: ConnectHandler> ConnectThrottle<H> {
         }
     }
 
-    fn on_peer_accepted(&mut self, peer: AcceptedPeer) {
-        if self.connected_peers.len() < self.handler.max_connections() {
-            self.connected_peers.insert(peer.addr);
-            self.known_peers_fifo.insert_or_replace(peer.addr);
-            let permit = ConnectPermit {
-                addr: peer.addr,
-                disconnect_reporter: self.disconnect_reporter.clone(),
-            };
-            self.handler.handle_accepted_peer(peer, permit);
-        } else {
-            log::warn!("Incoming connection from {} rejected", peer.addr);
+    async fn handle_discovered(&mut self, outbound: OutboundConnect) {
+        if let Some(permit) =
+            self.throttle.permit_for_outbound(outbound.addr, outbound.attempt > 0).await
+        {
+            let peer_addr = outbound.addr;
+            let connector = self.connector.clone();
+            let canceller = self.canceller.clone();
+            let reconnect_reporter = self.reconnect_reporter.clone();
+            task::spawn_local(async move {
+                let result = canceller
+                    .run_until_cancelled(outgoing_pwp_connection(
+                        outbound,
+                        &*connector,
+                        permit,
+                        reconnect_reporter,
+                    ))
+                    .await;
+                if let Some(Err(e)) = result {
+                    log!(e, "Outgoing peer connection to {peer_addr} failed: {e}");
+                }
+            });
         }
     }
 
-    fn on_peer_disconnected(&mut self, peer: SocketAddr) {
-        let removed = self.connected_peers.remove(&peer);
-        if !removed {
-            log::error!("Disconnected peer {peer} was not registered as connected");
-            debug_assert!(false);
-        }
-    }
-
-    async fn on_peer_discovered(&mut self, peer: DiscoveredPeer) {
-        while self.connected_peers.len() == self.handler.max_connections() {
-            let Some(disconnected) = self.disconnected_peers_receiver.next().await else {
-                return;
-            };
-            self.on_peer_disconnected(disconnected);
-        }
-        if peer.attempts_made == 0 && !self.known_peers_fifo.insert_or_replace(peer.addr) {
-            log::debug!("Ignoring discovered peer {}: known peer and not a reconnect", peer.addr);
-            return;
-        }
-        if !self.connected_peers.insert(peer.addr) {
-            log::debug!("Ignoring discovered peer {}: already connecting/connected", peer.addr);
-            return;
-        }
-        let permit = ConnectPermit {
-            addr: peer.addr,
-            disconnect_reporter: self.disconnect_reporter.clone(),
-        };
-        self.handler.handle_discovered_peer(peer, permit);
-    }
-}
-
-#[cfg(test)]
-impl PeerReporter {
-    pub fn new_mock() -> Self {
-        let (discovered_tx, _discovered_rx) = mpsc::channel(1);
-        let (accepted_tx, _accepted_rx) = mpsc::channel(1);
-        Self {
-            discovered_reporter: discovered_tx,
-            accepted_reporter: accepted_tx,
+    fn handle_accepted(&mut self, inbound: InboundConnect) {
+        if let Some(permit) = self.throttle.permit_for_inbound(inbound.addr) {
+            let peer_addr = inbound.addr;
+            let connector = self.connector.clone();
+            let canceller = self.canceller.clone();
+            let reconnect_reporter = self.reconnect_reporter.clone();
+            task::spawn_local(async move {
+                let result = canceller
+                    .run_until_cancelled(incoming_pwp_connection(
+                        inbound,
+                        &*connector,
+                        permit,
+                        reconnect_reporter,
+                    ))
+                    .await;
+                if let Some(Err(e)) = result {
+                    log!(e, "Incoming peer connection from {peer_addr} failed: {e}");
+                }
+            });
         }
     }
 }
 
 // ------------------------------------------------------------------------------------------------
-
-pub(super) trait PeerConnector {
-    const CONNECT_TIMEOUT: Duration;
-
-    const MAX_CONNECT_RETRIES: usize;
-
-    fn outbound_connect_and_handshake(
-        &self,
-        peer: DiscoveredPeer,
-    ) -> impl Future<Output = io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>>;
-
-    fn inbound_connect_and_handshake(
-        &self,
-        peer: AcceptedPeer,
-    ) -> impl Future<Output = io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>>;
-
-    fn run_connection(
-        &self,
-        origin: PeerOrigin,
-        download_chans: DownloadChannels,
-        upload_chans: UploadChannels,
-        extended_chans: Option<ExtendedChannels>,
-    ) -> impl Future<Output = io::Result<()>>;
-
-    fn schedule_reconnect(&self, peer: DiscoveredPeer) -> impl Future<Output = ()>;
-}
 
 fn is_fatal_error(e: &io::Error) -> bool {
     match e.kind() {
@@ -247,28 +215,29 @@ fn with_jitter(duration: Duration) -> Duration {
 }
 
 async fn outgoing_pwp_connection<C: PeerConnector>(
-    peer: DiscoveredPeer,
+    outbound: OutboundConnect,
     connector: &C,
-    permit: ConnectPermit,
+    mut permit: ConnectPermit,
+    reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
-    log::debug!("Connecting to {peer:?}");
-    let connect_deadline = Instant::now() + with_jitter(C::CONNECT_TIMEOUT);
+    log::debug!("Connecting to {outbound:?}");
+    let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
     let connect_result =
-        time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(peer.clone()))
+        time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(outbound.addr))
             .await
             .unwrap_or_else(|e| Err(io::Error::from(e)));
 
-    let (download_chans, upload_chans, extended_chans) = match connect_result {
-        Ok(channels) => channels,
+    let connection = match connect_result {
+        Ok(connection) => connection,
         Err(e) => {
-            if peer.attempts_made < C::MAX_CONNECT_RETRIES && !is_fatal_error(&e) {
-                drop(permit); // free up a slot for other peers
+            if outbound.attempt < connector.max_connect_retries() && !is_fatal_error(&e) {
+                permit.release_slot();
                 time::sleep_until(connect_deadline).await;
-                connector
-                    .schedule_reconnect(DiscoveredPeer {
-                        attempts_made: peer.attempts_made + 1,
-                        ..peer
+                _ = reconnect_reporter
+                    .send(OutboundConnect {
+                        attempt: outbound.attempt + 1,
+                        ..outbound
                     })
                     .await;
             }
@@ -276,12 +245,10 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         }
     };
 
-    log::debug!("Successful outgoing connection to {peer:?}");
+    log::debug!("Successful outgoing connection to {outbound:?}");
     let connected_time = Instant::now();
 
-    let run_result = connector
-        .run_connection(peer.origin, download_chans, upload_chans, extended_chans)
-        .await;
+    let run_result = connector.run_connection(outbound.origin, connection).await;
 
     // Fatal error means we disconnected the peer intentionally, and
     // <5s since connect means peer probably didn't like our handshake.
@@ -290,15 +257,14 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         && !is_fatal_error(e)
         && connected_time.elapsed() > sec!(5)
     {
-        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", peer.addr);
-        // free up a slot for other peers
-        drop(permit);
+        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", outbound.addr);
+        permit.release_slot();
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
-        connector
-            .schedule_reconnect(DiscoveredPeer {
-                attempts_made: 1,
-                ..peer
+        _ = reconnect_reporter
+            .send(OutboundConnect {
+                attempt: 1,
+                ..outbound
             })
             .await;
     }
@@ -307,91 +273,55 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
 }
 
 async fn incoming_pwp_connection<C: PeerConnector>(
-    peer: AcceptedPeer,
+    inbound: InboundConnect,
     connector: &C,
-    permit: ConnectPermit,
+    mut permit: ConnectPermit,
+    reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
-    log::debug!("Accepted {peer:?}");
-    let peer_addr = peer.addr;
-    let connect_deadline = Instant::now() + with_jitter(C::CONNECT_TIMEOUT);
+    log::debug!("Accepted {inbound:?}");
+    let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
-    let (download_chans, upload_chans, extended_chans) =
-        time::timeout_at(connect_deadline, connector.inbound_connect_and_handshake(peer)).await??;
+    let connection = time::timeout_at(
+        connect_deadline,
+        connector.inbound_connect_and_handshake(inbound.addr, inbound.stream),
+    )
+    .await??;
 
-    log::debug!("Successful incoming connection from {peer_addr}");
+    log::debug!("Successful incoming connection from {}", inbound.addr);
 
-    let run_result = connector
-        .run_connection(PeerOrigin::Listener, download_chans, upload_chans, extended_chans)
-        .await;
+    let run_result = connector.run_connection(PeerOrigin::Listener, connection).await;
 
     // Fatal error means we disconnected the peer intentionally
     if let Err(e) = &run_result
         && !is_fatal_error(e)
     {
-        log::warn!("Peer {peer_addr} disconnected: {e}. Reconnecting in 1s...");
-        // free up a slot for other peers
-        drop(permit);
+        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", inbound.addr);
+        permit.release_slot();
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
-        connector
-            .schedule_reconnect(DiscoveredPeer {
-                addr: peer_addr,
+
+        _ = reconnect_reporter
+            .send(OutboundConnect {
+                addr: inbound.addr,
                 origin: PeerOrigin::Listener,
-                attempts_made: 1,
+                attempt: 1,
             })
             .await;
     }
     run_result
 }
 
-pub struct CancellingConnectHandler<C> {
-    pub connector: C,
-    pub max_connections: usize,
-    pub canceller: CancellationToken,
-}
+// ------------------------------------------------------------------------------------------------
 
-macro_rules! log {
-    ($e:expr, $($arg:tt)+) => {{
-        let lvl = if is_fatal_error(&$e) {
-            log::Level::Warn
-        } else {
-            log::Level::Debug
-        };
-        log::log!(lvl, $($arg)+);
-    }}
-}
-
-impl<C: PeerConnector + Clone + 'static> ConnectHandler for CancellingConnectHandler<C> {
-    fn max_connections(&self) -> usize {
-        self.max_connections
-    }
-
-    fn handle_discovered_peer(&mut self, peer: DiscoveredPeer, permit: ConnectPermit) {
-        let peer_addr = peer.addr;
-        let data = self.connector.clone();
-        let canceller = self.canceller.clone();
-        task::spawn_local(async move {
-            let result = canceller
-                .run_until_cancelled(outgoing_pwp_connection(peer, &data, permit))
-                .await;
-            if let Some(Err(e)) = result {
-                log!(e, "Outgoing peer connection to {peer_addr} failed: {e}");
-            }
-        });
-    }
-
-    fn handle_accepted_peer(&mut self, peer: AcceptedPeer, permit: ConnectPermit) {
-        let peer_addr = peer.addr;
-        let data = self.connector.clone();
-        let canceller = self.canceller.clone();
-        task::spawn_local(async move {
-            let result = canceller
-                .run_until_cancelled(incoming_pwp_connection(peer, &data, permit))
-                .await;
-            if let Some(Err(e)) = result {
-                log!(e, "Incoming peer connection from {peer_addr} failed: {e}");
-            }
-        });
+#[cfg(test)]
+impl PeerReporter {
+    pub fn new_mock() -> Self {
+        let (discovered_tx, _discovered_rx) = mpsc::channel(1);
+        let (accepted_tx, _accepted_rx) = mpsc::channel(1);
+        Self {
+            discovered_reporter: discovered_tx,
+            accepted_reporter: accepted_tx,
+        }
     }
 }
 
@@ -399,684 +329,436 @@ impl<C: PeerConnector + Clone + 'static> ConnectHandler for CancellingConnectHan
 mod tests {
     use super::*;
     use futures_util::FutureExt;
-    use mtorrent_core::pwp::{Handshake, channels_from_mock};
-    use std::{cell::Cell, rc::Rc, str::FromStr};
-    use tokio::{io, sync::mpsc::error::TryRecvError, task};
+    use mockall::predicate::eq;
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
+    use std::future::pending;
+    use std::net::Ipv4Addr;
+    use tokio::runtime::UnhandledPanic;
+    use tokio::time::sleep;
 
-    macro_rules! addr {
-        ($addr:literal) => {
-            SocketAddr::from_str($addr).unwrap()
-        };
+    fn addr(port: u16) -> SocketAddr {
+        (Ipv4Addr::LOCALHOST, port).into()
     }
 
-    struct MockHandler {
-        discovered_sender: tokio::sync::mpsc::UnboundedSender<(DiscoveredPeer, ConnectPermit)>,
-        max_connections: usize,
-    }
-    impl ConnectHandler for MockHandler {
-        fn handle_discovered_peer(&mut self, peer: DiscoveredPeer, permit: ConnectPermit) {
-            self.discovered_sender.send((peer, permit)).unwrap();
-        }
+    /// ```no_run
+    /// run_in_local_set! { }
+    /// ```
+    macro_rules! run_in_local_set {
+        ($($tokens:tt)+) => {{
+            task::LocalSet::new()
+                .unhandled_panic(UnhandledPanic::ShutdownRuntime)
+                .run_until(async move {
+                    $($tokens)+
 
-        fn handle_accepted_peer(&mut self, _peer: AcceptedPeer, _permit: ConnectPermit) {
-            unimplemented!()
-        }
-
-        fn max_connections(&self) -> usize {
-            self.max_connections
-        }
+                    sleep(Duration::MAX).await;
+                }).await;
+        }};
     }
 
-    #[tokio::test]
-    async fn test_connect_ctrl_ignores_duplicates_and_respects_budget() {
-        task::LocalSet::new()
-            .run_until(async {
-                let (tx, mut rx) = mpsc::unbounded_channel();
-                let (reporter, throttle) = connect_control(|_| MockHandler {
-                    discovered_sender: tx,
-                    max_connections: 2,
-                });
-                task::spawn_local(throttle.run());
-
-                // discover peer 1
-                let peer1 = DiscoveredPeer {
-                    addr: addr!("1.1.1.1:1111"),
-                    origin: PeerOrigin::Other,
-                    attempts_made: 0,
-                };
-                assert!(reporter.report_discovered(peer1.clone()).await);
-
-                // get permit for peer 1
-                tokio::task::yield_now().await;
-                let (peer, _permit1) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer1.addr);
-
-                // re-discover peer 1
-                assert!(reporter.report_discovered(peer1.clone()).await);
-
-                // no permit
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-
-                // discover peer 2
-                let peer2 = DiscoveredPeer {
-                    addr: addr!("1.1.1.1:2222"),
-                    origin: PeerOrigin::Other,
-                    attempts_made: 0,
-                };
-                assert!(reporter.report_discovered(peer2.clone()).await);
-
-                // get permit for peer 2
-                tokio::task::yield_now().await;
-                let (peer, permit2) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer2.addr);
-
-                // discover peer 3
-                let peer3 = DiscoveredPeer {
-                    addr: addr!("1.1.1.1:3333"),
-                    origin: PeerOrigin::Other,
-                    attempts_made: 0,
-                };
-                assert!(reporter.report_discovered(peer3.clone()).await);
-
-                // no bugdet no permit
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-
-                // disconnect peer 2 and get permit for peer 3
-                drop(permit2);
-                tokio::task::yield_now().await;
-                let (peer, permit3) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer3.addr);
-
-                // disconnect peer 3 and re-discover peer 2 again
-                drop(permit3);
-                assert!(reporter.report_discovered(peer2.clone()).await);
-
-                // no permit
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-
-                // reconnect peer 2
-                assert!(
-                    reporter
-                        .report_discovered(DiscoveredPeer {
-                            attempts_made: 1,
-                            ..peer2
-                        })
-                        .await
-                );
-
-                // get permit for peer 2 retry
-                tokio::task::yield_now().await;
-                let (peer, _permit2) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer2.addr);
-
-                // no pending permits
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn test_connect_ctrl_ignores_duplicates_when_known_peers_fifo_wraps_around() {
-        task::LocalSet::new()
-            .run_until(async {
-                let (tx, mut rx) = mpsc::unbounded_channel();
-                let (reporter, mut throttle) = connect_control(|_| MockHandler {
-                    discovered_sender: tx,
-                    max_connections: 10,
-                });
-                throttle.known_peers_fifo = BoundedFifoSet::new(1);
-                task::spawn_local(throttle.run());
-
-                // discover peer 1
-                let peer1 = DiscoveredPeer {
-                    addr: addr!("1.1.1.1:1111"),
-                    origin: PeerOrigin::Other,
-                    attempts_made: 0,
-                };
-                assert!(reporter.report_discovered(peer1.clone()).await);
-
-                // get permit for peer 1
-                tokio::task::yield_now().await;
-                let (peer, _permit1) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer1.addr);
-
-                // discover peer 2
-                let peer2 = DiscoveredPeer {
-                    addr: addr!("1.1.1.1:2222"),
-                    origin: PeerOrigin::Other,
-                    attempts_made: 0,
-                };
-                assert!(reporter.report_discovered(peer2.clone()).await);
-
-                // get permit for peer 2
-                tokio::task::yield_now().await;
-                let (peer, _permit2) = rx.try_recv().unwrap();
-                assert_eq!(peer.addr, peer2.addr);
-
-                // re-discover peer 1
-                assert!(reporter.report_discovered(peer1.clone()).await);
-
-                // no permit
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-
-                // re-discover peer 2
-                assert!(reporter.report_discovered(peer2.clone()).await);
-
-                // no permit
-                tokio::task::yield_now().await;
-                let e = rx.try_recv().unwrap_err();
-                assert_eq!(e, TryRecvError::Empty);
-            })
-            .await;
-    }
-
-    fn mock_permit() -> ConnectPermit {
-        let (tx, _rx) = local_unbounded::channel();
-        ConnectPermit {
-            addr: addr!("127.0.0.1:8080"),
-            disconnect_reporter: tx,
-        }
-    }
-
-    #[derive(Default)]
-    struct MockPeerConnector {
-        expected_discovered: Cell<Option<DiscoveredPeer>>,
-        on_discovered_error: Cell<Option<io::Error>>,
-        on_discovered_timeout: Cell<bool>,
-
-        expected_accepted: Cell<Option<AcceptedPeer>>,
-        on_accepted_error: Cell<Option<io::Error>>,
-        on_accepted_timeout: Cell<bool>,
-
-        expected_connection_origin: Cell<Option<PeerOrigin>>,
-        connection_run_error: Cell<Option<io::Error>>,
-        run_connection_duration: Cell<Option<Duration>>,
-
-        expected_reconnect: Cell<Option<DiscoveredPeer>>,
-    }
-    impl Drop for MockPeerConnector {
-        fn drop(&mut self) {
-            assert!(self.expected_discovered.take().is_none());
-            assert!(self.on_discovered_error.take().is_none());
-            assert!(!self.on_discovered_timeout.replace(false));
-
-            assert!(self.expected_accepted.take().is_none());
-            assert!(self.on_accepted_error.take().is_none());
-            assert!(!self.on_accepted_timeout.replace(false));
-
-            assert!(self.expected_connection_origin.take().is_none());
-            assert!(self.connection_run_error.take().is_none());
-            assert!(self.run_connection_duration.replace(None).is_none());
-
-            assert!(self.expected_reconnect.take().is_none());
-        }
-    }
-    impl MockPeerConnector {
-        fn expect_discovered(&self, peer: DiscoveredPeer, error: Option<io::Error>) {
-            self.expected_discovered.set(Some(peer));
-            self.on_discovered_error.set(error);
-        }
-        fn on_discovered_timeout(&self) {
-            self.on_discovered_timeout.set(true);
-        }
-        #[expect(dead_code)]
-        fn expect_accepted(&self, peer: AcceptedPeer, error: Option<io::Error>) {
-            self.expected_accepted.set(Some(peer));
-            self.on_accepted_error.set(error);
-        }
-        #[expect(dead_code)]
-        fn on_accepted_timeout(&self) {
-            self.on_accepted_timeout.set(true);
-        }
-        fn expect_run_connection(&self, origin: PeerOrigin, error: Option<io::Error>) {
-            self.expected_connection_origin.set(Some(origin));
-            self.connection_run_error.set(error);
-        }
-        fn run_connection_for(&self, duration: Duration) {
-            self.run_connection_duration.set(Some(duration));
-        }
-        fn expect_reconnect(&self, peer: DiscoveredPeer) {
-            self.expected_reconnect.set(Some(peer));
-        }
-        fn expect_no_reconnect(&self) {
-            self.expected_reconnect.set(None);
-        }
-    }
-    impl PeerConnector for MockPeerConnector {
-        const CONNECT_TIMEOUT: Duration = sec!(15);
-
-        const MAX_CONNECT_RETRIES: usize = 3;
-
-        fn outbound_connect_and_handshake(
-            &self,
-            peer: DiscoveredPeer,
-        ) -> impl Future<Output = io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>>
-        {
-            let expected = self.expected_discovered.take();
-            let error = self.on_discovered_error.take();
-            async move {
-                let peer_addr = peer.addr;
-                assert_eq!(Some(peer), expected);
-
-                if self.on_discovered_timeout.replace(false) {
-                    std::future::pending::<()>().await;
-                }
-                if let Some(e) = error {
-                    Err(e)
-                } else {
-                    Ok(channels_from_mock(peer_addr, Handshake::default(), false, io::empty()))
-                }
-            }
-        }
-        fn inbound_connect_and_handshake(
-            &self,
-            peer: AcceptedPeer,
-        ) -> impl Future<Output = io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>>
-        {
-            let expected = self.expected_accepted.take();
-            let error = self.on_accepted_error.take();
-            async move {
-                assert_eq!(peer.addr, expected.unwrap().addr);
-
-                if self.on_accepted_timeout.replace(false) {
-                    std::future::pending::<()>().await;
-                }
-                if let Some(e) = error {
-                    Err(e)
-                } else {
-                    Ok(channels_from_mock(peer.addr, Handshake::default(), false, io::empty()))
-                }
-            }
-        }
-        fn run_connection(
-            &self,
-            origin: PeerOrigin,
-            _download_chans: DownloadChannels,
-            _upload_chans: UploadChannels,
-            _extended_chans: Option<ExtendedChannels>,
-        ) -> impl Future<Output = io::Result<()>> {
-            let expected = self.expected_connection_origin.take();
-            let error = self.connection_run_error.take();
-            async move {
-                assert_eq!(Some(origin), expected);
-                if let Some(duration) = self.run_connection_duration.replace(None) {
-                    time::sleep(duration).await;
-                }
-                if let Some(e) = error { Err(e) } else { Ok(()) }
-            }
-        }
-        fn schedule_reconnect(&self, peer: DiscoveredPeer) -> impl Future<Output = ()> {
-            let expected = self.expected_reconnect.take();
-            async move {
-                assert_eq!(Some(peer), expected);
-            }
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_outbound_retry_on_connect_error() {
-        let retriable_errors = [
+    #[template]
+    #[rstest]
+    fn for_retriable_errors(
+        #[values(
             io::ErrorKind::ConnectionRefused,
             io::ErrorKind::ConnectionReset,
             io::ErrorKind::UnexpectedEof,
             io::ErrorKind::TimedOut,
             io::ErrorKind::AddrInUse,
             io::ErrorKind::AddrNotAvailable,
-            io::ErrorKind::Interrupted,
-        ];
-
-        for error_kind in retriable_errors {
-            let connector = MockPeerConnector::default();
-            // with 1 retry left
-            let peer = DiscoveredPeer {
-                addr: addr!("127.0.0.1:8080"),
-                origin: PeerOrigin::Other,
-                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES - 1,
-            };
-            connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
-            connector.expect_reconnect(DiscoveredPeer {
-                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
-                ..peer.clone()
-            });
-
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
-
-            // with no retries left
-            let peer = DiscoveredPeer {
-                attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
-                ..peer
-            };
-            connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
-            connector.expect_no_reconnect();
-
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
-        }
+            io::ErrorKind::Interrupted
+        )]
+        error_kind: io::ErrorKind,
+    ) {
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_no_outbound_retry_on_connect_error() {
-        let non_retriable_errors = [
+    #[template]
+    #[rstest]
+    fn for_fatal_errors(
+        #[values(
             io::ErrorKind::PermissionDenied,
             io::ErrorKind::AlreadyExists,
             io::ErrorKind::InvalidInput,
             io::ErrorKind::InvalidData,
-            io::ErrorKind::Other,
-        ];
+            io::ErrorKind::Other
+        )]
+        error_kind: io::ErrorKind,
+    ) {
+    }
 
-        for error_kind in non_retriable_errors {
-            let connector = MockPeerConnector::default();
-            let peer = DiscoveredPeer {
-                addr: addr!("127.0.0.1:8080"),
-                origin: PeerOrigin::Other,
-                attempts_made: 0,
-            };
-            connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
-            connector.expect_no_reconnect();
+    #[apply(for_retriable_errors)]
+    #[tokio::test(start_paused = true)]
+    async fn test_outbound_connect_retry_on_error(error_kind: io::ErrorKind) {
+        let start_time = Instant::now();
+        let peer_addr = addr(1);
 
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
+            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(20))
+            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_run_connection_reconnect() {
-        let retriable_errors = [
-            io::ErrorKind::ConnectionRefused,
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::UnexpectedEof,
-            io::ErrorKind::TimedOut,
-            io::ErrorKind::AddrInUse,
-            io::ErrorKind::AddrNotAvailable,
-            io::ErrorKind::Interrupted,
-        ];
+    async fn test_outbound_connect_retry_on_timeout() {
+        let start_time = Instant::now();
+        let peer_addr = addr(1);
 
-        for error_kind in retriable_errors {
-            let connector = MockPeerConnector::default();
-            let peer = DiscoveredPeer {
-                addr: addr!("127.0.0.1:8080"),
-                origin: PeerOrigin::Pex,
-                attempts_made: 0,
-            };
-            connector.expect_discovered(peer.clone(), None);
-            connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
-            connector.run_connection_for(sec!(6));
-            connector.expect_reconnect(DiscoveredPeer {
-                attempts_made: 1,
-                ..peer.clone()
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_| {
+                async move {
+                    sleep(sec!(11)).await;
+                    Ok(42)
+                }
+                .boxed()
+            });
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
+            .returning(move |_| {
+                async move {
+                    sleep(sec!(11)).await;
+                    Ok(42)
+                }
+                .boxed()
+            });
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(20))
+            .returning(move |_| {
+                async move {
+                    sleep(sec!(11)).await;
+                    Ok(42)
+                }
+                .boxed()
             });
 
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_run_connection_no_reconnect_on_fatal_error() {
-        let fatal_errors = [io::ErrorKind::Other, io::ErrorKind::Unsupported];
+    async fn test_successful_connect_after_retry() {
+        let start_time = Instant::now();
+        let peer_addr = addr(1);
 
-        for error_kind in fatal_errors {
-            let connector = MockPeerConnector::default();
-            let peer = DiscoveredPeer {
-                addr: addr!("127.0.0.1:8080"),
-                origin: PeerOrigin::Pex,
-                attempts_made: 0,
-            };
-            connector.expect_discovered(peer.clone(), None);
-            connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
-            connector.run_connection_for(sec!(6));
-            connector.expect_no_reconnect();
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
 
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_| {
+                async move {
+                    sleep(sec!(11)).await;
+                    Ok(42)
+                }
+                .boxed()
+            });
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
+            .returning(move |_| {
+                async move {
+                    sleep(sec!(10)).await;
+                    Ok(43)
+                }
+                .boxed()
+            });
+        connector
+            .expect_run_connection()
+            .once()
+            .withf(move |origin, c| {
+                *origin == PeerOrigin::Tracker
+                    && *c == 43
+                    && Instant::now() == start_time + sec!(20)
+            })
+            .returning(|_, _| pending::<io::Result<()>>().boxed());
+
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+        }
+    }
+
+    #[apply(for_fatal_errors)]
+    #[tokio::test(start_paused = true)]
+    async fn test_outbound_connect_no_retry(error_kind: io::ErrorKind) {
+        run_in_local_set! {
+            let start_time = Instant::now();
+            let peer_addr = addr(1);
+
+            let mut connector = MockPeerConnector::new();
+            connector.expect_max_connections().return_const(100usize);
+            connector.expect_connect_timeout().return_const(sec!(10));
+            connector.expect_max_connect_retries().return_const(2usize);
+
+            connector
+                .expect_outbound_connect_and_handshake()
+                .once()
+                .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
+                .returning(move |_| {
+                    async move { Err(io::Error::from(error_kind)) }.boxed()
+                });
+
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+        }
+    }
+
+    #[apply(for_retriable_errors)]
+    #[tokio::test(start_paused = true)]
+    async fn test_run_connection_reconnect(error_kind: io::ErrorKind) {
+        run_in_local_set! {
+            let peer_addr = addr(1);
+
+            let mut connector = MockPeerConnector::new();
+            connector.expect_max_connections().return_const(100usize);
+            connector.expect_connect_timeout().return_const(sec!(10));
+            connector.expect_max_connect_retries().return_const(2usize);
+
+            connector
+                .expect_outbound_connect_and_handshake()
+                .times(9)
+                .returning(|_| {
+                    async move { Ok(42) }.boxed()
+                });
+            connector
+                .expect_run_connection()
+                .times(9)
+                .with(eq(PeerOrigin::Tracker), eq(42))
+                .returning(move |_, _| {
+                    async move {
+                        sleep(sec!(6)).await;
+                        Err(io::Error::from(error_kind))
+                    }.boxed()
+                });
+
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+            sleep(sec!(60)).await;
+            task::yield_now().await;
+            drop(reporter);
+        }
+    }
+
+    #[apply(for_fatal_errors)]
+    #[tokio::test(start_paused = true)]
+    async fn test_run_connection_no_reconnect_on_fatal_error(error_kind: io::ErrorKind) {
+        let peer_addr = addr(1);
+
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .returning(|_| async move { Ok(42) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Tracker), eq(42))
+            .returning(move |_, _| {
+                async move {
+                    sleep(sec!(20)).await;
+                    Err(io::Error::from(error_kind))
+                }
+                .boxed()
+            });
+
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
         }
     }
 
     #[tokio::test(start_paused = true)]
     async fn test_run_connection_no_reconnect_if_short_lived() {
-        let connector = MockPeerConnector::default();
+        let peer_addr = addr(1);
 
-        let error_kind = io::ErrorKind::UnexpectedEof;
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
 
-        let peer = DiscoveredPeer {
-            addr: addr!("127.0.0.1:8080"),
-            origin: PeerOrigin::Pex,
-            attempts_made: 0,
-        };
-        connector.expect_discovered(peer.clone(), None);
-        connector.expect_run_connection(PeerOrigin::Pex, Some(io::Error::from(error_kind)));
-        connector.run_connection_for(sec!(5));
-        connector.expect_no_reconnect();
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .returning(|_| async move { Ok(42) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Tracker), eq(42))
+            .returning(move |_, _| {
+                async move {
+                    sleep(sec!(5)).await;
+                    Err(io::Error::from(io::ErrorKind::UnexpectedEof))
+                }
+                .boxed()
+            });
 
-        let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), error_kind);
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+            sleep(sec!(1)).await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+        }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn test_outbound_connect_timeout() {
-        task::LocalSet::new()
-            .run_until(async {
-                let connector = Rc::new(MockPeerConnector::default());
+    async fn test_run_concurrent_connections_up_to_capacity() {
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
 
-                let peer = DiscoveredPeer {
-                    addr: addr!("127.0.0.1:8080"),
-                    origin: PeerOrigin::Pex,
-                    attempts_made: 0,
-                };
+        for port in 1..=100 {
+            let addr = addr(port);
 
-                connector.expect_discovered(peer.clone(), None);
-                connector.on_discovered_timeout();
-                connector.expect_no_reconnect();
-
-                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
-                let task_handle = task::spawn_local({
-                    let connector = connector.clone();
-                    let peer = peer.clone();
-                    async move {
-                        outgoing_pwp_connection(
-                            peer,
-                            &*connector,
-                            ConnectPermit {
-                                addr: addr!("127.0.0.1:8080"),
-                                disconnect_reporter,
-                            },
-                        )
-                        .await
-                    }
-                });
-                assert!(!task_handle.is_finished());
-
-                time::sleep(sec!(15)).await;
-                assert!(permit_drop_receiver.next().now_or_never().is_none());
-                assert!(!task_handle.is_finished());
-
-                connector.expect_reconnect(DiscoveredPeer {
-                    attempts_made: 1,
-                    ..peer.clone()
-                });
-                task::yield_now().await;
-                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
-                assert!(task_handle.is_finished());
-                let error = task_handle.await.unwrap().unwrap_err();
-                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-            })
-            .await;
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_outbound_connect_retry_interval() {
-        task::LocalSet::new()
-            .run_until(async {
-                let connector = Rc::new(MockPeerConnector::default());
-
-                let peer = DiscoveredPeer {
-                    addr: addr!("127.0.0.1:8080"),
-                    origin: PeerOrigin::Pex,
-                    attempts_made: 0,
-                };
-
-                connector.expect_discovered(
-                    peer.clone(),
-                    Some(io::Error::from(io::ErrorKind::UnexpectedEof)),
-                );
-                connector.expect_no_reconnect();
-
-                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
-                let task_handle = task::spawn_local({
-                    let connector = connector.clone();
-                    let peer = peer.clone();
-                    async move {
-                        outgoing_pwp_connection(
-                            peer,
-                            &*connector,
-                            ConnectPermit {
-                                addr: addr!("127.0.0.1:8080"),
-                                disconnect_reporter,
-                            },
-                        )
-                        .await
-                    }
-                });
-                assert!(!task_handle.is_finished());
-                assert!(permit_drop_receiver.next().now_or_never().is_none());
-
-                task::yield_now().await;
-                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
-
-                time::sleep(sec!(15)).await;
-                assert!(!task_handle.is_finished());
-
-                connector.expect_reconnect(DiscoveredPeer {
-                    attempts_made: 1,
-                    ..peer.clone()
-                });
-                task::yield_now().await;
-                assert!(task_handle.is_finished());
-                let error = task_handle.await.unwrap().unwrap_err();
-                assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
-            })
-            .await;
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_run_connection_reconnect_interval() {
-        task::LocalSet::new()
-            .run_until(async {
-                let connector = Rc::new(MockPeerConnector::default());
-
-                let peer = DiscoveredPeer {
-                    addr: addr!("127.0.0.1:8080"),
-                    origin: PeerOrigin::Pex,
-                    attempts_made: 0,
-                };
-
-                connector.expect_discovered(peer.clone(), None);
-                connector.expect_run_connection(
-                    PeerOrigin::Pex,
-                    Some(io::Error::from(io::ErrorKind::UnexpectedEof)),
-                );
-                connector.run_connection_for(sec!(6));
-                connector.expect_no_reconnect();
-
-                let (disconnect_reporter, mut permit_drop_receiver) = local_unbounded::channel();
-                let task_handle = task::spawn_local({
-                    let connector = connector.clone();
-                    let peer = peer.clone();
-                    async move {
-                        outgoing_pwp_connection(
-                            peer,
-                            &*connector,
-                            ConnectPermit {
-                                addr: addr!("127.0.0.1:8080"),
-                                disconnect_reporter,
-                            },
-                        )
-                        .await
-                    }
-                });
-                assert!(!task_handle.is_finished());
-
-                time::sleep(sec!(6)).await;
-                assert!(permit_drop_receiver.next().now_or_never().is_none());
-
-                task::yield_now().await;
-                permit_drop_receiver.next().now_or_never().unwrap().unwrap();
-
-                time::sleep(sec!(1)).await;
-                assert!(!task_handle.is_finished());
-
-                connector.expect_reconnect(DiscoveredPeer {
-                    attempts_made: 1,
-                    ..peer
-                });
-                task::yield_now().await;
-                assert!(task_handle.is_finished());
-                let error = task_handle.await.unwrap().unwrap_err();
-                assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
-            })
-            .await;
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_default_max_retry_attempts() {
-        let connector = MockPeerConnector::default();
-
-        let error_kind = io::ErrorKind::ConnectionRefused;
-
-        let mut peer = DiscoveredPeer {
-            addr: addr!("127.0.0.1:8080"),
-            origin: PeerOrigin::Other,
-            attempts_made: 0,
-        };
-
-        for i in 1..MockPeerConnector::MAX_CONNECT_RETRIES {
-            let modified_peer = DiscoveredPeer {
-                attempts_made: i,
-                ..peer.clone()
-            };
-            connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
-            connector.expect_reconnect(modified_peer.clone());
-
-            let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), error_kind);
-            peer = modified_peer;
+            connector
+                .expect_outbound_connect_and_handshake()
+                .once()
+                .with(eq(addr))
+                .returning(move |_| async move { Ok(port as i32) }.boxed());
+            connector
+                .expect_run_connection()
+                .once()
+                .with(eq(PeerOrigin::Tracker), eq(port as i32))
+                .returning(|_, _| pending::<io::Result<()>>().boxed());
         }
 
-        let peer = DiscoveredPeer {
-            attempts_made: MockPeerConnector::MAX_CONNECT_RETRIES,
-            ..peer
-        };
-        connector.expect_discovered(peer.clone(), Some(io::Error::from(error_kind)));
-        connector.expect_no_reconnect();
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
 
-        let error = outgoing_pwp_connection(peer.clone(), &connector, mock_permit())
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), error_kind);
+            for port in 1..=100 {
+                let peer_addr = addr(port);
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).now_or_never().unwrap());
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
+            }
+            task::yield_now().await;
+            assert!(reporter.report_discovered(addr(12345), PeerOrigin::Pex).now_or_never().is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_release_capacity_when_retrying() {
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(1usize);
+        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        for port in 1..=100 {
+            let addr = addr(port);
+            connector
+                .expect_outbound_connect_and_handshake()
+                .once()
+                .with(eq(addr))
+                .returning(move |_| {
+                    async move { Err(io::ErrorKind::AddrNotAvailable.into()) }.boxed()
+                });
+        }
+
+        run_in_local_set! {
+            let (reporter, ctrl) = connect_control(move |_| connector);
+            task::spawn_local(ctrl.run());
+
+            for port in 1..=100 {
+                let peer_addr = addr(port);
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).now_or_never().unwrap());
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
+                task::yield_now().await;
+                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
+            }
+            drop(reporter);
+        }
     }
 }

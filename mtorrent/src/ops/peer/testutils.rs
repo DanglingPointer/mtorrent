@@ -238,7 +238,7 @@ impl PeerBuilder {
             pwp::PeerOrigin::Other,
             dlchans,
             ulchans,
-            extchans,
+            extchans.unwrap(),
             ctx_handle.clone(),
             PeerReporter::new_mock(),
         );

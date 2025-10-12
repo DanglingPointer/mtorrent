@@ -140,10 +140,7 @@ async fn handle_incoming_message(inner: &mut Data, msg: pwp::ExtendedMessage) ->
                 let connected_peers: HashSet<SocketAddr> =
                     with_ctx!(|ctx| ctx.peer_states.iter().map(|(ip, _)| *ip).collect());
                 for peer_addr in pex.added.difference(&connected_peers) {
-                    inner
-                        .peer_reporter
-                        .report_discovered_new(*peer_addr, pwp::PeerOrigin::Pex)
-                        .await;
+                    inner.peer_reporter.report_discovered(*peer_addr, pwp::PeerOrigin::Pex).await;
                 }
             };
         }

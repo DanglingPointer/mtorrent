@@ -132,9 +132,6 @@ pub async fn single_torrent(
     Ok(())
 }
 
-const MAX_PRELIMINARY_CONNECTIONS: usize = 50;
-const MAX_PEER_CONNECTIONS: usize = 200;
-
 #[expect(clippy::too_many_arguments)]
 async fn preliminary_stage(
     local_peer_id: PeerId,
@@ -174,14 +171,10 @@ async fn preliminary_stage(
     let canceller = CancellationToken::new();
 
     let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::CancellingConnectHandler {
-            connector: Rc::new(ops::PreliminaryConnectionData {
-                ctx_handle: ctx.clone(),
-                pwp_worker_handle: pwp_runtime.clone(),
-                peer_reporter: peer_reporter.clone(),
-            }),
-            max_connections: MAX_PRELIMINARY_CONNECTIONS,
-            canceller: canceller.clone(),
+        ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
+            ctx_handle: ctx.clone(),
+            pwp_worker_handle: pwp_runtime.clone(),
+            peer_reporter: peer_reporter.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
 
@@ -212,7 +205,7 @@ async fn preliminary_stage(
 
     tasks.spawn_local(async move {
         for peer_addr in extra_peers {
-            peer_reporter.report_discovered_new(peer_addr, pwp::PeerOrigin::Other).await;
+            peer_reporter.report_discovered(peer_addr, pwp::PeerOrigin::Other).await;
         }
     });
 
@@ -270,17 +263,13 @@ async fn main_stage(
     let canceller = CancellationToken::new();
 
     let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::CancellingConnectHandler {
-            connector: Rc::new(ops::MainConnectionData {
-                content_storage,
-                metainfo_storage,
-                ctx_handle: ctx.clone(),
-                pwp_worker_handle: handles.pwp_runtime.clone(),
-                peer_reporter: peer_reporter.clone(),
-                piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
-            }),
-            max_connections: MAX_PEER_CONNECTIONS,
-            canceller: canceller.clone(),
+        ops::connect_control(|peer_reporter| ops::MainConnectionData {
+            content_storage,
+            metainfo_storage,
+            ctx_handle: ctx.clone(),
+            pwp_worker_handle: handles.pwp_runtime.clone(),
+            peer_reporter: peer_reporter.clone(),
+            piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
         });
     tasks.spawn_local(connect_throttle.run());
 
@@ -312,7 +301,7 @@ async fn main_stage(
     let extra_peers: Vec<_> = extra_peers.into_iter().collect();
     tasks.spawn_local(async move {
         for peer_addr in extra_peers {
-            peer_reporter.report_discovered_new(peer_addr, pwp::PeerOrigin::Other).await;
+            peer_reporter.report_discovered(peer_addr, pwp::PeerOrigin::Other).await;
         }
     });
 

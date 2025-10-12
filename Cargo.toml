@@ -50,6 +50,9 @@ serde_json = "1.0.145"
 static_assertions = "1.1.0"
 tokio-test = "0.4.4"
 mockito = { version = "1.7.0", default-features = false }
+mockall = "0.13.1"
+rstest = { version = "0.26.1", default-features = false }
+rstest_reuse = { version = "0.7.0", default-features = false }
 mtorrent-core = { path = "mtorrent-core", version = "0" }
 mtorrent-dht = { path = "mtorrent-dht", version = "0" }
 mtorrent-utils = { path = "mtorrent-utils", version = "0" }

@@ -100,7 +100,7 @@ async fn announce_periodically(
                 handler.preprocess_response(&mut response);
                 let reannounce_at = Instant::now() + response.interval.clamp(sec!(5), sec!(300));
                 for peer_addr in response.peers {
-                    peer_reporter.report_discovered_new(peer_addr, PeerOrigin::Tracker).await;
+                    peer_reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await;
                 }
                 time::sleep_until(reannounce_at).await;
             }
