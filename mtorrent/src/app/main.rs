@@ -25,7 +25,7 @@ pub struct Config {
     /// Whether to use UPnP for port mapping.
     pub use_upnp: bool,
     /// Local TCP port used for peer wire protocol sockets (both inbound and outbound).
-    pub listener_port: Option<u16>,
+    pub pwp_port: Option<u16>,
 }
 
 /// Context for a single torrent download.
@@ -59,14 +59,14 @@ pub async fn single_torrent(
 
     let listener_addr = SocketAddr::new(
         Ipv4Addr::UNSPECIFIED.into(),
-        cfg.listener_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
+        cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
     );
     // get public ip to send correct listening port to trackers and peers later
     let public_pwp_ip = if cfg.use_upnp {
         match upnp::PortOpener::new(
             SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into(),
             upnp::PortMappingProtocol::TCP,
-            cfg.listener_port,
+            cfg.pwp_port,
         )
         .await
         {

@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_peer_table_rotation() {
+    fn test_fifo_rotation() {
         const MAX_CAPACITY: usize = 128;
 
         let mut pt = BoundedFifoSet::new(MAX_CAPACITY);

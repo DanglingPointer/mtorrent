@@ -123,7 +123,7 @@ fn main() -> io::Result<()> {
                 config_dir: local_data_dir,
                 output_dir,
                 use_upnp: !cli.no_upnp,
-                listener_port: None,
+                pwp_port: None,
             },
             app::main::Context {
                 dht_handle: dht_cmds,
