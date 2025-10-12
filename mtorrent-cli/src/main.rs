@@ -20,6 +20,10 @@ struct Cli {
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
 
+    /// Folder to write config files to
+    #[arg(long, value_name = "PATH")]
+    config_dir: Option<PathBuf>,
+
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
@@ -75,12 +79,16 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let local_data_dir = match dirs_next::data_local_dir()
-        .or_else(dirs_next::data_dir)
-        .or_else(dirs_next::config_dir)
-    {
-        Some(dir) => dir,
-        None => std::env::current_dir()?,
+    let local_data_dir = if let Some(dir) = cli.config_dir {
+        dir
+    } else {
+        match dirs_next::data_local_dir()
+            .or_else(dirs_next::data_dir)
+            .or_else(dirs_next::config_dir)
+        {
+            Some(dir) => dir,
+            None => std::env::current_dir()?,
+        }
     };
 
     let storage_worker = worker::with_runtime(worker::rt::Config {
