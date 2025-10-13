@@ -156,6 +156,7 @@ async fn preliminary_stage(
     pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
+    let canceller = CancellationToken::new();
 
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
 
@@ -167,8 +168,6 @@ async fn preliminary_stage(
 
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
-
-    let canceller = CancellationToken::new();
 
     let (peer_reporter, connect_throttle) =
         ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
@@ -254,13 +253,12 @@ async fn main_stage(
     handles.pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
+    let canceller = CancellationToken::new();
 
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
-
-    let canceller = CancellationToken::new();
 
     let (peer_reporter, connect_throttle) =
         ops::connect_control(|peer_reporter| ops::MainConnectionData {
