@@ -3,6 +3,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{Ipv4Addr, SocketAddrV4, SocketAddrV6};
 use std::{io, ops};
 
+/// Get local (non-loopback) IPv4.
 #[cfg(target_family = "unix")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
@@ -14,6 +15,7 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     ipv4_string.parse::<Ipv4Addr>().map_err(io::Error::other)
 }
 
+/// Get local (non-loopback) IPv4.
 #[cfg(target_family = "windows")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     // naively uses first connected adapter
@@ -31,6 +33,7 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
 
 const DYNAMIC_PORT_RANGE: ops::Range<u32> = 49152..65536;
 
+/// Get a random port from the dynamic range (49152 <= port < 65536) based on the hash.
 pub fn port_from_hash(h: &impl Hash) -> u16 {
     let mut hasher = DefaultHasher::default();
     h.hash(&mut hasher);
@@ -39,6 +42,7 @@ pub fn port_from_hash(h: &impl Hash) -> u16 {
     port as u16
 }
 
+/// Iterator decoding compact representation of IPv4 addresses from bytes (6 bytes per address).
 pub struct SocketAddrV4BytesIter<'d>(pub &'d [u8]);
 
 impl<'d> Iterator for SocketAddrV4BytesIter<'d> {
@@ -65,6 +69,7 @@ impl<'d> ExactSizeIterator for SocketAddrV4BytesIter<'d> {
     }
 }
 
+/// Iterator decoding compact representation of IPv6 addresses from bytes (18 bytes per address).
 pub struct SocketAddrV6BytesIter<'d>(pub &'d [u8]);
 
 impl<'d> Iterator for SocketAddrV6BytesIter<'d> {

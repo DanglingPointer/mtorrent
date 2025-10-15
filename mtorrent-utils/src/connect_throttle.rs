@@ -59,13 +59,13 @@ impl ConnectThrottle {
     ) -> Option<ConnectPermit> {
         let slot = self.capacity_sem.acquire_permit().await;
 
-        if !reconnect && !self.known_peers.insert_or_replace(remote_addr) {
-            log::debug!("Ignoring discovered peer {remote_addr}: known peer and not a reconnect");
+        if !self.known_peers.insert_or_replace(remote_addr) && !reconnect {
+            log::debug!("No connect permit for {remote_addr}: known address and not a reconnect");
             return None;
         }
 
         if !self.connected_peers.insert(remote_addr) {
-            log::debug!("Ignoring discovered peer {remote_addr}: already connecting/connected");
+            log::debug!("No connect permit for {remote_addr}: already exists");
             return None;
         }
 

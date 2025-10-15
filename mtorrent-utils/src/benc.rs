@@ -15,6 +15,7 @@ pub enum Element {
 }
 
 impl Element {
+    /// Parse bencoded bytes.
     pub fn from_bytes(src: &[u8]) -> Result<Element, ParseError> {
         match read_element(src) {
             Ok((entity, _)) => Ok(entity),
@@ -22,11 +23,13 @@ impl Element {
         }
     }
 
+    /// Parse bencoded bytes. Returns the produced [`Element`] and the number of parsed bytes.
     pub fn from_bytes_with_len(src: &[u8]) -> Result<(Element, usize), ParseError> {
         let (entity, rest) = read_element(src)?;
         Ok((entity, src.len() - rest.len()))
     }
 
+    /// Serialize to a vec of bytes.
     pub fn encode(&self) -> Vec<u8> {
         let mut dest = Vec::<u8>::new();
         write_element(self, &mut dest);

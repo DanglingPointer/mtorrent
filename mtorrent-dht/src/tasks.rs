@@ -105,98 +105,7 @@ pub async fn keep_alive_node(node: Node, ctx: Rc<Ctx>) -> Result<()> {
     }
 }
 
-// --------------------
-
-pub struct SearchTask {
-    target: U160,
-    local_peer_port: u16,
-    ctx: Rc<Ctx>,
-
-    cmd_result_sender: mpsc::Sender<SocketAddr>,
-    peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
-}
-
-impl SearchTask {
-    pub fn new(
-        target: U160,
-        local_peer_port: u16,
-        ctx: Rc<Ctx>,
-        cmd_result_sender: mpsc::Sender<SocketAddr>,
-        peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
-    ) -> Self {
-        Self {
-            target,
-            local_peer_port,
-            ctx,
-            cmd_result_sender,
-            peer_sender,
-        }
-    }
-
-    /// `canceller` must be a child canceller
-    pub async fn run(
-        self,
-        initial_nodes: impl ExactSizeIterator<Item = Node>,
-        canceller: CancellationToken,
-    ) -> Result<()> {
-        if initial_nodes.len() == 0 {
-            log::error!("Search can't proceed - no initial nodes");
-            return Err(Error::NoNodes);
-        }
-
-        let (peer_sender, mut peer_receiver) = mpsc::channel(1024);
-        let (node_sender, mut node_receiver) = mpsc::channel(1024);
-
-        for node in initial_nodes {
-            _ = node_sender.try_send(node);
-        }
-
-        let mut queried_nodes = HashSet::new();
-        let mut discovered_peers = HashSet::new();
-
-        loop {
-            select! {
-                biased;
-                _ = self.cmd_result_sender.closed() => {
-                    // this search has been terminated. Stop all subtasks and try insert nodes in the routing table
-                    canceller.cancel();
-                    for node in queried_nodes {
-                        self.ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
-                    }
-                    break;
-                }
-                _ = canceller.cancelled() => {
-                    // DHT shutting down
-                    break;
-                }
-                Some(peer) = peer_receiver.recv() => {
-                    if discovered_peers.insert(peer) {
-                        self.peer_sender.send((peer, self.target))?;
-                        self.cmd_result_sender.send(peer).await?;
-                    }
-                }
-                Some(node) = node_receiver.recv() => {
-                    if queried_nodes.insert(node.clone()) {
-                        task::spawn_local(canceller.clone().run_until_cancelled_owned(
-                            search_peers(
-                                node,
-                                self.target,
-                                self.local_peer_port,
-                                self.ctx.clone(),
-                                node_sender.clone(),
-                                peer_sender.clone(),
-                            ),
-                        ));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub async fn search_peers(
+async fn query_node_for_peers(
     node: Node,
     target: U160,
     local_peer_port: u16,
@@ -250,7 +159,7 @@ pub async fn search_peers(
                 break;
             }
             GetPeersResponseData::Peers(socket_addr_v4s) => {
-                log::debug!("search produced {} peer(s)", socket_addr_v4s.len());
+                log::trace!("search produced {} peer(s)", socket_addr_v4s.len());
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
 
                 for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
@@ -288,5 +197,77 @@ pub async fn search_peers(
         }
     }
     ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
+    Ok(())
+}
+
+// --------------------
+
+pub struct SearchTaskData {
+    pub target: U160,
+    pub local_peer_port: u16,
+    pub ctx: Rc<Ctx>,
+    pub cmd_result_sender: mpsc::Sender<SocketAddr>,
+    pub peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
+}
+
+pub async fn run_search(
+    data: SearchTaskData,
+    canceller: CancellationToken, // should be child canceller
+    initial_nodes: impl ExactSizeIterator<Item = Node>,
+) -> Result<()> {
+    if initial_nodes.len() == 0 {
+        log::error!("Search can't proceed - no initial nodes");
+        return Err(Error::NoNodes);
+    }
+
+    let (peer_sender, mut peer_receiver) = mpsc::channel(1);
+    let (node_sender, mut node_receiver) = mpsc::channel(1);
+
+    for node in initial_nodes {
+        _ = node_sender.try_send(node);
+    }
+
+    let mut queried_nodes = HashSet::new();
+    let mut discovered_peers = HashSet::new();
+
+    loop {
+        select! {
+            biased;
+            _ = data.cmd_result_sender.closed() => {
+                // this search has been terminated. Stop all subtasks and try insert nodes in the routing table
+                canceller.cancel();
+                for node in queried_nodes {
+                    data.ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
+                }
+                break;
+            }
+            _ = canceller.cancelled() => {
+                // DHT shutting down
+                break;
+            }
+            Some(peer_addr) = peer_receiver.recv() => {
+                if discovered_peers.insert(peer_addr) {
+                    log::debug!("Discovered new peer {peer_addr} for target {}", data.target);
+                    data.peer_sender.send((peer_addr, data.target))?;
+                    data.cmd_result_sender.send(peer_addr).await?;
+                }
+            }
+            Some(node) = node_receiver.recv() => {
+                if queried_nodes.insert(node.clone()) {
+                    task::spawn_local(canceller.clone().run_until_cancelled_owned(
+                        query_node_for_peers(
+                            node,
+                            data.target,
+                            data.local_peer_port,
+                            data.ctx.clone(),
+                            node_sender.clone(),
+                            peer_sender.clone(),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
     Ok(())
 }

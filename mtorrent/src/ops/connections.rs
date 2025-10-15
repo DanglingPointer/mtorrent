@@ -825,7 +825,7 @@ mod tests {
 
         run_in_local_set! {
             let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+            let run_task = task::spawn_local(ctrl.run());
 
             assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
             task::yield_now().await;
@@ -833,6 +833,7 @@ mod tests {
 
             drop(reporter);
             task::yield_now().await;
+            assert!(run_task.is_finished());
             assert_eq!(Arc::strong_count(&token), 1);
         }
     }
@@ -910,7 +911,7 @@ mod tests {
 
         run_in_local_set! {
             let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+            let run_task = task::spawn_local(ctrl.run());
 
             assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
             task::yield_now().await;
@@ -918,6 +919,7 @@ mod tests {
 
             drop(reporter);
             task::yield_now().await;
+            assert!(run_task.is_finished());
             assert_eq!(Arc::strong_count(&token), 1);
         }
     }

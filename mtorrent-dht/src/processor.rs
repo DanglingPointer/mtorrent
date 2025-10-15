@@ -289,21 +289,23 @@ impl Processor {
                     .try_for_each(|addr| callback.try_send(*addr))
                     .is_ok()
                 {
-                    let search = SearchTask::new(
-                        info_hash.into(),
+                    let search_data = SearchTaskData {
+                        target: info_hash.into(),
                         local_peer_port,
-                        self.task_ctx.clone(),
-                        callback,
-                        self.peer_sender.clone(),
-                    );
+                        ctx: self.task_ctx.clone(),
+                        cmd_result_sender: callback,
+                        peer_sender: self.peer_sender.clone(),
+                    };
                     let initial_nodes: Vec<Node> = self
                         .node_table
                         .get_closest_nodes(&info_hash.into(), RoutingTable::BUCKET_SIZE * 3)
                         .cloned()
                         .collect();
-                    task::spawn_local(
-                        search.run(initial_nodes.into_iter(), self.canceller.child_token()),
-                    );
+                    task::spawn_local(run_search(
+                        search_data,
+                        self.canceller.child_token(),
+                        initial_nodes.into_iter(),
+                    ));
                 }
                 Continue(())
             }
