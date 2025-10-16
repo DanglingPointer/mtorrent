@@ -216,29 +216,29 @@ fn with_jitter(duration: Duration) -> Duration {
 }
 
 async fn outgoing_pwp_connection<C: PeerConnector>(
-    outbound: OutboundConnect,
+    connect: OutboundConnect,
     connector: &C,
     mut permit: ConnectPermit,
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
-    log::debug!("Connecting to {outbound:?}");
+    log::debug!("{connect:?} initiated");
     let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
     let connect_result =
-        time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(outbound.addr))
+        time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(connect.addr))
             .await
             .unwrap_or_else(|e| Err(io::Error::from(e)));
 
     let connection = match connect_result {
         Ok(connection) => connection,
         Err(e) => {
-            if outbound.attempt < connector.max_connect_retries() && !is_fatal_error(&e) {
+            if connect.attempt < connector.max_connect_retries() && !is_fatal_error(&e) {
                 permit.release_slot();
                 time::sleep_until(connect_deadline).await;
                 _ = reconnect_reporter
                     .send(OutboundConnect {
-                        attempt: outbound.attempt + 1,
-                        ..outbound
+                        attempt: connect.attempt + 1,
+                        ..connect
                     })
                     .await;
             }
@@ -246,10 +246,10 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         }
     };
 
-    log::debug!("Successful outgoing connection to {outbound:?}");
+    log::debug!("{connect:?} succeeded");
     let connected_time = Instant::now();
 
-    let run_result = connector.run_connection(outbound.origin, connection).await;
+    let run_result = connector.run_connection(connect.origin, connection).await;
 
     // Fatal error means we disconnected the peer intentionally, and
     // <5s since connect means peer probably didn't like our handshake.
@@ -258,14 +258,14 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         && !is_fatal_error(e)
         && connected_time.elapsed() > sec!(5)
     {
-        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", outbound.addr);
+        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         permit.release_slot();
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
         _ = reconnect_reporter
             .send(OutboundConnect {
                 attempt: 1,
-                ..outbound
+                ..connect
             })
             .await;
     }
@@ -274,21 +274,21 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
 }
 
 async fn incoming_pwp_connection<C: PeerConnector>(
-    inbound: InboundConnect,
+    connect: InboundConnect,
     connector: &C,
     mut permit: ConnectPermit,
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
-    log::debug!("Accepted {inbound:?}");
+    log::debug!("{connect:?} accepted");
     let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
     let connection = time::timeout_at(
         connect_deadline,
-        connector.inbound_connect_and_handshake(inbound.addr, inbound.stream),
+        connector.inbound_connect_and_handshake(connect.addr, connect.stream),
     )
     .await??;
 
-    log::debug!("Successful incoming connection from {}", inbound.addr);
+    log::debug!("Inbound connection from {} succeeded", connect.addr);
 
     let run_result = connector.run_connection(PeerOrigin::Listener, connection).await;
 
@@ -296,14 +296,14 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     if let Err(e) = &run_result
         && !is_fatal_error(e)
     {
-        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", inbound.addr);
+        log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         permit.release_slot();
         // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
 
         _ = reconnect_reporter
             .send(OutboundConnect {
-                addr: inbound.addr,
+                addr: connect.addr,
                 origin: PeerOrigin::Listener,
                 attempt: 1,
             })

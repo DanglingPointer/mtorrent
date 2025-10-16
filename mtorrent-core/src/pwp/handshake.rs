@@ -75,7 +75,7 @@ where
         // possible because some trackers include our own external ip
         Err(io::Error::other("incoming connect from ourselves"))
     } else {
-        log::debug!(
+        log::trace!(
             "Incoming handshake with {} DONE. Peer id: {}",
             remote_ip,
             String::from_utf8_lossy(&remote_handshake.peer_id[0..8])
@@ -125,7 +125,7 @@ where
     if remote_handshake.peer_id == local_handshake.peer_id {
         Err(io::Error::other("connecting to ourselves"))
     } else {
-        log::debug!(
+        log::trace!(
             "Outgoing handshake with {} DONE. Peer id: {}",
             remote_ip,
             String::from_utf8_lossy(&remote_handshake.peer_id[0..8])

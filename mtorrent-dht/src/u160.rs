@@ -62,11 +62,12 @@ impl TryFrom<benc::Element> for U160 {
     fn try_from(value: benc::Element) -> Result<Self, Self::Error> {
         match value {
             benc::Element::ByteString(bytes) => {
-                let bytes: [u8; 20] =
-                    bytes.try_into().map_err(|_| Error::ParseError("U160 not 20 bytes long"))?;
+                let bytes: [u8; 20] = bytes.try_into().map_err(|e: Vec<u8>| {
+                    Error::ParseError(format!("U160 requires 20 bytes, not {}", e.len()).into())
+                })?;
                 Ok(bytes.into())
             }
-            _ => Err(Error::ParseError("U160 not a byte string")),
+            _ => Err(Error::ParseError("U160 not a byte string".into())),
         }
     }
 }

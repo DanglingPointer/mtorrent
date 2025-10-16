@@ -94,7 +94,7 @@ impl TryFrom<benc::Element> for Message {
                 benc::Element::ByteString(bytes) => Some(bytes),
                 _ => None,
             })
-            .ok_or(Error::ParseError("no transaction id"))?;
+            .ok_or(Error::ParseError("no transaction id".into()))?;
 
         let msg_type = root
             .remove(KEY_TYPE)
@@ -102,7 +102,7 @@ impl TryFrom<benc::Element> for Message {
                 benc::Element::ByteString(bytes) => Some(String::from_utf8(bytes).ok()?),
                 _ => None,
             })
-            .ok_or(Error::ParseError("no type"))?;
+            .ok_or(Error::ParseError("no type".into()))?;
 
         match msg_type.as_ref() {
             TYPE_QUERY => {
@@ -112,17 +112,21 @@ impl TryFrom<benc::Element> for Message {
                         benc::Element::ByteString(bytes) => Some(String::from_utf8(bytes).ok()?),
                         _ => None,
                     })
-                    .ok_or(Error::ParseError("no query type"))?;
+                    .ok_or(Error::ParseError("no query type".into()))?;
 
                 let query_args =
-                    root.remove(KEY_QUERY_ARGS).ok_or(Error::ParseError("no query args"))?;
+                    root.remove(KEY_QUERY_ARGS).ok_or(Error::ParseError("no query args".into()))?;
 
                 let query = match query_type.as_str() {
                     QUERY_PING => QueryMsg::Ping(query_args.try_into()?),
                     QUERY_FIND_NODE => QueryMsg::FindNode(query_args.try_into()?),
                     QUERY_GET_PEERS => QueryMsg::GetPeers(query_args.try_into()?),
                     QUERY_ANNOUNCE_PEER => QueryMsg::AnnouncePeer(query_args.try_into()?),
-                    _ => return Err(Error::ParseError("unknown query type")),
+                    query_type => {
+                        return Err(Error::ParseError(
+                            format!("unknown query type: {query_type}").into(),
+                        ));
+                    }
                 };
 
                 Ok(Self {
@@ -133,7 +137,7 @@ impl TryFrom<benc::Element> for Message {
             }
             TYPE_RESPONSE => {
                 let response_data =
-                    root.remove(TYPE_RESPONSE).ok_or(Error::ParseError("no response"))?;
+                    root.remove(TYPE_RESPONSE).ok_or(Error::ParseError("no response".into()))?;
                 Ok(Self {
                     transaction_id,
                     version,
@@ -142,14 +146,14 @@ impl TryFrom<benc::Element> for Message {
             }
             TYPE_ERROR => {
                 let error_data =
-                    root.remove(TYPE_ERROR).ok_or(Error::ParseError("no error data"))?;
+                    root.remove(TYPE_ERROR).ok_or(Error::ParseError("no error data".into()))?;
                 Ok(Self {
                     transaction_id,
                     version,
                     data: MessageData::Error(error_data.try_into()?),
                 })
             }
-            _ => Err(Error::ParseError("unknown message type")),
+            msg_type => Err(Error::ParseError(format!("unknown message type: {msg_type}").into())),
         }
     }
 }
@@ -174,9 +178,9 @@ impl TryFrom<benc::Element> for ErrorCode {
                 202 => Ok(Self::Server),
                 203 => Ok(Self::Protocol),
                 204 => Ok(Self::MethodUnknown),
-                _ => Err(Error::ParseError("unknown error code")),
+                code => Err(Error::ParseError(format!("unknown error code: {code}").into())),
             },
-            _ => Err(Error::ParseError("not an integer")),
+            _ => Err(Error::ParseError("not an integer".into())),
         }
     }
 }
@@ -199,7 +203,7 @@ impl TryFrom<benc::Element> for ErrorMsg {
     fn try_from(value: benc::Element) -> Result<Self, Self::Error> {
         let mut list = match value {
             benc::Element::List(list) => list,
-            _ => return Err(Error::ParseError("not a list")),
+            _ => return Err(Error::ParseError("not a list".into())),
         };
         let error_msg = list
             .pop()
@@ -207,10 +211,10 @@ impl TryFrom<benc::Element> for ErrorMsg {
                 benc::Element::ByteString(bytes) => String::from_utf8(bytes).ok(),
                 _ => None,
             })
-            .ok_or(Error::ParseError("no error message"))?;
+            .ok_or(Error::ParseError("no error message".into()))?;
         let error_code = list
             .pop()
-            .ok_or(Error::ParseError("no error code"))
+            .ok_or(Error::ParseError("no error code".into()))
             .and_then(ErrorCode::try_from)?;
         Ok(Self {
             error_code,
@@ -257,7 +261,7 @@ impl TryFrom<benc::Element> for PingArgs {
     fn try_from(data: benc::Element) -> Result<Self, Error> {
         let mut dict = to_text_dictionary(data)?;
         Ok(Self {
-            id: dict.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
+            id: dict.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
         })
     }
 }
@@ -286,8 +290,11 @@ impl TryFrom<benc::Element> for FindNodeArgs {
     fn try_from(data: benc::Element) -> Result<Self, Error> {
         let mut dict = to_text_dictionary(data)?;
         Ok(Self {
-            id: dict.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
-            target: dict.remove("target").ok_or(Error::ParseError("no target"))?.try_into()?,
+            id: dict.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
+            target: dict
+                .remove("target")
+                .ok_or(Error::ParseError("no target".into()))?
+                .try_into()?,
         })
     }
 }
@@ -316,10 +323,10 @@ impl TryFrom<benc::Element> for GetPeersArgs {
     fn try_from(data: benc::Element) -> Result<Self, Error> {
         let mut dict = to_text_dictionary(data)?;
         Ok(Self {
-            id: dict.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
+            id: dict.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
             info_hash: dict
                 .remove("info_hash")
-                .ok_or(Error::ParseError("no info_hash"))?
+                .ok_or(Error::ParseError("no info_hash".into()))?
                 .try_into()?,
         })
     }
@@ -356,34 +363,38 @@ impl TryFrom<benc::Element> for AnnouncePeerArgs {
         fn parse_token(token: benc::Element) -> Result<Vec<u8>, Error> {
             match token {
                 benc::Element::ByteString(bytes) => Ok(bytes),
-                _ => Err(Error::ParseError("token not a byte string")),
+                _ => Err(Error::ParseError("token not a byte string".into())),
             }
         }
         fn parse_port(port: benc::Element) -> Result<u16, Error> {
             match port {
                 benc::Element::Integer(port) => {
-                    port.try_into().map_err(|_| Error::ParseError("port not an integer"))
+                    port.try_into().map_err(|_| Error::ParseError("port not an integer".into()))
                 }
-                _ => Err(Error::ParseError("port not an integer")),
+                _ => Err(Error::ParseError("port not an integer".into())),
             }
         }
 
         let mut dict = to_text_dictionary(data)?;
 
         Ok(Self {
-            id: dict.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
+            id: dict.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
             info_hash: dict
                 .remove("info_hash")
-                .ok_or(Error::ParseError("no info_hash"))?
+                .ok_or(Error::ParseError("no info_hash".into()))?
                 .try_into()?,
             port: if let Some(benc::Element::Integer(1i64)) = dict.remove("implied_port") {
                 None
             } else {
-                Some(dict.remove("port").ok_or(Error::ParseError("no port")).and_then(parse_port)?)
+                Some(
+                    dict.remove("port")
+                        .ok_or(Error::ParseError("no port".into()))
+                        .and_then(parse_port)?,
+                )
             },
             token: dict
                 .remove("token")
-                .ok_or(Error::ParseError("no token"))
+                .ok_or(Error::ParseError("no token".into()))
                 .and_then(parse_token)?,
         })
     }
@@ -430,7 +441,7 @@ impl TryFrom<ResponseMsg> for PingResponse {
     fn try_from(msg: ResponseMsg) -> Result<Self, Self::Error> {
         let mut data = msg.data;
         Ok(Self {
-            id: data.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
+            id: data.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
         })
     }
 }
@@ -461,11 +472,11 @@ impl TryFrom<ResponseMsg> for FindNodeResponse {
 
     fn try_from(mut msg: ResponseMsg) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: msg.data.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
-            nodes: msg.data.remove("nodes").ok_or(Error::ParseError("no nodes")).and_then(
+            id: msg.data.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
+            nodes: msg.data.remove("nodes").ok_or(Error::ParseError("no nodes".into())).and_then(
                 |nodes| match nodes {
                     benc::Element::ByteString(bytes) => Ok(deserialize_nodes(&bytes).collect()),
-                    _ => Err(Error::ParseError("nodes not a byte string")),
+                    _ => Err(Error::ParseError("nodes not a byte string".into())),
                 },
             )?,
         })
@@ -518,7 +529,8 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
     type Error = Error;
 
     fn try_from(mut msg: ResponseMsg) -> Result<Self, Self::Error> {
-        let id: U160 = msg.data.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?;
+        let id: U160 =
+            msg.data.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?;
 
         let token = msg.data.remove("token").and_then(|token| match token {
             benc::Element::ByteString(bytes) => Some(bytes),
@@ -528,7 +540,7 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
         let data = if let Some(nodes) = msg.data.remove("nodes") {
             GetPeersResponseData::Nodes(match nodes {
                 benc::Element::ByteString(bytes) => deserialize_nodes(&bytes).collect(),
-                _ => return Err(Error::ParseError("nodes not a byte string")),
+                _ => return Err(Error::ParseError("nodes not a byte string".into())),
             })
         } else if let Some(peers) = msg.data.remove("values") {
             GetPeersResponseData::Peers(match peers {
@@ -540,10 +552,10 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
                     })
                     .flat_map(ip::SocketAddrV4BytesIter)
                     .collect::<Vec<_>>(),
-                _ => return Err(Error::ParseError("peers not a list")),
+                _ => return Err(Error::ParseError("peers not a list".into())),
             })
         } else {
-            return Err(Error::ParseError("no nodes or values"));
+            return Err(Error::ParseError("no nodes or values".into()));
         };
 
         Ok(Self { id, token, data })
@@ -569,7 +581,7 @@ impl TryFrom<ResponseMsg> for AnnouncePeerResponse {
     fn try_from(value: ResponseMsg) -> Result<Self, Self::Error> {
         let mut data = value.data;
         Ok(Self {
-            id: data.remove("id").ok_or(Error::ParseError("no id"))?.try_into()?,
+            id: data.remove("id").ok_or(Error::ParseError("no id".into()))?.try_into()?,
         })
     }
 }
@@ -600,7 +612,7 @@ fn deserialize_nodes(data: &[u8]) -> impl Iterator<Item = (U160, SocketAddrV4)> 
 fn to_text_dictionary(data: benc::Element) -> Result<BTreeMap<String, benc::Element>, Error> {
     match data {
         benc::Element::Dictionary(d) => Ok(benc::convert_dictionary(d)),
-        _ => Err(Error::ParseError("not a dictionary")),
+        _ => Err(Error::ParseError("not a dictionary".into())),
     }
 }
 

@@ -4,6 +4,7 @@ use super::queries::OutboundQueries;
 use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
+use mtorrent_utils::info_stopwatch;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -215,10 +216,8 @@ pub async fn run_search(
     canceller: CancellationToken, // should be child canceller
     initial_nodes: impl ExactSizeIterator<Item = Node>,
 ) -> Result<()> {
-    if initial_nodes.len() == 0 {
-        log::error!("Search can't proceed - no initial nodes");
-        return Err(Error::NoNodes);
-    }
+    assert_ne!(initial_nodes.len(), 0, "can't start DHT search without initial nodes");
+    let _sw = info_stopwatch!("Search for peers with target {}", data.target);
 
     let (peer_sender, mut peer_receiver) = mpsc::channel(1);
     let (node_sender, mut node_receiver) = mpsc::channel(1);

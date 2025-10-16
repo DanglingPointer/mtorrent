@@ -1,7 +1,7 @@
 use super::msgs;
 use local_async_utils::prelude::*;
 use mtorrent_utils::benc;
-use std::io;
+use std::{borrow::Cow, io};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("parsing failed ({0})")]
-    ParseError(&'static str),
+    ParseError(Cow<'static, str>),
     #[error("malformed bencode ({0})")]
     BencodeError(#[from] benc::ParseError),
     #[error("error response ({0:?})")]
@@ -18,8 +18,6 @@ pub(crate) enum Error {
     ChannelClosed,
     #[error("timeout")]
     Timeout,
-    #[error("no nodes")]
-    NoNodes,
 }
 
 impl From<msgs::ErrorMsg> for Error {
@@ -52,7 +50,6 @@ impl From<Error> for io::Error {
             Error::ErrorResponse(_) => io::ErrorKind::Other,
             Error::ChannelClosed => io::ErrorKind::BrokenPipe,
             Error::Timeout => io::ErrorKind::TimedOut,
-            Error::NoNodes => io::ErrorKind::InvalidInput,
             Error::BencodeError(_) | Error::ParseError(_) => io::ErrorKind::InvalidData,
         };
         Self::new(kind, e)

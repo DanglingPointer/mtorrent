@@ -10,7 +10,7 @@ use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use mtorrent_utils::{debug_stopwatch, warn_stopwatch};
+use mtorrent_utils::{info_stopwatch, warn_stopwatch};
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::ControlFlow::{self, *};
@@ -114,7 +114,7 @@ impl Processor {
 
         // ignore commands until we have a certain number of nodes (or the timeout occurs)
         if !bootstrapping_nodes.is_empty() {
-            let _sw = debug_stopwatch!("Bootstrapping");
+            let _sw = info_stopwatch!("Bootstrapping");
 
             for addr in bootstrapping_nodes {
                 if self.known_nodes.insert(addr) {
@@ -301,11 +301,15 @@ impl Processor {
                         .get_closest_nodes(&info_hash.into(), RoutingTable::BUCKET_SIZE * 3)
                         .cloned()
                         .collect();
-                    task::spawn_local(run_search(
-                        search_data,
-                        self.canceller.child_token(),
-                        initial_nodes.into_iter(),
-                    ));
+                    if !initial_nodes.is_empty() {
+                        task::spawn_local(run_search(
+                            search_data,
+                            self.canceller.child_token(),
+                            initial_nodes.into_iter(),
+                        ));
+                    } else {
+                        log::warn!("Search can't proceed - no initial nodes");
+                    }
                 }
                 Continue(())
             }
