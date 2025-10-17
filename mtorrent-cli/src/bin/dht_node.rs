@@ -3,8 +3,9 @@ use mtorrent::app;
 use mtorrent_core::input::MagnetLink;
 use mtorrent_dht as dht;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::time::Duration;
-use std::{env, io, iter};
+use std::{env, fs, io, iter};
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -26,6 +27,14 @@ struct Args {
     #[arg(short, long)]
     target_magnet: Option<MagnetLink>,
 
+    /// Output file with discovered peers
+    #[arg(short, long)]
+    output_file: Option<PathBuf>,
+
+    /// Local UDP port to bind to
+    #[arg(long)]
+    port: Option<u16>,
+
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
@@ -35,7 +44,7 @@ struct Args {
 /// ```bash
 /// ./target/release/dht_node --duration=30
 /// ./target/release/dht_node --nodes '"router.bittorrent.com:6881" "dht.transmissionbt.com:6881"' --duration=72
-/// ./target/release/dht_node --duration=30 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
+/// ./target/release/dht_node --duration=10 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9" -o peers.txt
 /// ```
 fn main() -> io::Result<()> {
     #[cfg(debug_assertions)]
@@ -70,22 +79,23 @@ fn main() -> io::Result<()> {
 
     let config_dir = env::current_dir()?;
     let (_worker, cmds) = app::dht::launch_dht_node_runtime(app::dht::Config {
-        local_port: 6881,
+        local_port: args.port.unwrap_or(6881),
         max_concurrent_queries: args.parallel_queries,
         config_dir,
         use_upnp: !args.no_upnp,
+        bootstrap_nodes_override: None,
     })?;
 
     for node in extra_nodes {
-        cmds.try_send(dht::Command::AddNode { addr: node }).unwrap();
+        cmds.blocking_send(dht::Command::AddNode { addr: node }).unwrap();
     }
 
     let search_results_channel = if let Some(magnet_link) = args.target_magnet {
         let (sender, receiver) = mpsc::channel(512);
-        cmds.try_send(dht::Command::FindPeers {
+        cmds.blocking_send(dht::Command::FindPeers {
             info_hash: *magnet_link.info_hash(),
             callback: sender,
-            local_peer_port: 6881,
+            local_peer_port: args.port.unwrap_or(6881),
         })
         .unwrap();
         Some(receiver)
@@ -101,6 +111,16 @@ fn main() -> io::Result<()> {
     if let Some(mut channel) = search_results_channel {
         let discovered_peers: Vec<_> = iter::from_fn(move || channel.try_recv().ok()).collect();
         log::info!("Discovered peers ({}): {discovered_peers:?}", discovered_peers.len());
+        if let Some(output_file) = args.output_file {
+            fs::write(
+                &output_file,
+                discovered_peers
+                    .into_iter()
+                    .map(|addr| addr.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )?;
+        }
     }
 
     Ok(())

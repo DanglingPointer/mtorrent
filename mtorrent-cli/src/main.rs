@@ -111,6 +111,7 @@ fn main() -> io::Result<()> {
             max_concurrent_queries: None,
             config_dir: local_data_dir.clone(),
             use_upnp: !cli.no_upnp,
+            bootstrap_nodes_override: None,
         })?;
         (Some(dht_worker), Some(dht_cmds))
     } else {

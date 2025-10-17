@@ -145,7 +145,7 @@ async fn query_node_for_peers(
                 log::trace!("search produced {} nodes", id_addr_pairs.len());
 
                 for (id, addr) in id_addr_pairs {
-                    if is_valid_addr!(addr) {
+                    if is_valid_addr!(addr) && id != ctx.local_id {
                         node_reporter
                             .send(Node {
                                 id,

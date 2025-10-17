@@ -19,6 +19,8 @@ pub struct Config {
     pub config_dir: PathBuf,
     /// Whether to use UPnP for port mapping.
     pub use_upnp: bool,
+    /// Custom list of node addresses used for bootstrapping.
+    pub bootstrap_nodes_override: Option<Vec<String>>,
 }
 
 /// Spawn a thread with a Tokio runtime running the DHT system, and return handle to it.
@@ -39,6 +41,7 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
             cfg.config_dir,
             cfg.max_concurrent_queries,
             cfg.use_upnp,
+            cfg.bootstrap_nodes_override,
         ));
     });
 
@@ -75,6 +78,7 @@ async fn dht_main(
     config_dir: PathBuf,
     max_concurrent_queries: Option<usize>,
     use_upnp: bool,
+    bootstrap_nodes: Option<Vec<String>>,
 ) {
     let _sw = info_stopwatch!("DHT");
 
@@ -92,7 +96,11 @@ async fn dht_main(
     let (client, server, queries_runner) =
         dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
 
-    let processor = dht::Processor::new(config_dir, client);
+    let mut processor = dht::Processor::new(config_dir, client);
+
+    if let Some(nodes) = bootstrap_nodes {
+        processor.set_bootstrap_nodes(nodes);
+    }
 
     join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
 }

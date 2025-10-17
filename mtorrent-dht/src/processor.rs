@@ -11,13 +11,15 @@ use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_utils::{info_stopwatch, warn_stopwatch};
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::ControlFlow::{self, *};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::{select, task, time};
 use tokio_util::sync::CancellationToken;
 
@@ -30,6 +32,7 @@ pub struct Processor {
     peers: PeerTable,
     token_mgr: TokenManager,
     known_nodes: HashSet<SocketAddr>,
+    search_callbacks: HashMap<U160, mpsc::Sender<SocketAddr>>,
     task_ctx: Rc<Ctx>,
 
     peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
@@ -68,8 +71,13 @@ impl Processor {
             node_event_receiver,
             node_table,
             known_nodes: HashSet::with_capacity(512),
+            search_callbacks: HashMap::new(),
             canceller: CancellationToken::new(),
         }
+    }
+
+    pub fn set_bootstrap_nodes(&mut self, nodes: Vec<String>) {
+        self.config.nodes = nodes;
     }
 
     pub async fn run(mut self, mut queries: InboundQueries, mut commands: CommandSource) {
@@ -241,11 +249,30 @@ impl Processor {
                         error_msg: "Invalid token".to_owned(),
                     })
                 } else {
+                    // construct peer address
                     let mut peer_addr = *announce_peer.source_addr();
                     if let Some(port) = announce_peer.args().port {
                         peer_addr.set_port(port);
                     }
+                    // add to peer table
                     self.peers.add_record(announce_peer.args().info_hash, peer_addr);
+                    // notify active search if any
+                    if let Entry::Occupied(entry) =
+                        self.search_callbacks.entry(announce_peer.args().info_hash)
+                    {
+                        match entry.get().try_send(peer_addr) {
+                            Ok(_) => (),
+                            Err(TrySendError::Closed(_)) => {
+                                entry.remove();
+                            }
+                            Err(TrySendError::Full(_)) => {
+                                log::error!(
+                                    "Failed to report announced peer: callback channel full"
+                                );
+                            }
+                        }
+                    }
+                    // respond to the query
                     announce_peer.respond(AnnouncePeerResponse {
                         id: self.task_ctx.local_id,
                     })
@@ -293,7 +320,7 @@ impl Processor {
                         target: info_hash.into(),
                         local_peer_port,
                         ctx: self.task_ctx.clone(),
-                        cmd_result_sender: callback,
+                        cmd_result_sender: callback.clone(),
                         peer_sender: self.peer_sender.clone(),
                     };
                     let initial_nodes: Vec<Node> = self
@@ -302,6 +329,8 @@ impl Processor {
                         .cloned()
                         .collect();
                     if !initial_nodes.is_empty() {
+                        self.search_callbacks.insert(search_data.target, callback);
+                        self.search_callbacks.retain(|_, cb| !cb.is_closed());
                         task::spawn_local(run_search(
                             search_data,
                             self.canceller.child_token(),
