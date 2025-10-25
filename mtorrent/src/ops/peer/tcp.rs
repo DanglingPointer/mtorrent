@@ -68,8 +68,11 @@ pub async fn new_outbound_connection(
         .await?;
 
     pwp_runtime.spawn(async move {
-        if let Err(e) = runner.await {
-            log::debug!("Peer runner for {peer_addr} exited: {e}");
+        if let Err(e) = runner.await
+            && e.kind() != io::ErrorKind::BrokenPipe
+            && e.kind() != io::ErrorKind::UnexpectedEof
+        {
+            log::warn!("Peer runner for {peer_addr} exited: {e}");
         }
     });
 
@@ -95,8 +98,11 @@ pub async fn new_inbound_connection(
         .await?;
 
     pwp_runtime.spawn(async move {
-        if let Err(e) = runner.await {
-            log::debug!("Peer runner for {remote_ip} exited: {e}");
+        if let Err(e) = runner.await
+            && e.kind() != io::ErrorKind::BrokenPipe
+            && e.kind() != io::ErrorKind::UnexpectedEof
+        {
+            log::warn!("Peer runner for {remote_ip} exited: {e}");
         }
     });
 

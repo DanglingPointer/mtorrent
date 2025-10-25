@@ -1,11 +1,10 @@
 use bitvec::prelude::*;
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use derive_more::Display;
 use mtorrent_utils::{benc, ip};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 
 /// Bitfield from the bitfield message.
 pub type Bitfield = BitVec<u8, Msb0>;
@@ -47,79 +46,110 @@ pub(super) enum PeerMessage {
     },
 }
 
-const MAX_MSG_LEN: usize = 1024 * 32 + 9;
-
 impl PeerMessage {
-    pub(super) async fn read_from<S: AsyncReadExt + Unpin>(src: &mut S) -> io::Result<PeerMessage> {
-        use PeerMessage::*;
+    /// Decode message after the first 4 bytes. `src` must contain at least `msg_len` bytes.
+    pub(super) fn decode_body<B: Buf>(msg_len: usize, src: &mut B) -> io::Result<Self> {
+        fn invalid_data_err(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        }
 
-        let msg_len = src.read_u32().await? as usize;
+        if msg_len > src.remaining() {
+            return Err(invalid_data_err(format!(
+                "received incomplete msg ({} instead of {})",
+                src.remaining(),
+                msg_len
+            )));
+        }
 
         if msg_len == 0 {
-            return Ok(KeepAlive);
+            return Ok(Self::KeepAlive);
         }
 
-        if msg_len > MAX_MSG_LEN {
-            return Err(io::Error::new(
-                io::ErrorKind::OutOfMemory,
-                format!("Too long message received: {msg_len} bytes"),
-            ));
-        }
-
-        let id = src.read_u8().await?;
-
+        let id = src.get_u8();
         match id {
-            ID_CHOKE => Ok(Choke),
-            ID_UNCHOKE => Ok(Unchoke),
-            ID_INTERESTED => Ok(Interested),
-            ID_NOT_INTERESTED => Ok(NotInterested),
-            ID_HAVE => Ok(Have {
-                piece_index: src.read_u32().await?,
+            ID_CHOKE => Ok(Self::Choke),
+            ID_UNCHOKE => Ok(Self::Unchoke),
+            ID_INTERESTED => Ok(Self::Interested),
+            ID_NOT_INTERESTED => Ok(Self::NotInterested),
+            ID_HAVE => Ok(Self::Have {
+                piece_index: src
+                    .try_get_u32()
+                    .map_err(|_| invalid_data_err("Have is too short"))?,
             }),
             ID_BITFIELD => {
                 let mut bitfield_bytes = vec![0u8; msg_len - 1];
-                src.read_exact(&mut bitfield_bytes).await?;
-                Ok(Bitfield {
-                    bitfield: BitVec::from_vec(bitfield_bytes),
+                src.copy_to_slice(&mut bitfield_bytes);
+                Ok(Self::Bitfield {
+                    bitfield: BitVec::try_from_vec(bitfield_bytes)
+                        .map_err(|_| invalid_data_err("Bitfield is too long"))?,
                 })
             }
             ID_REQUEST => {
-                let index = src.read_u32().await?;
-                let begin = src.read_u32().await?;
-                let length = src.read_u32().await?;
-                Ok(Request {
-                    index,
-                    begin,
-                    length,
-                })
-            }
-            ID_PIECE => {
-                let index = src.read_u32().await?;
-                let begin = src.read_u32().await?;
-                let block = read_buf_exact(src, msg_len - 9).await?;
-                Ok(Piece {
-                    index,
-                    begin,
-                    block,
-                })
+                if src.remaining() < 12 {
+                    Err(invalid_data_err("Request is too short"))
+                } else {
+                    let index = src.get_u32();
+                    let begin = src.get_u32();
+                    let length = src.get_u32();
+                    Ok(Self::Request {
+                        index,
+                        begin,
+                        length,
+                    })
+                }
             }
             ID_CANCEL => {
-                let index = src.read_u32().await?;
-                let begin = src.read_u32().await?;
-                let length = src.read_u32().await?;
-                Ok(Cancel {
-                    index,
-                    begin,
-                    length,
-                })
+                if src.remaining() < 12 {
+                    Err(invalid_data_err("Cancel is too short"))
+                } else {
+                    let index = src.get_u32();
+                    let begin = src.get_u32();
+                    let length = src.get_u32();
+                    Ok(Self::Cancel {
+                        index,
+                        begin,
+                        length,
+                    })
+                }
             }
-            ID_PORT => Ok(DhtPort {
-                listen_port: src.read_u16().await?,
+            ID_PIECE => {
+                if msg_len < 9 {
+                    Err(invalid_data_err("invalid Piece len"))
+                } else {
+                    let index = src.get_u32();
+                    let begin = src.get_u32();
+                    let block_len = msg_len - 9;
+                    let data = src
+                        .chunk()
+                        .get(..block_len)
+                        .ok_or_else(|| invalid_data_err("Piece is shorter than expected"))?;
+                    let mut block = Vec::with_capacity(block_len);
+                    block.extend_from_slice(data);
+                    Ok(Self::Piece {
+                        index,
+                        begin,
+                        block,
+                    })
+                }
+            }
+            ID_PORT => Ok(Self::DhtPort {
+                listen_port: src
+                    .try_get_u16()
+                    .map_err(|_| invalid_data_err("DhtPort is too short"))?,
             }),
             ID_EXTENDED => {
-                let id = src.read_u8().await?;
-                let data = read_buf_exact(src, msg_len - 2).await?;
-                Ok(Extended { id, data })
+                if msg_len < 2 {
+                    Err(invalid_data_err("invalid Extended len"))
+                } else {
+                    let id = src.get_u8();
+                    let data_len = msg_len - 2;
+                    let data = src.chunk().get(..data_len).ok_or_else(|| {
+                        invalid_data_err("Extended data is shorter than expected")
+                    })?;
+                    let mut ext_data = Vec::with_capacity(data_len);
+                    ext_data.extend_from_slice(data);
+                    Ok(Self::Extended { id, data: ext_data })
+                }
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -128,77 +158,84 @@ impl PeerMessage {
         }
     }
 
-    pub(super) async fn write_to<S: AsyncWriteExt + Unpin>(
-        &self,
-        dest: &mut BufWriter<S>,
-    ) -> io::Result<()> {
-        use PeerMessage::*;
+    /// Write message to `dest`. The destination buffer must be big enough.
+    pub(super) fn encode<B: BufMut>(&self, dest: &mut B) -> io::Result<()> {
+        let len = self.get_length();
+        if len + 4 > dest.remaining_mut() {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                format!(
+                    "buffer too short to encode message ({} < {})",
+                    dest.remaining_mut(),
+                    len + 4
+                ),
+            ));
+        }
 
-        dest.write_u32(self.get_length() as u32).await?;
+        dest.put_u32(len as u32);
 
         match self {
-            KeepAlive => (),
-            Choke => {
-                dest.write_u8(ID_CHOKE).await?;
+            Self::KeepAlive => (),
+            Self::Choke => {
+                dest.put_u8(ID_CHOKE);
             }
-            Unchoke => {
-                dest.write_u8(ID_UNCHOKE).await?;
+            Self::Unchoke => {
+                dest.put_u8(ID_UNCHOKE);
             }
-            Interested => {
-                dest.write_u8(ID_INTERESTED).await?;
+            Self::Interested => {
+                dest.put_u8(ID_INTERESTED);
             }
-            NotInterested => {
-                dest.write_u8(ID_NOT_INTERESTED).await?;
+            Self::NotInterested => {
+                dest.put_u8(ID_NOT_INTERESTED);
             }
-            Have { piece_index } => {
-                dest.write_u8(ID_HAVE).await?;
-                dest.write_u32(*piece_index).await?;
+            Self::Have { piece_index } => {
+                dest.put_u8(ID_HAVE);
+                dest.put_u32(*piece_index);
             }
-            Bitfield { bitfield } => {
-                dest.write_u8(ID_BITFIELD).await?;
-                dest.write_all(bitfield.as_raw_slice()).await?;
+            Self::Bitfield { bitfield } => {
+                dest.put_u8(ID_BITFIELD);
+                dest.put_slice(bitfield.as_raw_slice());
             }
-            Request {
+            Self::Request {
                 index,
                 begin,
                 length,
             } => {
-                dest.write_u8(ID_REQUEST).await?;
-                dest.write_u32(*index).await?;
-                dest.write_u32(*begin).await?;
-                dest.write_u32(*length).await?;
+                dest.put_u8(ID_REQUEST);
+                dest.put_u32(*index);
+                dest.put_u32(*begin);
+                dest.put_u32(*length);
             }
-            Piece {
+            Self::Piece {
                 index,
                 begin,
                 block,
             } => {
-                dest.write_u8(ID_PIECE).await?;
-                dest.write_u32(*index).await?;
-                dest.write_u32(*begin).await?;
-                dest.write_all(block).await?;
+                dest.put_u8(ID_PIECE);
+                dest.put_u32(*index);
+                dest.put_u32(*begin);
+                dest.put_slice(block);
             }
-            Cancel {
+            Self::Cancel {
                 index,
                 begin,
                 length,
             } => {
-                dest.write_u8(ID_CANCEL).await?;
-                dest.write_u32(*index).await?;
-                dest.write_u32(*begin).await?;
-                dest.write_u32(*length).await?;
+                dest.put_u8(ID_CANCEL);
+                dest.put_u32(*index);
+                dest.put_u32(*begin);
+                dest.put_u32(*length);
             }
-            DhtPort { listen_port } => {
-                dest.write_u8(ID_PORT).await?;
-                dest.write_u16(*listen_port).await?;
+            Self::DhtPort { listen_port } => {
+                dest.put_u8(ID_PORT);
+                dest.put_u16(*listen_port);
             }
-            Extended { id, data } => {
-                dest.write_u8(ID_EXTENDED).await?;
-                dest.write_u8(*id).await?;
-                dest.write_all(data).await?;
+            Self::Extended { id, data } => {
+                dest.put_u8(ID_EXTENDED);
+                dest.put_u8(*id);
+                dest.put_slice(data);
             }
         };
-        dest.flush().await?;
         Ok(())
     }
 
@@ -216,13 +253,6 @@ impl PeerMessage {
             Extended { data, .. } => 2 + data.len(),
         }
     }
-}
-
-#[inline]
-async fn read_buf_exact<S: AsyncReadExt + Unpin>(src: &mut S, len: usize) -> io::Result<Vec<u8>> {
-    let mut buffer = Vec::with_capacity(len).limit(len);
-    while 0 != src.read_buf(&mut buffer).await? {}
-    Ok(buffer.into_inner())
 }
 
 const ID_CHOKE: u8 = 0;

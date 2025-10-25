@@ -1,7 +1,4 @@
 use super::message::*;
-use futures_util::FutureExt;
-use std::io;
-use tokio::io::BufWriter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnyMessage {
@@ -31,14 +28,11 @@ impl From<ExtendedMessage> for AnyMessage {
 }
 
 impl AnyMessage {
-    pub fn write_to_buffer(self, buffer: &mut BufWriter<io::Cursor<Vec<u8>>>) {
-        fn write(msg: impl Into<PeerMessage>, buffer: &mut BufWriter<io::Cursor<Vec<u8>>>) {
-            msg.into().write_to(buffer).now_or_never().unwrap().unwrap();
-        }
+    pub fn write_to_buffer(self, buffer: &mut Vec<u8>) {
         match self {
-            Self::Uploader(msg) => write(msg, buffer),
-            Self::Downloader(msg) => write(msg, buffer),
-            Self::Extended(msg) => write(msg, buffer),
+            Self::Uploader(msg) => PeerMessage::from(msg).encode(buffer).unwrap(),
+            Self::Downloader(msg) => PeerMessage::from(msg).encode(buffer).unwrap(),
+            Self::Extended(msg) => PeerMessage::from(msg).encode(buffer).unwrap(),
         }
     }
 }
@@ -46,9 +40,9 @@ impl AnyMessage {
 #[macro_export]
 macro_rules! msgs {
     ($($arg:expr),+ $(,)? ) => {{
-        let mut buffer = tokio::io::BufWriter::new(std::io::Cursor::<Vec<u8>>::default());
+        let mut buffer = Vec::new();
         $($crate::pwp::testutils::AnyMessage::write_to_buffer($arg.into(), &mut buffer);)+
-        buffer.into_inner().into_inner()
+        buffer
     }};
 }
 

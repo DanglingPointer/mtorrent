@@ -1,21 +1,21 @@
 use super::MAX_BLOCK_SIZE;
 use super::handshake::*;
 use super::message::*;
+use bytes::BufMut;
 use futures_channel::mpsc;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use std::future::{self, Future};
 use std::io;
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{
-    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, tcp};
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
@@ -261,7 +261,6 @@ where
     S: SplittableStream + 'static,
 {
     const MAX_INCOMING_QUEUE: usize = 20;
-    const BUFFER_SIZE: usize = MAX_BLOCK_SIZE + 512; // data + some header
 
     let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
@@ -307,14 +306,14 @@ where
     let actor_fut = async move {
         let (ingress, egress) = stream.split();
         let receiver = IngressProcessor {
-            source: BufReader::with_capacity(BUFFER_SIZE, ingress),
+            source: ingress,
             remote_ip,
             ul_msg_sink: remote_uploader_msg_in,
             dl_msg_sink: remote_downloader_msg_in,
             ext_msg_sink: remote_extended_msg_in,
         };
         let sender = EgressProcessor {
-            sink: BufWriter::with_capacity(BUFFER_SIZE, egress),
+            sink: egress,
             remote_ip,
             dl_msg_source: local_downloader_msg_out,
             ul_msg_source: local_uploader_msg_out,
@@ -351,7 +350,7 @@ where
 }
 
 struct IngressProcessor<S: AsyncReadExt + Unpin> {
-    source: BufReader<S>,
+    source: S,
     remote_ip: SocketAddr,
     ul_msg_sink: mpsc::Sender<UploaderMessage>,
     dl_msg_sink: mpsc::Sender<DownloaderMessage>,
@@ -362,6 +361,26 @@ impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
     const RECV_TIMEOUT: Duration = sec!(120);
 
     async fn read_messages(mut self) -> io::Result<()> {
+        async fn read_one(
+            buffer: &mut [MaybeUninit<u8>],
+            mut source: impl AsyncReadExt + Unpin,
+        ) -> io::Result<PeerMessage> {
+            let msg_len = source.read_u32().await? as usize;
+            if msg_len > buffer.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    format!("msg len ({msg_len}) exceeds buffer size"),
+                ));
+            }
+            let mut readbuf = ReadBuf::uninit(buffer).limit(msg_len);
+            while 0 != source.read_buf(&mut readbuf).await? {}
+            let received = PeerMessage::decode_body(msg_len, &mut readbuf.into_inner().filled())?;
+            Ok(received)
+        }
+
+        const MAX_MSG_LEN: usize = MAX_BLOCK_SIZE + 512; // metadata block + bencoded header
+        let mut buffer = [MaybeUninit::<u8>::uninit(); MAX_MSG_LEN];
+
         loop {
             macro_rules! forward_and_continue {
                 ($msg:expr, $sink:expr) => {{
@@ -374,8 +393,8 @@ impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
                 }};
             }
 
-            timeout(Self::RECV_TIMEOUT, self.source.fill_buf()).await??;
-            let received = PeerMessage::read_from(&mut self.source).await?;
+            let received =
+                timeout(Self::RECV_TIMEOUT, read_one(&mut buffer, &mut self.source)).await??;
 
             let received = match UploaderMessage::try_from(received) {
                 Ok(msg) => forward_and_continue!(msg, self.ul_msg_sink),
@@ -403,7 +422,7 @@ impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
 }
 
 struct EgressProcessor<S: AsyncWriteExt + Unpin> {
-    sink: BufWriter<S>,
+    sink: S,
     remote_ip: SocketAddr,
     dl_msg_source: mpsc::Receiver<Option<DownloaderMessage>>,
     ul_msg_source: mpsc::Receiver<Option<UploaderMessage>>,
@@ -414,22 +433,36 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
     const PING_INTERVAL: Duration = sec!(30);
 
     async fn write_messages(mut self) -> io::Result<()> {
-        fn new_channel_closed_error() -> io::Error {
+        fn channel_closed_err() -> io::Error {
             io::Error::new(io::ErrorKind::BrokenPipe, "Channel closed")
         }
 
-        macro_rules! process_msg {
-            ($msg:expr, $source:expr $(,$proj:tt)?) => {
-                if let Some(msg) = $msg {
-                    let formattable = &msg;
-                    $(let formattable = &formattable.$proj;)?
-                    log::trace!("{} <= {}", self.remote_ip, formattable);
-                    PeerMessage::from(msg).write_to(&mut self.sink).await?;
-                }
-            };
+        async fn write_one(
+            buffer: &mut [MaybeUninit<u8>],
+            mut sink: impl AsyncWriteExt + Unpin,
+            msg: PeerMessage,
+        ) -> io::Result<()> {
+            let mut readbuf = ReadBuf::uninit(buffer);
+            msg.encode(&mut readbuf)?;
+            sink.write_all(readbuf.filled()).await?;
+            Ok(())
         }
 
+        const MAX_MSG_LEN: usize = 32 * 1024 + 64; // 32 KiB outbound block + some header
+        let mut buffer = [MaybeUninit::<u8>::uninit(); MAX_MSG_LEN];
+
         loop {
+            macro_rules! process_msg {
+                ($msg:expr, $source:expr $(,$proj:tt)?) => {
+                    if let Some(msg) = $msg {
+                        let formattable = &msg;
+                        $(let formattable = &formattable.$proj;)?
+                        log::trace!("{} <= {}", self.remote_ip, formattable);
+                        write_one(&mut buffer, &mut self.sink, PeerMessage::from(msg)).await?;
+                    }
+                };
+            }
+
             let next_ext_msg_fut = async {
                 if let Some(ext_src) = &mut self.ext_msg_source {
                     ext_src.next().await
@@ -441,21 +474,21 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
             select! {
                 biased;
                 dl_msg = self.dl_msg_source.next() => {
-                    let msg = dl_msg.ok_or_else(new_channel_closed_error)?;
+                    let msg = dl_msg.ok_or_else(channel_closed_err)?;
                     process_msg!(msg, &mut self.dl_msg_source);
                 }
                 ext_msg = next_ext_msg_fut => {
-                    let msg = ext_msg.ok_or_else(new_channel_closed_error)?;
+                    let msg = ext_msg.ok_or_else(channel_closed_err)?;
                     process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
                 }
                 ul_msg = self.ul_msg_source.next() => {
-                    let msg = ul_msg.ok_or_else(new_channel_closed_error)?;
+                    let msg = ul_msg.ok_or_else(channel_closed_err)?;
                     process_msg!(msg, &mut self.ul_msg_source);
                 }
                 _ = sleep(Self::PING_INTERVAL) => {
                     let ping_msg = PeerMessage::KeepAlive;
                     log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
-                    ping_msg.write_to(&mut self.sink).await?;
+                    write_one(&mut buffer, &mut self.sink, ping_msg).await?;
                 }
             };
         }
@@ -482,9 +515,8 @@ impl From<ChannelError> for io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::{FutureExt, join};
+    use futures_util::join;
     use std::collections::HashMap;
-    use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::pin::Pin;
     use std::task::{Context, Poll};
@@ -495,11 +527,11 @@ mod tests {
     use tokio_test::{assert_pending, assert_ready};
 
     fn buffer_with(msgs: &[PeerMessage]) -> Vec<u8> {
-        let mut socket = BufWriter::new(Cursor::<Vec<u8>>::default());
+        let mut buf = Vec::new();
         for msg in msgs {
-            msg.write_to(&mut socket).now_or_never().unwrap().unwrap();
+            msg.encode(&mut buf).unwrap();
         }
-        socket.into_inner().into_inner()
+        buf
     }
 
     macro_rules! msgs {
