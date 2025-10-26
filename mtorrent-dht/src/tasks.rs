@@ -23,6 +23,13 @@ macro_rules! is_valid_addr {
     };
 }
 
+fn validate_discovered_node(discovered: &Node, source: &Node, ctx: &Ctx) -> bool {
+    is_valid_addr!(discovered.addr)
+        && discovered.addr != source.addr
+        && discovered.id != source.id
+        && discovered.id != ctx.local_id
+}
+
 // --------------------
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -59,14 +66,18 @@ pub async fn probe_node(addr: SocketAddr, ctx: Rc<Ctx>) -> Result<()> {
         }
     };
 
+    let source = Node {
+        id: response.id,
+        addr,
+    };
+
     for (node_id, node_addr) in response.nodes {
-        if is_valid_addr!(node_addr) && node_id != ctx.local_id && node_id != response.id {
-            ctx.event_reporter
-                .send(NodeEvent::Discovered(Node {
-                    id: node_id,
-                    addr: SocketAddr::V4(node_addr),
-                }))
-                .await?;
+        let discovered = Node {
+            id: node_id,
+            addr: SocketAddr::V4(node_addr),
+        };
+        if validate_discovered_node(&discovered, &source, &ctx) {
+            ctx.event_reporter.send(NodeEvent::Discovered(discovered)).await?;
         }
     }
 
@@ -145,7 +156,11 @@ async fn query_node_for_peers(
                 log::trace!("search produced {} nodes", id_addr_pairs.len());
 
                 for (id, addr) in id_addr_pairs {
-                    if is_valid_addr!(addr) && id != ctx.local_id {
+                    let discovered = Node {
+                        id,
+                        addr: SocketAddr::V4(addr),
+                    };
+                    if validate_discovered_node(&discovered, &node, &ctx) {
                         node_reporter
                             .send(Node {
                                 id,
@@ -163,9 +178,9 @@ async fn query_node_for_peers(
                 log::trace!("search produced {} peer(s)", socket_addr_v4s.len());
                 let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
 
-                for peer_addr in socket_addr_v4s.into_iter().map(SocketAddr::V4) {
+                for peer_addr in socket_addr_v4s {
                     if is_valid_addr!(peer_addr) {
-                        peer_reporter.send(peer_addr).await?;
+                        peer_reporter.send(SocketAddr::V4(peer_addr)).await?;
                     }
                 }
                 if let Some(token) = get_peers_response.token {
@@ -183,13 +198,12 @@ async fn query_node_for_peers(
                     )
                     .await?;
                 for (node_id, node_addr) in find_nodes_response.nodes {
-                    if is_valid_addr!(node_addr) {
-                        node_reporter
-                            .send(Node {
-                                id: node_id,
-                                addr: SocketAddr::V4(node_addr),
-                            })
-                            .await?;
+                    let discovered = Node {
+                        id: node_id,
+                        addr: SocketAddr::V4(node_addr),
+                    };
+                    if validate_discovered_node(&discovered, &node, &ctx) {
+                        node_reporter.send(discovered).await?;
                     }
                 }
 
@@ -222,12 +236,19 @@ pub async fn run_search(
     let (peer_sender, mut peer_receiver) = mpsc::channel(1);
     let (node_sender, mut node_receiver) = mpsc::channel(1);
 
-    for node in initial_nodes {
-        _ = node_sender.try_send(node);
-    }
-
-    let mut queried_nodes = HashSet::new();
     let mut discovered_peers = HashSet::new();
+    let mut queried_nodes: HashSet<Node> = initial_nodes.collect();
+
+    for node in &queried_nodes {
+        task::spawn_local(canceller.clone().run_until_cancelled_owned(query_node_for_peers(
+            node.clone(),
+            data.target,
+            data.local_peer_port,
+            data.ctx.clone(),
+            node_sender.clone(),
+            peer_sender.clone(),
+        )));
+    }
 
     loop {
         select! {
@@ -247,8 +268,8 @@ pub async fn run_search(
             Some(peer_addr) = peer_receiver.recv() => {
                 if discovered_peers.insert(peer_addr) {
                     log::debug!("Discovered new peer {peer_addr} for target {}", data.target);
-                    data.peer_sender.send((peer_addr, data.target))?;
-                    data.cmd_result_sender.send(peer_addr).await?;
+                    data.peer_sender.send((peer_addr, data.target))?; // fails only if DHT is shutting down
+                    _ = data.cmd_result_sender.send(peer_addr).await;
                 }
             }
             Some(node) = node_receiver.recv() => {
