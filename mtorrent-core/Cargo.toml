@@ -35,3 +35,9 @@ form_urlencoded = { version = "1.2.1", default-features = false }
 [dev-dependencies]
 tokio-test = { workspace = true }
 mockito = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+workspace = true

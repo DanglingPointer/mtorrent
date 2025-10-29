@@ -35,3 +35,9 @@ pinned-init = { version = "0.0.10", default-features = false, features = [
 [dev-dependencies]
 simple_logger = { workspace = true }
 tokio-test = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+workspace = true

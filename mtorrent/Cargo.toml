@@ -30,3 +30,9 @@ mockall = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+workspace = true

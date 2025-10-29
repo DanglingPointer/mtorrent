@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod bandwidth;
 pub mod benc;
 pub mod bounded_fifo_set;

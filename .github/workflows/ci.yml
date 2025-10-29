@@ -30,10 +30,10 @@ jobs:
     - name: Lint release
       run: cargo clippy --release --all-targets --all-features -- -D warnings
     - name: Build docs
-      run: cargo doc --lib --no-deps --all-features --document-private-items
+      run: cargo +nightly doc --lib --no-deps --all-features --document-private-items
       env:
-        RUSTDOCFLAGS: -Dwarnings
-        RUSTFLAGS: -Dwarnings
+        RUSTDOCFLAGS: --cfg docsrs --cfg tokio_unstable -Dwarnings
+        RUSTFLAGS: --cfg tokio_unstable -Dwarnings
     - name: Run doctests
       run: cargo test --doc
 

@@ -123,7 +123,7 @@ pub fn without_runtime<F: FnOnce() + Send + 'static>(
     })
 }
 
-/// Create a worker thread running a [`tokio::runtime::Runtime`] with the specified configuration.
+/// Create a worker thread running a [`tokio::runtime::Runtime`](https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html) with the specified configuration.
 pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     if config.io_enabled {
@@ -151,8 +151,9 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     })
 }
 
-/// Create a worker thread running a [`tokio::runtime::LocalRuntime`] with the specified configuration.
+/// Create a worker thread running a [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html) with the specified configuration.
 #[cfg(tokio_unstable)]
+#[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
 pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     builder.max_blocking_threads(config.max_blocking_threads);
