@@ -19,16 +19,16 @@ license = "Apache-2.0"
 opt-level = 3
 
 [workspace.dependencies]
-url = "2.5.7"
+url = "2.5"
 futures-util = { version = "0.3", default-features = false }
 futures-channel = { version = "0.3", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
-bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
-log = "0.4.27"
-simple_logger = { version = "5.0.0", features = ["threads"] }
+bitvec = { version = "1.0", default-features = false, features = ["alloc"] }
+log = "0.4"
+simple_logger = { version = "5.1", features = ["threads"] }
 sha1_smol = "1.0.1"
-bytes = "1.10.1"
-tokio = { version = "1.45.1", features = [
+bytes = "1.11"
+tokio = { version = "1.48", features = [
     "rt",
     "net",
     "time",
@@ -36,23 +36,23 @@ tokio = { version = "1.45.1", features = [
     "sync",
     "macros",
 ] }
-tokio-util = "0.7.15"
-derive_more = { version = "2.0.1", features = [
+tokio-util = "0.7"
+derive_more = { version = "2.0", features = [
     "from",
     "display",
     "debug",
     "deref",
 ] }
-local_async_utils = { version = "0.2.5", features = ["tokio-time"] }
-thiserror = "2.0.17"
-serde = { version = "1.0.221", features = ["derive"] }
-serde_json = "1.0.145"
+local_async_utils = { version = "0.2.8", features = ["tokio"] }
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 static_assertions = "1.1.0"
-tokio-test = "0.4.4"
-mockito = { version = "1.7.0", default-features = false }
-mockall = "0.13.1"
-rstest = { version = "0.26.1", default-features = false }
-rstest_reuse = { version = "0.7.0", default-features = false }
+tokio-test = "0.4"
+mockito = { version = "1.7", default-features = false }
+mockall = "0.13"
+rstest = { version = "0.26", default-features = false }
+rstest_reuse = { version = "0.7", default-features = false }
 mtorrent-core = { path = "mtorrent-core", version = "0" }
 mtorrent-dht = { path = "mtorrent-dht", version = "0" }
 mtorrent-utils = { path = "mtorrent-utils", version = "0" }
