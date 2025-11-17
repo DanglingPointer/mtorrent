@@ -6,7 +6,7 @@ use futures_channel::mpsc;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
-use std::future::{self, Future};
+use std::future::Future;
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -440,10 +440,10 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
         async fn write_one(
             buffer: &mut [MaybeUninit<u8>],
             mut sink: impl AsyncWriteExt + Unpin,
-            msg: PeerMessage,
+            msg: impl Into<PeerMessage>,
         ) -> io::Result<()> {
             let mut readbuf = ReadBuf::uninit(buffer);
-            msg.encode(&mut readbuf)?;
+            msg.into().encode(&mut readbuf)?;
             sink.write_all(readbuf.filled()).await?;
             Ok(())
         }
@@ -451,46 +451,45 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
         const MAX_MSG_LEN: usize = 32 * 1024 + 64; // 32 KiB outbound block + some header
         let mut buffer = [MaybeUninit::<u8>::uninit(); MAX_MSG_LEN];
 
-        loop {
-            macro_rules! process_msg {
-                ($msg:expr, $source:expr $(,$proj:tt)?) => {
-                    if let Some(msg) = $msg {
-                        let formattable = &msg;
-                        $(let formattable = &formattable.$proj;)?
-                        log::trace!("{} <= {}", self.remote_ip, formattable);
-                        write_one(&mut buffer, &mut self.sink, PeerMessage::from(msg)).await?;
+        macro_rules! process_one {
+            ($($ext_msg_source:expr)?) => {
+                select! {
+                    biased;
+                    dl_msg = self.dl_msg_source.next() => {
+                        if let Some(msg) = dl_msg.ok_or_else(channel_closed_err)? {
+                            log::trace!("{} <= {}", self.remote_ip, msg);
+                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                        }
                     }
-                };
+                    $(ext_msg = $ext_msg_source.next() => {
+                        if let Some(msg) = ext_msg.ok_or_else(channel_closed_err)? {
+                            log::trace!("{} <= {}", self.remote_ip, msg.0);
+                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                        }
+                    })?
+                    ul_msg = self.ul_msg_source.next() => {
+                        if let Some(msg) = ul_msg.ok_or_else(channel_closed_err)? {
+                            log::trace!("{} <= {}", self.remote_ip, msg);
+                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                        }
+                    }
+                    _ = sleep(Self::PING_INTERVAL) => {
+                        let ping_msg = PeerMessage::KeepAlive;
+                        log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
+                        write_one(&mut buffer, &mut self.sink, ping_msg).await?;
+                    }
+                }
+            };
+        }
+
+        if let Some(ext_src) = &mut self.ext_msg_source {
+            loop {
+                process_one!(ext_src);
             }
-
-            let next_ext_msg_fut = async {
-                if let Some(ext_src) = &mut self.ext_msg_source {
-                    ext_src.next().await
-                } else {
-                    future::pending().await
-                }
-            };
-
-            select! {
-                biased;
-                dl_msg = self.dl_msg_source.next() => {
-                    let msg = dl_msg.ok_or_else(channel_closed_err)?;
-                    process_msg!(msg, &mut self.dl_msg_source);
-                }
-                ext_msg = next_ext_msg_fut => {
-                    let msg = ext_msg.ok_or_else(channel_closed_err)?;
-                    process_msg!(msg, self.ext_msg_source.as_mut().unwrap(), 0);
-                }
-                ul_msg = self.ul_msg_source.next() => {
-                    let msg = ul_msg.ok_or_else(channel_closed_err)?;
-                    process_msg!(msg, &mut self.ul_msg_source);
-                }
-                _ = sleep(Self::PING_INTERVAL) => {
-                    let ping_msg = PeerMessage::KeepAlive;
-                    log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
-                    write_one(&mut buffer, &mut self.sink, ping_msg).await?;
-                }
-            };
+        } else {
+            loop {
+                process_one!();
+            }
         }
     }
 }
