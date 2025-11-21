@@ -37,3 +37,6 @@ workspace = true
 
 [package.metadata.docs.rs]
 workspace = true
+
+[features]
+tokio_unstable=[]
