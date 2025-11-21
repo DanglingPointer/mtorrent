@@ -56,7 +56,7 @@ rstest_reuse = { version = "0.7", default-features = false }
 mtorrent-core = { path = "mtorrent-core", version = "0" }
 mtorrent-dht = { path = "mtorrent-dht", version = "0" }
 mtorrent-utils = { path = "mtorrent-utils", version = "0" }
-mtorrent = { path = "mtorrent", version = "0" }
+mtorrent = { path = "mtorrent", features = ["tokio_unstable"], version = "0" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }

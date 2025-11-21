@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::{io, thread};
 use tokio::runtime;
 use tokio::sync::Notify;
-#[cfg(tokio_unstable)]
+#[cfg(feature = "tokio_unstable")]
 use tokio::sync::oneshot;
 
 pub mod simple {
@@ -152,8 +152,8 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
 }
 
 /// Create a worker thread running a [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html) with the specified configuration.
-#[cfg(tokio_unstable)]
-#[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
+#[cfg(feature = "tokio_unstable")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio_unstable")))]
 pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let mut builder = runtime::Builder::new_current_thread();
     builder.max_blocking_threads(config.max_blocking_threads);
@@ -234,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tokio_unstable")]
     fn test_local_rt_worker_handle_doesnt_block_forever() {
         let max_end_time = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
@@ -249,6 +250,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tokio_unstable")]
     fn test_local_rt_worker_doesnt_wait_for_blocking_tasks() {
         let max_end_time = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
