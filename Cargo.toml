@@ -60,8 +60,3 @@ mtorrent = { path = "mtorrent", version = "0" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
-
-[workspace.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
-rustc-args = ["--cfg", "tokio_unstable"]
