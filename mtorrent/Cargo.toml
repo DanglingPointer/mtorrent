@@ -35,4 +35,6 @@ mtorrent-core = { path = "../mtorrent-core", features = ["mocks"] }
 workspace = true
 
 [package.metadata.docs.rs]
-workspace = true
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
+rustc-args = ["--cfg", "tokio_unstable"]
