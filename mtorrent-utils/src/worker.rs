@@ -203,65 +203,65 @@ mod tests {
 
     #[test]
     fn test_rt_worker_handle_doesnt_block_forever() {
-        let max_end_time = Instant::now() + sec!(5);
+        let deadline = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let _worker_hnd = with_runtime(Default::default()).expect("build worker");
         });
-        while Instant::now() < max_end_time {
+        while Instant::now() < deadline {
             if handle.is_finished() {
                 handle.join().expect("DON'T PANIC");
                 return;
             }
         }
-        panic!("Worker failed to exit within 10 sec");
+        panic!("Worker failed to exit within deadline");
     }
 
     #[test]
     fn test_rt_worker_doesnt_wait_for_blocking_tasks() {
-        let max_end_time = Instant::now() + sec!(5);
+        let deadline = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let worker = with_runtime(Default::default()).expect("build worker");
             worker.runtime_handle().spawn_blocking(|| std::thread::sleep(min!(1)));
         });
 
-        while Instant::now() < max_end_time {
+        while Instant::now() < deadline {
             if handle.is_finished() {
                 handle.join().expect("DON'T PANIC");
                 return;
             }
         }
-        panic!("Worker failed to exit within 10 sec");
+        panic!("Worker failed to exit within deadline");
     }
 
     #[test]
     fn test_local_rt_worker_handle_doesnt_block_forever() {
-        let max_end_time = Instant::now() + sec!(5);
+        let deadline = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let _worker_hnd = with_local_runtime(Default::default()).expect("build worker");
         });
-        while Instant::now() < max_end_time {
+        while Instant::now() < deadline {
             if handle.is_finished() {
                 handle.join().expect("DON'T PANIC");
                 return;
             }
         }
-        panic!("Worker failed to exit within 10 sec");
+        panic!("Worker failed to exit within deadline");
     }
 
     #[test]
     fn test_local_rt_worker_doesnt_wait_for_blocking_tasks() {
-        let max_end_time = Instant::now() + sec!(5);
+        let deadline = Instant::now() + sec!(5);
         let handle = thread::spawn(move || {
             let worker = with_local_runtime(Default::default()).expect("build worker");
             worker.runtime_handle().spawn_blocking(|| std::thread::sleep(min!(1)));
         });
 
-        while Instant::now() < max_end_time {
+        while Instant::now() < deadline {
             if handle.is_finished() {
                 handle.join().expect("DON'T PANIC");
                 return;
             }
         }
-        panic!("Worker failed to exit within 10 sec");
+        panic!("Worker failed to exit within deadline");
     }
 }
