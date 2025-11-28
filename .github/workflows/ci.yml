@@ -57,3 +57,17 @@ jobs:
       run: cargo nextest run --all-targets --all-features --no-fail-fast --failure-output=final
     - name: Build release
       run: cargo build --release --all-targets --verbose
+
+  coverage:
+    name: Code coverage
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+    - uses: actions/checkout@v5
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest,cargo-llvm-cov
+    - uses: Swatinem/rust-cache@v2
+    - name: Check code coverage
+      run: cargo llvm-cov nextest --all-features --workspace --ignore-run-fail --fail-under-lines 80
