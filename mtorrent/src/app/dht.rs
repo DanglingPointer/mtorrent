@@ -12,14 +12,14 @@ use tokio::{join, task};
 pub struct Config {
     /// Local UDP port to bind to.
     pub local_port: u16,
-    /// Maximum number of outbound DHT queries in flight.
-    /// If `None`, use a default value.
+    /// Maximum number of outbound queries in flight.
+    /// Uses an internal default if `None`.
     pub max_concurrent_queries: Option<usize>,
-    /// Directory for storing DHT-related data.
+    /// Directory for storing persitent data between boots.
     pub config_dir: PathBuf,
-    /// Whether to use UPnP for port mapping.
+    /// Create and maintain port mappings via UPnP.
     pub use_upnp: bool,
-    /// Custom list of node addresses used for bootstrapping.
+    /// Override default bootstrap nodes.
     pub bootstrap_nodes_override: Option<Vec<String>>,
 }
 
