@@ -35,6 +35,7 @@ form_urlencoded = { workspace = true }
 [dev-dependencies]
 tokio-test = { workspace = true }
 mockito = { workspace = true }
+simple_logger = { workspace = true }
 
 [lints]
 workspace = true

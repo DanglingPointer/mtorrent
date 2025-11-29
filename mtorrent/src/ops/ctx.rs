@@ -6,6 +6,7 @@ use crate::utils::listener::{
 use local_async_utils::prelude::*;
 use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -30,10 +31,31 @@ macro_rules! define_with_ctx {
     };
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum PwpMode {
+    TcpOnly,
+    UtpOnly,
+    Any,
+}
+
+fn get_outbound_pwp_mode() -> PwpMode {
+    use serde::de::value::{Error, StringDeserializer};
+
+    if let Ok(v) = std::env::var("MTORRENT_PWP_MODE")
+        && let Ok(mode) = PwpMode::deserialize(StringDeserializer::<Error>::new(v))
+    {
+        mode
+    } else {
+        PwpMode::TcpOnly
+    }
+}
+
 pub(super) struct ConstData {
     local_peer_id: PeerId,
     pwp_listener_public_addr: SocketAddr,
     pwp_local_tcp_port: u16,
+    outbound_pwp_mode: PwpMode,
 }
 
 impl ConstData {
@@ -45,6 +67,12 @@ impl ConstData {
     }
     pub(super) fn pwp_local_tcp_port(&self) -> u16 {
         self.pwp_local_tcp_port
+    }
+    pub(super) fn pwp_outbound_tcp_allowed(&self) -> bool {
+        matches!(self.outbound_pwp_mode, PwpMode::Any | PwpMode::TcpOnly)
+    }
+    pub(super) fn pwp_outbound_utp_allowed(&self) -> bool {
+        matches!(self.outbound_pwp_mode, PwpMode::Any | PwpMode::UtpOnly)
     }
 }
 
@@ -74,6 +102,7 @@ impl PreliminaryCtx {
                 local_peer_id,
                 pwp_listener_public_addr,
                 pwp_local_tcp_port,
+                outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         })
     }
@@ -120,6 +149,7 @@ impl MainCtx {
                 local_peer_id,
                 pwp_listener_public_addr,
                 pwp_local_tcp_port,
+                outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         };
         Ok(Handle::new(ctx))

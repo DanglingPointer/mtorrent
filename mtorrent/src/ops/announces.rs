@@ -218,7 +218,9 @@ mod tests {
         assert!(udp_trackers.contains("tracker.fatkhoala.org:13780"));
         assert!(udp_trackers.contains("tracker.tallpenguin.org:15760"));
 
-        let info = Metainfo::from_file("../mtorrent-cli/tests/assets/pcap.torrent").unwrap();
+        let info =
+            Metainfo::from_file("../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent")
+                .unwrap();
 
         let mut http_iter = trackers_from_metainfo(&info).filter_map(get_http_tracker_addr);
         assert_eq!("http://localhost:8000/announce", http_iter.next().unwrap());

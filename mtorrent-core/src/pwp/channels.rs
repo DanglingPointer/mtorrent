@@ -128,13 +128,16 @@ const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 
 /// Perform handshake on an inbound connection from a peer, and set up [`PeerChannel`]s.
 /// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
-pub async fn channels_for_inbound_connection(
+pub async fn channels_for_inbound_connection<S>(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
-    socket: TcpStream,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)> {
+    socket: S,
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
+where
+    S: AsyncRead + AsyncWrite + SplittableStream + 'static,
+{
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
@@ -153,14 +156,17 @@ pub async fn channels_for_inbound_connection(
 
 /// Perform handshake on an outbound connection to a peer, and set up [`PeerChannel`]s.
 /// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
-pub async fn channels_for_outbound_connection(
+pub async fn channels_for_outbound_connection<S>(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
-    socket: TcpStream,
+    socket: S,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)> {
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
+where
+    S: AsyncRead + AsyncWrite + SplittableStream + 'static,
+{
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
@@ -203,7 +209,8 @@ where
 
 // ------
 
-trait SplittableStream: Unpin {
+/// Helper trait for efficiently splitting a stream into read and write halves.
+pub trait SplittableStream: Unpin {
     type Ingress<'i>: AsyncRead + Unpin
     where
         Self: 'i;

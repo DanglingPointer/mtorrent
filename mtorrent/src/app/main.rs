@@ -11,7 +11,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::broadcast;
-use tokio::{runtime, task};
+use tokio::{join, runtime, task};
 use tokio_util::sync::CancellationToken;
 
 /// Configuration for a single torrent download.
@@ -39,6 +39,30 @@ pub struct Context {
     pub storage_runtime: runtime::Handle,
 }
 
+async fn start_upnp(
+    internal_addr: SocketAddr,
+    desired_external_port: Option<u16>,
+    proto: upnp::PortMappingProtocol,
+) -> SocketAddr {
+    let Ok(port_opener) =
+        upnp::PortOpener::new(internal_addr, upnp::PortMappingProtocol::TCP, desired_external_port)
+            .await
+            .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
+    else {
+        return internal_addr;
+    };
+
+    let external_addr = port_opener.external_ip();
+    log::info!("UPnP: {proto:?} port mapping succeeded, public addr: {external_addr}");
+
+    task::spawn(async move {
+        if let Err(e) = port_opener.run_continuous_renewal().await {
+            log::error!("UPnP: {proto:?} port renewal for PWP failed: {e}");
+        }
+    });
+    external_addr
+}
+
 /// Download a single torrent given a magnet link or a path to its metainfo file.
 /// This function will exit once the download is complete or a fatal error has occurred.
 pub async fn single_torrent(
@@ -61,44 +85,33 @@ pub async fn single_torrent(
         Ipv4Addr::UNSPECIFIED.into(),
         cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
     );
-    // get public ip to send correct listening port to trackers and peers later
-    let public_pwp_ip = if cfg.use_upnp {
-        match upnp::PortOpener::new(
-            SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into(),
-            upnp::PortMappingProtocol::TCP,
-            cfg.pwp_port,
-        )
-        .await
-        {
-            Ok(port_opener) => {
-                let public_ip = port_opener.external_ip();
-                log::info!("UPnP for PWP succeeded, public ip: {public_ip}");
-                ctx.pwp_runtime.spawn(async move {
-                    if let Err(e) = port_opener.run_continuous_renewal().await {
-                        log::error!("UPnP port renewal for PWP failed: {e}");
-                    }
-                });
-                public_ip
-            }
-            Err(e) => {
-                log::error!("UPnP for PWP failed: {e}");
-                listener_addr
-            }
-        }
+
+    // create port mappings and get public ip to send correct listening port to trackers and peers later
+    let public_pwp_addr = if cfg.use_upnp {
+        let _g = ctx.pwp_runtime.enter();
+        let internal_addr = SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into();
+        let (_public_pwp_addr, public_utp_addr) = join!(
+            start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::TCP),
+            start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::UDP),
+        );
+        public_utp_addr
     } else {
         listener_addr
     };
+
+    let utp_handle = ops::launch_utp(&ctx.pwp_runtime, listener_addr);
 
     if Path::new(metainfo_uri.as_ref()).is_file() {
         main_stage(
             cfg.local_peer_id,
             listener_addr,
-            public_pwp_ip,
+            public_pwp_addr,
             metainfo_uri.as_ref(),
             cfg.output_dir,
             cfg.config_dir,
             &mut listener,
             ctx,
+            &utp_handle,
             std::iter::empty(),
         )
         .await?;
@@ -106,25 +119,27 @@ pub async fn single_torrent(
         let (metainfo_filepath, peers) = preliminary_stage(
             cfg.local_peer_id,
             listener_addr,
-            public_pwp_ip,
+            public_pwp_addr,
             metainfo_uri,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
             &mut listener,
             ctx.dht_handle.as_ref(),
             &ctx.pwp_runtime,
+            &utp_handle,
         )
         .await?;
         log::info!("Metadata downloaded successfully, starting content download");
         main_stage(
             cfg.local_peer_id,
             listener_addr,
-            public_pwp_ip,
+            public_pwp_addr,
             metainfo_filepath,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
             &mut listener,
             ctx,
+            &utp_handle,
             peers,
         )
         .await?;
@@ -143,6 +158,7 @@ async fn preliminary_stage(
     listener: &mut impl listener::StateListener,
     dht_handle: Option<&dht::CommandSink>,
     pwp_runtime: &runtime::Handle,
+    utp_handle: &ops::UtpHandle,
 ) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
@@ -174,8 +190,13 @@ async fn preliminary_stage(
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
+            utp_handle: utp_handle.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
+
+    if let Err(e) = utp_handle.restart(peer_reporter.clone()).await {
+        log::error!("Failed to restart uTP: {e}");
+    }
 
     dht_handle.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
@@ -229,6 +250,7 @@ async fn main_stage(
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
     handles: impl Borrow<Context>,
+    utp_handle: &ops::UtpHandle,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
 ) -> io::Result<()> {
     let handles: &Context = handles.borrow();
@@ -268,8 +290,13 @@ async fn main_stage(
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+            utp_handle: utp_handle.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
+
+    if let Err(e) = utp_handle.restart(peer_reporter.clone()).await {
+        log::error!("Failed to restart uTP: {e}");
+    }
 
     handles.dht_handle.as_ref().map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(

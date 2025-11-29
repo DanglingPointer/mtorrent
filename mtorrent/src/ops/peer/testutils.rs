@@ -1,4 +1,4 @@
-use crate::ops::{PeerReporter, ctx};
+use crate::ops::{PeerReporter, UtpHandle, ctx};
 use crate::utils::startup;
 use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
@@ -198,6 +198,7 @@ impl PeerBuilder {
                 pwp_worker_handle: tokio::runtime::Handle::current(),
                 peer_reporter: PeerReporter::new_mock(),
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+                utp_handle: UtpHandle::new_mock(),
             };
             super::run_peer_connection(pwp::PeerOrigin::Other, dlchans, ulchans, extchans, &data)
                 .await

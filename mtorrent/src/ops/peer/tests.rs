@@ -1,6 +1,7 @@
 use super::testutils::*;
 use crate::ops::PeerConnector;
 use crate::ops::PeerReporter;
+use crate::ops::UtpHandle;
 use crate::ops::ctx;
 use crate::utils::startup;
 use local_async_utils::prelude::*;
@@ -15,6 +16,7 @@ use std::{fs, panic};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
 
@@ -152,11 +154,14 @@ async fn run_listening_seeder(
         pwp_worker_handle: runtime::Handle::current(),
         peer_reporter: PeerReporter::new_mock(),
         piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+        utp_handle: UtpHandle::new_mock(),
     });
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, addr) = listener.accept().await.unwrap();
-    let (dl_chan, ul_chan, ext_chan) = data.inbound_connect_and_handshake(addr, stream).await?;
+    let deadline = Instant::now() + data.connect_retry_interval();
+    let (dl_chan, ul_chan, ext_chan) =
+        data.inbound_connect_and_handshake(addr, deadline, stream).await?;
     data.run_connection(pwp::PeerOrigin::Listener, (dl_chan, ul_chan, ext_chan))
         .await?;
 
@@ -240,7 +245,8 @@ async fn pass_torrent_from_peer_to_peer(
 async fn test_pass_multifile_torrent_from_peer_to_peer() {
     setup(false);
     let output_dir = "test_pass_multifile_torrent_from_peer_to_peer";
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent";
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent";
     let input_dir = "../mtorrent-cli/tests/assets/screenshots";
 
     pass_torrent_from_peer_to_peer(metainfo_filepath, output_dir, input_dir).await;
@@ -252,7 +258,7 @@ async fn test_pass_multifile_torrent_from_peer_to_peer() {
 async fn test_pass_monofile_torrent_from_peer_to_peer() {
     setup(false);
     let output_dir = "test_pass_monofile_torrent_from_peer_to_peer";
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent";
+    let metainfo_filepath = "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent";
     let input_dir = "../mtorrent-cli/tests/assets/pcap";
 
     pass_torrent_from_peer_to_peer(metainfo_filepath, output_dir, input_dir).await;
@@ -299,7 +305,8 @@ async fn test_pass_metadata_from_peer_to_peer() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_send_extended_handshake_before_bitfield() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent";
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent";
     let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
     let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
 
@@ -427,7 +434,8 @@ async fn test_reevaluate_interest_every_min() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_block_request_timeout_not_affected_by_other_messages() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
 
     let socket = MockBuilder::new()
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
@@ -466,7 +474,8 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_block_request_extra_retry_when_peer_has_seeded() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
 
     let socket = MockBuilder::new()
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
@@ -522,7 +531,7 @@ async fn test_block_request_extra_retry_when_peer_has_seeded() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_respect_peer_reqq() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
+    let metainfo_filepath = "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent"; // piece size > 16K
     let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
     let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
 
@@ -593,7 +602,7 @@ async fn test_respect_peer_reqq() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_always_keep_reqq_requests_in_flight() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
+    let metainfo_filepath = "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent"; // piece size > 16K
     let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
     let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
 
@@ -727,7 +736,8 @@ async fn test_always_keep_reqq_requests_in_flight() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_clear_pending_requests_when_peer_chokes() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
 
     let socket = MockBuilder::new()
         .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
@@ -774,7 +784,7 @@ async fn test_clear_pending_requests_when_peer_chokes() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_keep_reqq_requests_in_flight_when_rx_is_faster_than_tx() {
     setup(true);
-    let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
+    let metainfo_filepath = "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent"; // piece size > 16K
     let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
     let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
 
