@@ -31,6 +31,8 @@ rand = { workspace = true }
 url = { workspace = true }
 reqwest = { workspace = true }
 form_urlencoded = { workspace = true }
+pin-project = { workspace = true }
+enum_dispatch = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
