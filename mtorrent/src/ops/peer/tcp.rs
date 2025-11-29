@@ -63,7 +63,7 @@ pub async fn new_outbound_connection(
 }
 
 pub async fn new_inbound_connection(
-    local_peer_id: &[u8; 20],
+    local_peer_id: &PeerId,
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_ip: SocketAddr,

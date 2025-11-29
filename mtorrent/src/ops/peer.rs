@@ -3,6 +3,7 @@ mod extensions;
 mod metadata;
 mod tcp;
 mod upload;
+mod utp;
 
 #[cfg(test)]
 mod tests;
@@ -10,6 +11,7 @@ mod tests;
 mod testutils;
 
 pub use tcp::run_listener as run_pwp_listener;
+pub use utp::{UtpHandle, launch_utp};
 
 use super::connections::{PeerConnector, PeerReporter};
 use super::{ctrl, ctx};
@@ -19,8 +21,9 @@ use std::io;
 use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::sync::broadcast;
-use tokio::time::Instant;
+use tokio::time::{self, Instant};
 use tokio::{runtime, try_join};
+use utp::{InboundConnectArgs, OutboundConnectArgs};
 
 type MainHandle = ctx::Handle<ctx::MainCtx>;
 type PreliminaryHandle = ctx::Handle<ctx::PreliminaryCtx>;
@@ -189,6 +192,7 @@ pub struct MainConnectionData {
     pub pwp_worker_handle: runtime::Handle,
     pub peer_reporter: PeerReporter,
     pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    pub utp_handle: UtpHandle,
 }
 
 impl PeerConnector for MainConnectionData {
@@ -199,7 +203,7 @@ impl PeerConnector for MainConnectionData {
         200
     }
 
-    fn connect_timeout(&self) -> Duration {
+    fn connect_retry_interval(&self) -> Duration {
         sec!(15)
     }
 
@@ -210,29 +214,64 @@ impl PeerConnector for MainConnectionData {
     async fn outbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
+
+        if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_tcp_allowed()) {
+            return Err(io::Error::from(io::ErrorKind::Unsupported));
+        }
 
         let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
             *ctx.metainfo.info_hash(),
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        tcp::new_outbound_connection(
-            &local_peer_id,
-            &info_hash,
-            EXTENSION_PROTOCOL_ENABLED,
-            peer_addr,
-            local_port,
-            &self.pwp_worker_handle,
+        time::timeout_at(
+            deadline,
+            tcp::new_outbound_connection(
+                &local_peer_id,
+                &info_hash,
+                EXTENSION_PROTOCOL_ENABLED,
+                peer_addr,
+                local_port,
+                &self.pwp_worker_handle,
+            ),
         )
-        .await
+        .await?
+    }
+
+    async fn outbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
+    ) -> io::Result<Self::PeerConnection> {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
+        if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_utp_allowed()) {
+            return Err(io::Error::from(io::ErrorKind::Unsupported));
+        }
+
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
+
+        self.utp_handle
+            .outbound_connect(OutboundConnectArgs {
+                local_peer_id,
+                info_hash,
+                extension_protocol_enabled: EXTENSION_PROTOCOL_ENABLED,
+                peer_addr,
+                deadline,
+            })
+            .await
     }
 
     async fn inbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
         stream: tokio::net::TcpStream,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -240,15 +279,42 @@ impl PeerConnector for MainConnectionData {
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
-        tcp::new_inbound_connection(
-            &local_peer_id,
-            &info_hash,
-            EXTENSION_PROTOCOL_ENABLED,
-            peer_addr,
-            stream,
-            &self.pwp_worker_handle,
+        time::timeout_at(
+            deadline,
+            tcp::new_inbound_connection(
+                &local_peer_id,
+                &info_hash,
+                EXTENSION_PROTOCOL_ENABLED,
+                peer_addr,
+                stream,
+                &self.pwp_worker_handle,
+            ),
         )
-        .await
+        .await?
+    }
+
+    async fn inbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
+        data: mtorrent_core::utp::InboundConnectData,
+    ) -> io::Result<Self::PeerConnection> {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
+
+        self.utp_handle
+            .inbound_connect(InboundConnectArgs {
+                local_peer_id,
+                info_hash,
+                extension_protocol_enabled: EXTENSION_PROTOCOL_ENABLED,
+                peer_addr,
+                data,
+                deadline,
+            })
+            .await
     }
 
     async fn run_connection(
@@ -331,6 +397,7 @@ pub struct PreliminaryConnectionData {
     pub ctx_handle: PreliminaryHandle,
     pub pwp_worker_handle: runtime::Handle,
     pub peer_reporter: PeerReporter,
+    pub utp_handle: UtpHandle,
 }
 
 impl PeerConnector for PreliminaryConnectionData {
@@ -340,7 +407,7 @@ impl PeerConnector for PreliminaryConnectionData {
         50
     }
 
-    fn connect_timeout(&self) -> Duration {
+    fn connect_retry_interval(&self) -> Duration {
         sec!(5)
     }
 
@@ -351,24 +418,63 @@ impl PeerConnector for PreliminaryConnectionData {
     async fn outbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
         define_with_ctx!(handle);
+
+        if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_tcp_allowed()) {
+            return Err(io::Error::from(io::ErrorKind::Unsupported));
+        }
 
         let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
             *ctx.magnet.info_hash(),
             *ctx.const_data.local_peer_id(),
             ctx.const_data.pwp_local_tcp_port(),
         ));
-        let (dl, ul, ext) = tcp::new_outbound_connection(
-            &local_peer_id,
-            &info_hash,
-            true, // extension_protocol_enabled
-            peer_addr,
-            local_port,
-            &self.pwp_worker_handle,
+        let (dl, ul, ext) = time::timeout_at(
+            deadline,
+            tcp::new_outbound_connection(
+                &local_peer_id,
+                &info_hash,
+                true, // extension_protocol_enabled
+                peer_addr,
+                local_port,
+                &self.pwp_worker_handle,
+            ),
         )
-        .await?;
+        .await??;
+        let ext = ext.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
+        })?;
+        Ok((dl, ul, ext))
+    }
+
+    async fn outbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
+    ) -> io::Result<Self::PeerConnection> {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
+        if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_utp_allowed()) {
+            return Err(io::Error::from(io::ErrorKind::Unsupported));
+        }
+
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
+
+        let (dl, ul, ext) = self
+            .utp_handle
+            .outbound_connect(OutboundConnectArgs {
+                local_peer_id,
+                info_hash,
+                extension_protocol_enabled: true,
+                peer_addr,
+                deadline,
+            })
+            .await?;
         let ext = ext.ok_or_else(|| {
             io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
         })?;
@@ -378,6 +484,7 @@ impl PeerConnector for PreliminaryConnectionData {
     async fn inbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
         stream: tokio::net::TcpStream,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -385,15 +492,47 @@ impl PeerConnector for PreliminaryConnectionData {
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
-        let (dl, ul, ext) = tcp::new_inbound_connection(
-            &local_peer_id,
-            &info_hash,
-            true, // extension_protocol_enabled
-            peer_addr,
-            stream,
-            &self.pwp_worker_handle,
+        let (dl, ul, ext) = time::timeout_at(
+            deadline,
+            tcp::new_inbound_connection(
+                &local_peer_id,
+                &info_hash,
+                true, // extension_protocol_enabled
+                peer_addr,
+                stream,
+                &self.pwp_worker_handle,
+            ),
         )
-        .await?;
+        .await??;
+        let ext = ext.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
+        })?;
+        Ok((dl, ul, ext))
+    }
+
+    async fn inbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
+        data: mtorrent_core::utp::InboundConnectData,
+    ) -> io::Result<Self::PeerConnection> {
+        let mut handle = self.ctx_handle.clone();
+        define_with_ctx!(handle);
+
+        let (info_hash, local_peer_id) =
+            with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
+
+        let (dl, ul, ext) = self
+            .utp_handle
+            .inbound_connect(InboundConnectArgs {
+                local_peer_id,
+                info_hash,
+                extension_protocol_enabled: true,
+                peer_addr,
+                data,
+                deadline,
+            })
+            .await?;
         let ext = ext.ok_or_else(|| {
             io::Error::new(io::ErrorKind::Unsupported, "peer doesn't support extension protocol")
         })?;

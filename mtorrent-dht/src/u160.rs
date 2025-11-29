@@ -96,5 +96,11 @@ mod tests {
     #[test]
     fn test_print_u160() {
         assert_eq!(U160::from([0x0f; 20]).to_string(), "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f");
+
+        let val = U160::from([
+            142, 101, 242, 100, 245, 200, 23, 254, 214, 71, 95, 47, 168, 169, 30, 129, 13, 66, 49,
+            163,
+        ]);
+        assert_eq!(val.to_string(), "8e65f264f5c817fed6475f2fa8a91e810d4231a3")
     }
 }

@@ -1,9 +1,9 @@
-use futures_util::future;
+use futures_util::{StreamExt, future};
 use local_async_utils::prelude::*;
 use mtorrent::utils::startup;
-use mtorrent_core::input;
 use mtorrent_core::{data, input::Metainfo, pwp};
-use mtorrent_utils::{benc, ip};
+use mtorrent_core::{input, utp};
+use mtorrent_utils::benc;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
@@ -14,7 +14,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::{cmp, process};
 use std::{fs, io, iter};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tokio::{join, task, time};
 
@@ -447,6 +447,74 @@ async fn listening_peer<P: Peer>(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
+async fn listening_utp_peer<P: Peer>(
+    index: u8,
+    peer_count: usize,
+    listening_addr: SocketAddr,
+    expected_remote_addr: SocketAddr,
+    content_storage: data::StorageClient,
+    metainfo_storage: data::StorageClient,
+    metainfo: Rc<Metainfo>,
+    mut extensions_enabled: bool,
+) {
+    let verify_remote_addr = !extensions_enabled;
+
+    let socket = UdpSocket::bind(listening_addr).await.unwrap();
+    let (connection_spawner, mut connect_reporter, udp) = utp::init(socket);
+    let driver_handle = task::spawn_local(udp.run());
+
+    macro_rules! accept_and_run {
+        () => {{
+            let (remote_addr, data) = time::timeout(sec!(10), connect_reporter.next())
+                .await
+                .unwrap_or_else(|e| panic!("uTP peer {index} got stuck listening ({e})"))
+                .unwrap();
+            println!(
+                "uTP peer {} on {} received connection from {}",
+                index, listening_addr, remote_addr
+            );
+            if verify_remote_addr {
+                assert_eq!(remote_addr, expected_remote_addr);
+            }
+            let stream =
+                time::timeout(sec!(10), connection_spawner.inbound_connection(remote_addr, data))
+                    .await
+                    .unwrap_or_else(|e| panic!("uTP peer {index} got stuck accepting ({e})"))
+                    .unwrap();
+            let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
+                &[index + b'0'; 20],
+                None,
+                extensions_enabled,
+                remote_addr,
+                stream,
+            )
+            .await
+            .unwrap();
+            P::run(
+                index,
+                peer_count,
+                download_chans,
+                upload_chans,
+                ext_chans,
+                content_storage.clone(),
+                metainfo_storage.clone(),
+                metainfo.clone(),
+            )
+            .await;
+        }};
+    }
+    accept_and_run!();
+    if extensions_enabled {
+        extensions_enabled = false;
+        accept_and_run!();
+    }
+    drop(connection_spawner);
+    if let Err(e) = time::timeout(sec!(1), driver_handle).await {
+        panic!("uTP peer {index} failed to shutdown uTP driver: {e}");
+    }
+}
+
 async fn connecting_peer<P: Peer>(
     index: u8,
     peer_count: usize,
@@ -493,11 +561,76 @@ async fn connecting_peer<P: Peer>(
     .await;
 }
 
+async fn connecting_utp_peer<P: Peer>(
+    index: u8,
+    peer_count: usize,
+    remote_ip: SocketAddr,
+    info_hash: [u8; 20],
+    content_storage: data::StorageClient,
+    metainfo_storage: data::StorageClient,
+    metainfo: Rc<Metainfo>,
+) {
+    println!("uTP peer {index} connecting to {remote_ip}...");
+    let start_time = time::Instant::now();
+
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
+    let (connection_spawner, _, udp) = utp::init(socket);
+    let driver_handle = task::spawn_local(udp.run());
+
+    let stream = loop {
+        let deadline = time::Instant::now() + sec!(2);
+        let connect_result =
+            time::timeout_at(deadline, connection_spawner.outbound_connection(remote_ip)).await;
+        if let Ok(Ok(result)) = connect_result {
+            break result;
+        }
+        if start_time.elapsed() > sec!(10) {
+            panic!("uTP peer {index} failed to connect within 10 sec");
+        }
+        eprintln!("uTP peer {index} failed to connect, retrying...");
+        time::sleep_until(deadline).await;
+    };
+
+    let (download_chans, upload_chans, ext_chans) = pwp::channels_for_outbound_connection(
+        &[index + b'0'; 20],
+        &info_hash,
+        false,
+        remote_ip,
+        stream,
+        None,
+    )
+    .await
+    .expect("connecting uTP peer failed to create channels");
+    println!("uTP peer {index} connected to {remote_ip}");
+    P::run(
+        index,
+        peer_count,
+        download_chans,
+        upload_chans,
+        ext_chans,
+        content_storage,
+        metainfo_storage,
+        metainfo,
+    )
+    .await;
+
+    drop(connection_spawner);
+    if let Err(e) = time::timeout(sec!(1), driver_handle).await {
+        panic!("uTP peer {index} failed to shutdown uTP driver: {e}");
+    }
+}
+
 enum ConnectionMode {
     Outgoing {
         num_peers: usize,
     },
+    OutgoingUtp {
+        num_peers: usize,
+    },
     Incoming {
+        listen_addrs: Vec<SocketAddr>,
+    },
+    IncomingUtp {
         listen_addrs: Vec<SocketAddr>,
     },
 }
@@ -507,6 +640,7 @@ async fn launch_peers<P: Peer>(
     files_parentdir: impl AsRef<Path>,
     mode: ConnectionMode,
     extensions_enabled: bool,
+    port: u16,
 ) {
     let metainfo = Rc::new(input::Metainfo::from_file(metainfo_file).unwrap());
 
@@ -523,12 +657,27 @@ async fn launch_peers<P: Peer>(
     });
 
     let info_hash = *metainfo.info_hash();
-    let remote_ip = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), ip::port_from_hash(&metainfo_file));
+    let remote_ip = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
     match mode {
         ConnectionMode::Outgoing { num_peers } => {
             task_set
                 .run_until(future::join_all((0..num_peers).map(|peer_index| {
                     connecting_peer::<P>(
+                        peer_index as u8,
+                        num_peers,
+                        remote_ip,
+                        info_hash,
+                        content_storage.clone(),
+                        meta_storage.clone(),
+                        metainfo.clone(),
+                    )
+                })))
+                .await;
+        }
+        ConnectionMode::OutgoingUtp { num_peers } => {
+            task_set
+                .run_until(future::join_all((0..num_peers).map(|peer_index| {
+                    connecting_utp_peer::<P>(
                         peer_index as u8,
                         num_peers,
                         remote_ip,
@@ -546,6 +695,25 @@ async fn launch_peers<P: Peer>(
                 .run_until(future::join_all(listen_addrs.into_iter().enumerate().map(
                     |(index, listen_addr)| {
                         listening_peer::<P>(
+                            index as u8,
+                            num_peers,
+                            listen_addr,
+                            remote_ip,
+                            content_storage.clone(),
+                            meta_storage.clone(),
+                            metainfo.clone(),
+                            extensions_enabled,
+                        )
+                    },
+                )))
+                .await;
+        }
+        ConnectionMode::IncomingUtp { listen_addrs } => {
+            let num_peers = listen_addrs.len();
+            task_set
+                .run_until(future::join_all(listen_addrs.into_iter().enumerate().map(
+                    |(index, listen_addr)| {
+                        listening_utp_peer::<P>(
                             index as u8,
                             num_peers,
                             listen_addr,
@@ -644,10 +812,14 @@ fn compare_input_and_output(
     }
     for (input, output) in iter::zip(
         fs::read_dir(input_dir).unwrap().filter(|item| {
-            item.as_ref().is_ok_and(|dir_entry| dir_entry.file_name() != ".mtorrent")
+            item.as_ref().is_ok_and(|dir_entry| {
+                dir_entry.file_name() != ".mtorrent" && dir_entry.file_name() != ".mtorrent_cfg"
+            })
         }),
         fs::read_dir(output_dir).unwrap().filter(|item| {
-            item.as_ref().is_ok_and(|dir_entry| dir_entry.file_name() != ".mtorrent")
+            item.as_ref().is_ok_and(|dir_entry| {
+                dir_entry.file_name() != ".mtorrent" && dir_entry.file_name() != ".mtorrent_cfg"
+            })
         }),
     ) {
         let input_path = input.unwrap().path();
@@ -672,241 +844,428 @@ macro_rules! with_30s_timeout {
     };
 }
 
+const MULTIFILE_METAINFO_FILE_WITH_TRACKER: &str =
+    "tests/assets/torrents_with_tracker/screenshots.torrent";
+const MULTIFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/screenshots.torrent";
+const MULTIFILE_TORRENT_NAME: &str = "screenshots";
+
+const MONOFILE_METAINFO_FILE_WITH_TRACKER: &str = "tests/assets/torrents_with_tracker/pcap.torrent";
+const MONOFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/pcap.torrent";
+const MONOFILE_TORRENT_NAME: &str = "pcap";
+
 #[tokio::test]
-async fn test_download_and_upload_multifile_torrent() {
-    // these tests need to run sequentially because mtorrent
-    // always listens on the same port for a given torrent
-    let metainfo_file = "tests/assets/screenshots.torrent";
-    let torrent_name = "screenshots";
-    {
-        let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
-        let data_dir = "tests/assets/screenshots";
+async fn test_accept_50_seeders_and_download_multifile_torrent() {
+    let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
+    let data_dir = "tests/assets/screenshots";
+    let port = 15000;
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(metainfo_file)
-            .arg("-o")
-            .arg(output_dir)
-            .arg("--config-dir")
-            .arg(output_dir)
-            .arg("--no-upnp")
-            .arg("--no-dht")
-            .spawn()
-            .expect("failed to execute 'mtorrent'");
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MULTIFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(output_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
 
-        with_30s_timeout!(
-            launch_peers::<Seeder>(
-                metainfo_file,
-                data_dir,
-                ConnectionMode::Outgoing { num_peers: 50 },
-                false,
-            ),
-            mtorrent
-        );
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MULTIFILE_METAINFO_FILE,
+            data_dir,
+            ConnectionMode::Outgoing { num_peers: 50 },
+            false,
+            port
+        ),
+        mtorrent
+    );
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
 
-        compare_input_and_output(data_dir, output_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
-    {
-        let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
-        let data_dir = "tests/assets/screenshots";
-        let tracker_port = 9000u16;
-
-        let seeder_ips = (50000u16..50050u16)
-            .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-            .collect::<Vec<_>>();
-
-        let (_server, tracker_mock) = start_tracker(
-            tracker_port,
-            seeder_ips.iter(),
-            "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
-        )
-        .await;
-
-        let mtorrent = task::spawn(async move {
-            time::sleep(sec!(2)).await; // wait for listening peers to launch
-            process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-                .arg(metainfo_file)
-                .arg("-o")
-                .arg(output_dir)
-                .arg("--config-dir")
-                .arg(output_dir)
-                .arg("--no-upnp")
-                .arg("--no-dht")
-                .spawn()
-                .expect("failed to execute 'mtorrent'")
-        });
-
-        with_30s_timeout!(
-            launch_peers::<Seeder>(
-                metainfo_file,
-                data_dir,
-                ConnectionMode::Incoming {
-                    listen_addrs: seeder_ips,
-                },
-                false,
-            ),
-            mtorrent.await.unwrap()
-        );
-
-        let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
-
-        tracker_mock.assert_async().await;
-
-        compare_input_and_output(data_dir, output_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
-    {
-        let output_dir = "test_accept_1_leech_and_upload_multifile_torrent";
-        let data_dir = "tests/assets";
-
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(metainfo_file)
-            .arg("-o")
-            .arg(data_dir)
-            .arg("--no-upnp")
-            .arg("--no-dht")
-            .spawn()
-            .expect("failed to execute 'mtorrent'");
-
-        with_30s_timeout!(
-            launch_peers::<Leech>(
-                metainfo_file,
-                output_dir,
-                ConnectionMode::Outgoing { num_peers: 1 },
-                false,
-            ),
-            mtorrent
-        );
-
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
-
-        compare_input_and_output(output_dir, data_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
-async fn test_download_and_upload_monofile_torrent() {
-    // these tests need to run sequentially because mtorrent
-    // always listens on the same port for a given torrent
-    let metainfo_file = "tests/assets/pcap.torrent";
-    let torrent_name = "pcap";
-    {
-        let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
-        let data_dir = "tests/assets/pcap";
+async fn test_accept_50_utp_seeders_and_download_multifile_torrent() {
+    let output_dir = "test_accept_50_utp_seeders_and_download_multifile_torrent";
+    let data_dir = "tests/assets/screenshots";
+    let port = 15001;
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(metainfo_file)
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MULTIFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(output_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MULTIFILE_METAINFO_FILE,
+            data_dir,
+            ConnectionMode::OutgoingUtp { num_peers: 50 },
+            false,
+            port
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
+    let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
+    let data_dir = "tests/assets/screenshots";
+    let tracker_port = 9000u16;
+    let port = 15002;
+
+    let seeder_ips = (50000u16..50050u16)
+        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+        .collect::<Vec<_>>();
+
+    let (_server, tracker_mock) = start_tracker(
+        tracker_port,
+        seeder_ips.iter(),
+        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+    )
+    .await;
+
+    let mtorrent = task::spawn(async move {
+        time::sleep(sec!(2)).await; // wait for listening peers to launch
+        process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+            .arg(MULTIFILE_METAINFO_FILE_WITH_TRACKER)
             .arg("-o")
             .arg(output_dir)
             .arg("--config-dir")
             .arg(output_dir)
             .arg("--no-upnp")
             .arg("--no-dht")
+            .arg("-p")
+            .arg(port.to_string())
             .spawn()
-            .expect("failed to execute 'mtorrent'");
+            .expect("failed to execute 'mtorrent'")
+    });
 
-        with_30s_timeout!(
-            launch_peers::<Seeder>(
-                metainfo_file,
-                data_dir,
-                ConnectionMode::Outgoing { num_peers: 50 },
-                false,
-            ),
-            mtorrent
-        );
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MULTIFILE_METAINFO_FILE_WITH_TRACKER,
+            data_dir,
+            ConnectionMode::Incoming {
+                listen_addrs: seeder_ips,
+            },
+            false,
+            port,
+        ),
+        mtorrent.await.unwrap()
+    );
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
+    let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
 
-        compare_input_and_output(data_dir, output_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
-    {
-        let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
-        let data_dir = "tests/assets/pcap";
-        let tracker_port = 8000u16;
+    tracker_mock.assert_async().await;
 
-        let seeder_ips = (50050u16..50100u16)
-            .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-            .collect::<Vec<_>>();
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
 
-        let (_server, tracker_mock) = start_tracker(
-            tracker_port,
-            seeder_ips.iter(),
-            "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3",
-        )
-        .await;
+#[tokio::test]
+async fn test_accept_1_leech_and_upload_multifile_torrent() {
+    let output_dir = "test_accept_1_leech_and_upload_multifile_torrent";
+    let data_dir = "tests/assets";
+    let port = 15003;
 
-        let mtorrent = task::spawn(async move {
-            time::sleep(sec!(2)).await; // wait for listening peers to launch
-            process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-                .arg(metainfo_file)
-                .arg("-o")
-                .arg(output_dir)
-                .arg("--config-dir")
-                .arg(output_dir)
-                .arg("--no-upnp")
-                .arg("--no-dht")
-                .spawn()
-                .expect("failed to execute 'mtorrent'")
-        });
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MULTIFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(data_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
 
-        with_30s_timeout!(
-            launch_peers::<Seeder>(
-                metainfo_file,
-                data_dir,
-                ConnectionMode::Incoming {
-                    listen_addrs: seeder_ips,
-                },
-                false,
-            ),
-            mtorrent.await.unwrap()
-        );
+    with_30s_timeout!(
+        launch_peers::<Leech>(
+            MULTIFILE_METAINFO_FILE,
+            output_dir,
+            ConnectionMode::Outgoing { num_peers: 1 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
 
-        let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
 
-        tracker_mock.assert_async().await;
+    compare_input_and_output(output_dir, data_dir, MULTIFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
 
-        compare_input_and_output(data_dir, output_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
-    {
-        let output_dir = "test_accept_1_leech_and_upload_monofile_torrent";
-        let data_dir = "tests/assets";
+#[tokio::test]
+async fn test_accept_1_utp_leech_and_upload_multifile_torrent() {
+    let output_dir = "test_accept_1_utp_leech_and_upload_multifile_torrent";
+    let data_dir = "tests/assets";
+    let port = 15004;
 
-        let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(metainfo_file)
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MULTIFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(data_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Leech>(
+            MULTIFILE_METAINFO_FILE,
+            output_dir,
+            ConnectionMode::OutgoingUtp { num_peers: 1 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(output_dir, data_dir, MULTIFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_accept_50_seeders_and_download_monofile_torrent() {
+    let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
+    let data_dir = "tests/assets/pcap";
+    let port = 16000;
+
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MONOFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(output_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MONOFILE_METAINFO_FILE,
+            data_dir,
+            ConnectionMode::Outgoing { num_peers: 50 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_accept_50_utp_seeders_and_download_monofile_torrent() {
+    let output_dir = "test_accept_50_utp_seeders_and_download_monofile_torrent";
+    let data_dir = "tests/assets/pcap";
+    let port = 16001;
+
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MONOFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(output_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MONOFILE_METAINFO_FILE,
+            data_dir,
+            ConnectionMode::OutgoingUtp { num_peers: 50 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
+    let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
+    let data_dir = "tests/assets/pcap";
+    let tracker_port = 8000u16;
+    let port = 16002;
+
+    let seeder_ips = (50050u16..50100u16)
+        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+        .collect::<Vec<_>>();
+
+    let (_server, tracker_mock) = start_tracker(
+        tracker_port,
+        seeder_ips.iter(),
+        "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3",
+    )
+    .await;
+
+    let mtorrent = task::spawn(async move {
+        time::sleep(sec!(2)).await; // wait for listening peers to launch
+        process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+            .arg(MONOFILE_METAINFO_FILE_WITH_TRACKER)
             .arg("-o")
-            .arg(data_dir)
+            .arg(output_dir)
+            .arg("--config-dir")
+            .arg(output_dir)
             .arg("--no-upnp")
             .arg("--no-dht")
+            .arg("-p")
+            .arg(port.to_string())
             .spawn()
-            .expect("failed to execute 'mtorrent'");
+            .expect("failed to execute 'mtorrent'")
+    });
 
-        with_30s_timeout!(
-            launch_peers::<Leech>(
-                metainfo_file,
-                output_dir,
-                ConnectionMode::Outgoing { num_peers: 1 },
-                false,
-            ),
-            mtorrent
-        );
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MONOFILE_METAINFO_FILE_WITH_TRACKER,
+            data_dir,
+            ConnectionMode::Incoming {
+                listen_addrs: seeder_ips,
+            },
+            false,
+            port,
+        ),
+        mtorrent.await.unwrap()
+    );
 
-        let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
-        assert!(mtorrent_ecode.success());
+    let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
 
-        compare_input_and_output(output_dir, data_dir, torrent_name);
-        std::fs::remove_dir_all(output_dir).unwrap();
-    }
+    tracker_mock.assert_async().await;
+
+    compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_accept_1_leech_and_upload_monofile_torrent() {
+    let output_dir = "test_accept_1_leech_and_upload_monofile_torrent";
+    let data_dir = "tests/assets";
+    let port = 16003;
+
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MONOFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(data_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Leech>(
+            MONOFILE_METAINFO_FILE,
+            output_dir,
+            ConnectionMode::Outgoing { num_peers: 1 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(output_dir, data_dir, MONOFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
+    let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
+}
+
+#[tokio::test]
+async fn test_accept_1_utp_leech_and_upload_monofile_torrent() {
+    let output_dir = "test_accept_1_utp_leech_and_upload_monofile_torrent";
+    let data_dir = "tests/assets";
+    let port = 16004;
+
+    let mut mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(MONOFILE_METAINFO_FILE)
+        .arg("-o")
+        .arg(data_dir)
+        .arg("--no-upnp")
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    with_30s_timeout!(
+        launch_peers::<Leech>(
+            MONOFILE_METAINFO_FILE,
+            output_dir,
+            ConnectionMode::OutgoingUtp { num_peers: 1 },
+            false,
+            port,
+        ),
+        mtorrent
+    );
+
+    let mtorrent_ecode = mtorrent.wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(output_dir, data_dir, MONOFILE_TORRENT_NAME);
+    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
@@ -915,9 +1274,7 @@ async fn test_download_torrent_from_magnet_link() {
     let output_dir = "test_download_torrent_from_magnet_link";
     let data_dir = "tests/assets/screenshots";
     fs::create_dir_all(output_dir).unwrap();
-
-    let metainfo_file = "tests/assets/screenshots_bad_tracker.torrent";
-    let torrent_name = "screenshots";
+    let port = 17000;
 
     let peer_ips = (50100u16..50110u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
@@ -943,18 +1300,21 @@ async fn test_download_torrent_from_magnet_link() {
             .arg(output_dir)
             .arg("--no-upnp")
             .arg("--no-dht")
+            .arg("-p")
+            .arg(port.to_string())
             .spawn()
             .expect("failed to execute 'mtorrent'")
     });
 
     with_30s_timeout!(
         launch_peers::<Seeder>(
-            metainfo_file,
+            MULTIFILE_METAINFO_FILE,
             data_dir,
             ConnectionMode::Incoming {
                 listen_addrs: peer_ips
             },
-            true
+            true,
+            port,
         ),
         mtorrent.await.unwrap()
     );
@@ -962,6 +1322,64 @@ async fn test_download_torrent_from_magnet_link() {
     let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
     assert!(mtorrent_ecode.success());
 
-    compare_input_and_output(data_dir, output_dir, torrent_name);
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
+    fs::remove_dir_all(output_dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_utp_download_torrent_from_magnet_link() {
+    let output_dir = "test_utp_download_torrent_from_magnet_link";
+    let data_dir = "tests/assets/pcap";
+    fs::create_dir_all(output_dir).unwrap();
+    let port = 17001;
+
+    let peer_ips = (50110u16..50120u16)
+        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+        .collect::<Vec<_>>();
+
+    let magnet_link = {
+        let mut tmp =
+            "magnet:?xt=urn:btih:8e65f264f5c817fed6475f2fa8a91e810d4231a3&dn=pcap".to_string();
+        for peer_addr in &peer_ips {
+            tmp.push_str("&x.pe=");
+            tmp.push_str(&peer_addr.to_string());
+        }
+        tmp
+    };
+
+    let mtorrent = task::spawn(async move {
+        time::sleep(sec!(2)).await; // wait for listening peers to launch
+        process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+            .arg(magnet_link)
+            .arg("-o")
+            .arg(output_dir)
+            .arg("--config-dir")
+            .arg(output_dir)
+            .arg("--no-upnp")
+            .arg("--no-dht")
+            .arg("-p")
+            .arg(port.to_string())
+            .env("MTORRENT_PWP_MODE", "UTP_ONLY")
+            .spawn()
+            .expect("failed to execute 'mtorrent'")
+    });
+
+    with_30s_timeout!(
+        launch_peers::<Seeder>(
+            MONOFILE_METAINFO_FILE,
+            data_dir,
+            ConnectionMode::IncomingUtp {
+                listen_addrs: peer_ips
+            },
+            true,
+            port,
+        ),
+        mtorrent.await.unwrap()
+    );
+
+    let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
+    assert!(mtorrent_ecode.success());
+
+    compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
     fs::remove_dir_all(output_dir).unwrap();
 }
