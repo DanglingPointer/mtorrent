@@ -1,6 +1,7 @@
 use super::testutils::*;
 use crate::ops::PeerConnector;
 use crate::ops::PeerReporter;
+use crate::ops::UtpHandle;
 use crate::ops::ctx;
 use crate::utils::startup;
 use local_async_utils::prelude::*;
@@ -15,6 +16,7 @@ use std::{fs, panic};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
 
@@ -152,11 +154,14 @@ async fn run_listening_seeder(
         pwp_worker_handle: runtime::Handle::current(),
         peer_reporter: PeerReporter::new_mock(),
         piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+        utp_handle: UtpHandle::new_mock(),
     });
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
     let (stream, addr) = listener.accept().await.unwrap();
-    let (dl_chan, ul_chan, ext_chan) = data.inbound_connect_and_handshake(addr, stream).await?;
+    let deadline = Instant::now() + data.connect_retry_interval();
+    let (dl_chan, ul_chan, ext_chan) =
+        data.inbound_connect_and_handshake(addr, deadline, stream).await?;
     data.run_connection(pwp::PeerOrigin::Listener, (dl_chan, ul_chan, ext_chan))
         .await?;
 

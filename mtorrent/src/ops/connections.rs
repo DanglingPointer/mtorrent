@@ -1,8 +1,10 @@
 use derive_more::Debug;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_core::utp;
 use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
 use rand::Rng;
+use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -23,7 +25,13 @@ struct OutboundConnect {
 #[derive(Debug)]
 struct InboundConnect {
     addr: SocketAddr,
-    stream: TcpStream,
+    data: InboundData,
+}
+
+#[derive(Debug)]
+enum InboundData {
+    Tcp(TcpStream),
+    Utp(utp::InboundConnectData),
 }
 
 #[derive(Clone)]
@@ -45,7 +53,27 @@ impl PeerReporter {
     }
 
     pub async fn report_accepted(&self, addr: SocketAddr, stream: TcpStream) -> bool {
-        self.accepted_reporter.send(InboundConnect { addr, stream }).await.is_ok()
+        self.accepted_reporter
+            .send(InboundConnect {
+                addr,
+                data: InboundData::Tcp(stream),
+            })
+            .await
+            .is_ok()
+    }
+
+    pub async fn report_accepted_utp(
+        &self,
+        addr: SocketAddr,
+        data: utp::InboundConnectData,
+    ) -> bool {
+        self.accepted_reporter
+            .send(InboundConnect {
+                addr,
+                data: InboundData::Utp(data),
+            })
+            .await
+            .is_ok()
     }
 }
 
@@ -54,18 +82,33 @@ pub trait PeerConnector {
     type PeerConnection;
 
     fn max_connections(&self) -> usize;
-    fn connect_timeout(&self) -> Duration;
+    fn connect_retry_interval(&self) -> Duration;
     fn max_connect_retries(&self) -> usize;
 
     fn outbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
+    fn outbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
     ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
 
     fn inbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        deadline: Instant,
         stream: TcpStream,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
+    fn inbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        deadline: Instant,
+        data: utp::InboundConnectData,
     ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
 
     fn run_connection(
@@ -222,12 +265,62 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
     log::debug!("{connect:?} initiated");
-    let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
+    let connect_deadline = Instant::now() + with_jitter(connector.connect_retry_interval());
 
-    let connect_result =
-        time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(connect.addr))
+    let fatal_error = Cell::new(None);
+    let non_fatal_error = Cell::new(None);
+
+    let tcp_connect = async {
+        match connector.outbound_connect_and_handshake(connect.addr, connect_deadline).await {
+            Ok(connection) => Some(connection),
+            Err(e) => {
+                if is_fatal_error(&e) {
+                    fatal_error.set(Some(e));
+                } else {
+                    non_fatal_error.set(Some(e));
+                }
+                None
+            }
+        }
+    };
+
+    let utp_connect = async {
+        match connector
+            .outbound_utp_connect_and_handshake(connect.addr, connect_deadline)
             .await
-            .unwrap_or_else(|e| Err(io::Error::from(e)));
+        {
+            Ok(connection) => Some(connection),
+            Err(e) => {
+                if is_fatal_error(&e) {
+                    fatal_error.set(Some(e));
+                } else {
+                    non_fatal_error.set(Some(e));
+                }
+                None
+            }
+        }
+    };
+
+    // Try both TCP and uTP connections, prioritizing TCP. If both fail, return the non-fatal error if any,
+    // otherwise the fatal error.
+    let connect_result = select! {
+        biased;
+        Some(tcp_connection) = tcp_connect => {
+            Ok(tcp_connection)
+        }
+        Some(utp_connection) = utp_connect => {
+            Ok(utp_connection)
+        }
+        else => {
+            if let Some(e) = non_fatal_error.into_inner() {
+                Err(e)
+            } else if let Some(e) = fatal_error.into_inner() {
+                Err(e)
+            } else {
+                unreachable!("both connection attempts failed without error");
+            }
+        }
+    };
 
     let connection = match connect_result {
         Ok(connection) => connection,
@@ -280,13 +373,20 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
     log::debug!("{connect:?} accepted");
-    let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
+    let connect_deadline = Instant::now() + with_jitter(connector.connect_retry_interval());
 
-    let connection = time::timeout_at(
-        connect_deadline,
-        connector.inbound_connect_and_handshake(connect.addr, connect.stream),
-    )
-    .await??;
+    let connection = match connect.data {
+        InboundData::Tcp(stream) => {
+            connector
+                .inbound_connect_and_handshake(connect.addr, connect_deadline, stream)
+                .await?
+        }
+        InboundData::Utp(data) => {
+            connector
+                .inbound_utp_connect_and_handshake(connect.addr, connect_deadline, data)
+                .await?
+        }
+    };
 
     log::debug!("Inbound connection from {} succeeded", connect.addr);
 
@@ -337,7 +437,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::Arc;
     use tokio::runtime::UnhandledPanic;
-    use tokio::time::sleep;
+    use tokio::time::{sleep, sleep_until};
 
     fn addr(port: u16) -> SocketAddr {
         (Ipv4Addr::LOCALHOST, port).into()
@@ -396,24 +496,31 @@ mod tests {
 
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
-            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+            .withf(move |&addr, _deadline| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_, _deadline| async move { Err(io::Error::from(error_kind)) }.boxed());
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
-            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+            .withf(move |&addr, _deadline| {
+                addr == peer_addr && Instant::now() == start_time + sec!(10)
+            })
+            .returning(move |_, _deadline| async move { Err(io::Error::from(error_kind)) }.boxed());
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(20))
-            .returning(move |_| async move { Err(io::Error::from(error_kind)) }.boxed());
+            .withf(move |&addr, _deadline| {
+                addr == peer_addr && Instant::now() == start_time + sec!(20)
+            })
+            .returning(move |_, _deadline| async move { Err(io::Error::from(error_kind)) }.boxed());
 
         run_in_local_set! {
             let (reporter, ctrl) = connect_control(move |_| connector);
@@ -435,39 +542,46 @@ mod tests {
 
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
-            .returning(move |_| {
+            .withf(move |&addr, _deadline| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_, deadline| {
                 async move {
-                    sleep(sec!(11)).await;
-                    Ok(42)
+                    sleep_until(deadline).await;
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 }
                 .boxed()
             });
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
-            .returning(move |_| {
+            .withf(move |&addr, _deadline| {
+                addr == peer_addr && Instant::now() == start_time + sec!(10)
+            })
+            .returning(move |_, deadline| {
                 async move {
-                    sleep(sec!(11)).await;
-                    Ok(42)
+                    sleep_until(deadline).await;
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 }
                 .boxed()
             });
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(20))
-            .returning(move |_| {
+            .withf(move |&addr, _deadline| {
+                addr == peer_addr && Instant::now() == start_time + sec!(20)
+            })
+            .returning(move |_, deadline| {
                 async move {
-                    sleep(sec!(11)).await;
-                    Ok(42)
+                    sleep_until(deadline).await;
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 }
                 .boxed()
             });
@@ -492,27 +606,32 @@ mod tests {
 
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
-            .returning(move |_| {
+            .withf(move |&addr, _deadline| addr == peer_addr && Instant::now() == start_time)
+            .returning(move |_, deadline| {
                 async move {
-                    sleep(sec!(11)).await;
-                    Ok(42)
+                    sleep_until(deadline).await;
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 }
                 .boxed()
             });
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .withf(move |&addr| addr == peer_addr && Instant::now() == start_time + sec!(10))
-            .returning(move |_| {
+            .withf(move |&addr, _deadline| {
+                addr == peer_addr && Instant::now() == start_time + sec!(10)
+            })
+            .returning(move |_, deadline| {
                 async move {
-                    sleep(sec!(10)).await;
+                    sleep_until(deadline).await;
                     Ok(43)
                 }
                 .boxed()
@@ -549,14 +668,22 @@ mod tests {
 
             let mut connector = MockPeerConnector::new();
             connector.expect_max_connections().return_const(100usize);
-            connector.expect_connect_timeout().return_const(sec!(10));
+            connector.expect_connect_retry_interval().return_const(sec!(10));
             connector.expect_max_connect_retries().return_const(2usize);
 
             connector
                 .expect_outbound_connect_and_handshake()
                 .once()
-                .withf(move |&addr| addr == peer_addr && Instant::now() == start_time)
-                .returning(move |_| {
+                .withf(move |&addr, _deadline| addr == peer_addr && Instant::now() == start_time)
+                .returning(move |_, _deadline| {
+                    async move { Err(io::Error::from(error_kind)) }.boxed()
+                });
+
+            connector
+                .expect_outbound_utp_connect_and_handshake()
+                .once()
+                .withf(move |&addr, _deadline| addr == peer_addr && Instant::now() == start_time)
+                .returning(move |_, _deadline| {
                     async move { Err(io::Error::from(error_kind)) }.boxed()
                 });
 
@@ -580,13 +707,16 @@ mod tests {
 
             let mut connector = MockPeerConnector::new();
             connector.expect_max_connections().return_const(100usize);
-            connector.expect_connect_timeout().return_const(sec!(10));
+            connector.expect_connect_retry_interval().return_const(sec!(10));
             connector.expect_max_connect_retries().return_const(2usize);
+            connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+                std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+            });
 
             connector
                 .expect_outbound_connect_and_handshake()
                 .times(9)
-                .returning(|_| {
+                .returning(|_, _deadline| {
                     async move { Ok(42) }.boxed()
                 });
             connector
@@ -619,13 +749,16 @@ mod tests {
 
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .returning(|_| async move { Ok(42) }.boxed());
+            .returning(|_, _| async move { Ok(42) }.boxed());
         connector
             .expect_run_connection()
             .once()
@@ -657,13 +790,16 @@ mod tests {
 
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .returning(|_| async move { Ok(42) }.boxed());
+            .returning(|_, _| async move { Ok(42) }.boxed());
         connector
             .expect_run_connection()
             .once()
@@ -693,8 +829,11 @@ mod tests {
     async fn test_run_concurrent_connections_up_to_capacity() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         for port in 1..=100 {
             let addr = addr(port);
@@ -702,8 +841,8 @@ mod tests {
             connector
                 .expect_outbound_connect_and_handshake()
                 .once()
-                .with(eq(addr))
-                .returning(move |_| async move { Ok(port as i32) }.boxed());
+                .with(eq(addr), mockall::predicate::always())
+                .returning(move |_, _deadline| async move { Ok(port as i32) }.boxed());
             connector
                 .expect_run_connection()
                 .once()
@@ -733,16 +872,19 @@ mod tests {
     async fn test_release_capacity_when_retrying() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(1usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         for port in 1..=100 {
             let addr = addr(port);
             connector
                 .expect_outbound_connect_and_handshake()
                 .once()
-                .with(eq(addr))
-                .returning(move |_| {
+                .with(eq(addr), mockall::predicate::always())
+                .returning(move |_, _deadline| {
                     async move { Err(io::ErrorKind::AddrNotAvailable.into()) }.boxed()
                 });
         }
@@ -768,8 +910,11 @@ mod tests {
     async fn test_outbound_connect_explicit_cancellation() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         let token = Arc::new(());
         let peer_addr = addr(42);
@@ -777,8 +922,8 @@ mod tests {
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .with(eq(peer_addr))
-            .return_once(move |_| {
+            .withf(move |addr, _deadline| addr == &peer_addr)
+            .return_once(move |_, _deadline| {
                 async move {
                     let _token = token_clone;
                     pending::<io::Result<i32>>().await
@@ -805,8 +950,11 @@ mod tests {
     async fn test_outbound_connect_implicit_cancellation() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         let token = Arc::new(());
         let peer_addr = addr(42);
@@ -814,8 +962,8 @@ mod tests {
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .with(eq(peer_addr))
-            .return_once(move |_| {
+            .withf(move |addr, _deadline| addr == &peer_addr)
+            .return_once(move |_, _deadline| {
                 async move {
                     let _token = token_clone;
                     pending::<io::Result<i32>>().await
@@ -842,15 +990,18 @@ mod tests {
     async fn test_run_connection_explicit_cancellation() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         let peer_addr = addr(123);
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .with(eq(peer_addr))
-            .returning(move |_| async move { Ok(42) }.boxed());
+            .withf(move |addr, _deadline| addr == &peer_addr)
+            .returning(move |_, _| async move { Ok(42) }.boxed());
 
         let token = Arc::new(());
         let token_clone = token.clone();
@@ -885,15 +1036,18 @@ mod tests {
     async fn test_run_connection_implicit_cancellation() {
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
-        connector.expect_connect_timeout().return_const(sec!(10));
+        connector.expect_connect_retry_interval().return_const(sec!(10));
         connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
 
         let peer_addr = addr(123);
         connector
             .expect_outbound_connect_and_handshake()
             .once()
-            .with(eq(peer_addr))
-            .returning(move |_| async move { Ok(42) }.boxed());
+            .withf(move |addr, _deadline| addr == &peer_addr)
+            .returning(move |_, _| async move { Ok(42) }.boxed());
 
         let token = Arc::new(());
         let token_clone = token.clone();

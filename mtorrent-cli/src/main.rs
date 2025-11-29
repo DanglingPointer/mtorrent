@@ -122,7 +122,7 @@ fn main() -> io::Result<()> {
 
     tokio::runtime::Builder::new_current_thread()
         .max_blocking_threads(1) // unused
-        .enable_all()
+        .enable_time()
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
             cli.metainfo_uri,
