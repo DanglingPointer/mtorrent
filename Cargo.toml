@@ -20,6 +20,8 @@ opt-level = 3
 
 [workspace.dependencies]
 url = "2.5"
+reqwest = { version = "0.12.22", features = ["gzip"], default-features = false }
+form_urlencoded = { version = "1.2.1", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 futures-channel = { version = "0.3", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
@@ -43,6 +45,9 @@ derive_more = { version = "2.0", features = [
     "debug",
     "deref",
 ] }
+pinned-init = { version = "0.0.10", default-features = false, features = [
+    "std",
+] }
 local_async_utils = { version = "0.2.8", features = ["tokio"] }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -50,7 +55,7 @@ serde_json = "1.0"
 static_assertions = "1.1.0"
 tokio-test = "0.4"
 mockito = { version = "1.7", default-features = false }
-mockall = "0.13"
+mockall = "0.14"
 rstest = { version = "0.26", default-features = false }
 rstest_reuse = { version = "0.7", default-features = false }
 mtorrent-core = { path = "mtorrent-core", version = "0" }

@@ -28,9 +28,7 @@ log = { workspace = true }
 rand = { workspace = true }
 local_async_utils = { workspace = true }
 sha1_smol = { workspace = true }
-pinned-init = { version = "0.0.10", default-features = false, features = [
-    "std",
-] }
+pinned-init = { workspace = true }
 
 [dev-dependencies]
 simple_logger = { workspace = true }

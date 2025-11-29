@@ -29,8 +29,8 @@ sha1_smol = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
-reqwest = { version = "0.12.22", features = ["gzip"] }
-form_urlencoded = { version = "1.2.1", default-features = false }
+reqwest = { workspace = true }
+form_urlencoded = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
