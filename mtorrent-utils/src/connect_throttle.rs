@@ -1,4 +1,4 @@
-use crate::bounded_fifo_set::BoundedFifoSet;
+use crate::fifo_set::BoundedFifoSet;
 use local_async_utils::prelude::*;
 use std::fmt;
 use std::net::SocketAddr;
