@@ -98,7 +98,7 @@ fn main() -> io::Result<()> {
         ..Default::default()
     })?;
 
-    let pwp_worker = worker::with_runtime(worker::rt::Config {
+    let pwp_worker = worker::with_local_runtime(worker::rt::Config {
         name: "pwp".to_owned(),
         io_enabled: true,
         time_enabled: true,

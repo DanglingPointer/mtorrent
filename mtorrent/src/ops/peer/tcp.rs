@@ -8,16 +8,6 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime;
 use tokio_util::sync::CancellationToken;
 
-/// Re-register socket so that it will be polled on PWP runtime
-macro_rules! marshal_stream {
-    ($stream:expr, $rt_handle:expr) => {{
-        let std_stream = $stream.into_std()?;
-        // note: EnterGuard must NEVER live across a suspension point
-        let _g = $rt_handle.enter();
-        TcpStream::from_std(std_stream)?
-    }};
-}
-
 fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     let socket = match local_addr {
         SocketAddr::V4(_) => TcpSocket::new_v4()?,
@@ -53,31 +43,23 @@ pub async fn new_outbound_connection(
         SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
     };
 
-    let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
-    let stream = socket.connect(peer_addr).await?;
-    let stream = marshal_stream!(stream, pwp_runtime);
-
-    let (download_chans, upload_chans, extended_chans, runner) =
-        pwp::channels_for_outbound_connection(
-            local_peer_id,
-            info_hash,
-            extension_protocol_enabled,
-            peer_addr,
-            stream,
-            None,
-        )
-        .await?;
-
-    pwp_runtime.spawn(async move {
-        if let Err(e) = runner.await
-            && e.kind() != io::ErrorKind::BrokenPipe
-            && e.kind() != io::ErrorKind::UnexpectedEof
-        {
-            log::warn!("Peer runner for {peer_addr} exited: {e}");
-        }
-    });
-
-    Ok((download_chans, upload_chans, extended_chans))
+    let local_peer_id = *local_peer_id;
+    let info_hash = *info_hash;
+    pwp_runtime
+        .spawn(async move {
+            let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
+            let stream = socket.connect(peer_addr).await?;
+            pwp::channels_for_outbound_connection(
+                &local_peer_id,
+                &info_hash,
+                extension_protocol_enabled,
+                peer_addr,
+                stream,
+                None,
+            )
+            .await
+        })
+        .await?
 }
 
 pub async fn new_inbound_connection(
@@ -88,26 +70,20 @@ pub async fn new_inbound_connection(
     stream: TcpStream,
     pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
-    let (download_chans, upload_chans, extended_chans, runner) =
-        pwp::channels_for_inbound_connection(
-            local_peer_id,
-            Some(info_hash),
-            extension_protocol_enabled,
-            remote_ip,
-            stream,
-        )
-        .await?;
-
-    pwp_runtime.spawn(async move {
-        if let Err(e) = runner.await
-            && e.kind() != io::ErrorKind::BrokenPipe
-            && e.kind() != io::ErrorKind::UnexpectedEof
-        {
-            log::warn!("Peer runner for {remote_ip} exited: {e}");
-        }
-    });
-
-    Ok((download_chans, upload_chans, extended_chans))
+    let local_peer_id = *local_peer_id;
+    let info_hash = *info_hash;
+    pwp_runtime
+        .spawn(async move {
+            pwp::channels_for_inbound_connection(
+                &local_peer_id,
+                Some(&info_hash),
+                extension_protocol_enabled,
+                remote_ip,
+                stream,
+            )
+            .await
+        })
+        .await?
 }
 
 pub async fn run_listener(
