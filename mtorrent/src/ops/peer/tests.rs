@@ -163,7 +163,7 @@ async fn run_listening_seeder(
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "local")]
 async fn test_send_metainfo_file_to_peer() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
@@ -174,17 +174,15 @@ async fn test_send_metainfo_file_to_peer() {
     let metainfo = "../mtorrent-cli/tests/assets/big_metainfo_file.torrent";
     let data_dir = "test_send_metainfo_file_to_peer";
 
-    let tasks = task::LocalSet::new();
-    tasks.spawn_local(async move {
+    task::spawn_local(async move {
         let _ = run_listening_seeder(addr, metainfo, data_dir).await;
     });
-    tasks
-        .run_until(time::timeout(sec!(30), async move {
-            task::yield_now().await;
-            connecting_peer_downloading_metadata(addr, metainfo).await;
-        }))
-        .await
-        .unwrap();
+    time::timeout(sec!(30), async move {
+        task::yield_now().await;
+        connecting_peer_downloading_metadata(addr, metainfo).await;
+    })
+    .await
+    .unwrap();
 
     fs::remove_dir_all(data_dir).unwrap();
 }
@@ -200,8 +198,6 @@ async fn pass_torrent_from_peer_to_peer(
     let ip2 = SocketAddr::new([0, 0, 0, 0].into(), 7777);
 
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
-
-    let tasks = task::LocalSet::new();
 
     let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
         .with_socket(downloader_sock)
@@ -220,28 +216,27 @@ async fn pass_torrent_from_peer_to_peer(
         .with_content_storage(input_dir)
         .build_main();
 
-    tasks.spawn_local(async move {
+    task::spawn_local(async move {
         let _ = join!(downloader_fut, uploader_fut);
     });
-    tasks
-        .run_until(time::timeout(sec!(30), async move {
-            loop {
-                let finished = downloader_ctx_handle.with(|ctx| {
-                    ctx.accountant.missing_bytes() == 0
-                        && ctx.piece_tracker.missing_pieces_rarest_first().count() == 0
-                });
-                if finished {
-                    break;
-                } else {
-                    time::sleep(sec!(1)).await;
-                }
+    time::timeout(sec!(30), async move {
+        loop {
+            let finished = downloader_ctx_handle.with(|ctx| {
+                ctx.accountant.missing_bytes() == 0
+                    && ctx.piece_tracker.missing_pieces_rarest_first().count() == 0
+            });
+            if finished {
+                break;
+            } else {
+                time::sleep(sec!(1)).await;
             }
-        }))
-        .await
-        .unwrap();
+        }
+    })
+    .await
+    .unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_pass_multifile_torrent_from_peer_to_peer() {
     setup(false);
     let output_dir = "test_pass_multifile_torrent_from_peer_to_peer";
@@ -253,7 +248,7 @@ async fn test_pass_multifile_torrent_from_peer_to_peer() {
     fs::remove_dir_all(output_dir).unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_pass_monofile_torrent_from_peer_to_peer() {
     setup(false);
     let output_dir = "test_pass_monofile_torrent_from_peer_to_peer";
@@ -267,7 +262,7 @@ async fn test_pass_monofile_torrent_from_peer_to_peer() {
 
 // ------------------------------------------------------------------------------------------------
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_pass_metadata_from_peer_to_peer() {
     setup(false);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/big_metainfo_file.torrent";
@@ -276,8 +271,6 @@ async fn test_pass_metadata_from_peer_to_peer() {
     let metainfo_content = fs::read(metainfo_filepath).unwrap();
 
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
-
-    let tasks = task::LocalSet::new();
 
     let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
         .with_socket(downloader_sock)
@@ -290,21 +283,20 @@ async fn test_pass_metadata_from_peer_to_peer() {
         .with_extensions()
         .build_main();
 
-    tasks.spawn_local(uploader_fut);
-    tasks
-        .run_until(time::timeout(sec!(30), async move {
-            let _ = downloader_fut.await;
-            downloader_ctx_handle.with(|ctx| {
-                assert!(!ctx.metainfo_pieces.is_empty());
-                assert!(ctx.metainfo_pieces.all());
-                assert_eq!(metainfo_content, ctx.metainfo);
-            });
-        }))
-        .await
-        .unwrap();
+    task::spawn_local(uploader_fut);
+    time::timeout(sec!(30), async move {
+        let _ = downloader_fut.await;
+        downloader_ctx_handle.with(|ctx| {
+            assert!(!ctx.metainfo_pieces.is_empty());
+            assert!(ctx.metainfo_pieces.all());
+            assert_eq!(metainfo_content, ctx.metainfo);
+        });
+    })
+    .await
+    .unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_send_extended_handshake_before_bitfield() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent";
@@ -343,7 +335,7 @@ async fn test_send_extended_handshake_before_bitfield() {
 
 const KEEPALIVE: &[u8] = &[0u8; 4];
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_disconnect_useless_peer_after_5_min() {
     setup(true);
 
@@ -361,7 +353,7 @@ async fn test_disconnect_useless_peer_after_5_min() {
     assert_eq!(err.to_string(), "peer is useless");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_disconnect_parasite_after_5_min() {
     setup(true);
 
@@ -396,7 +388,7 @@ async fn test_disconnect_parasite_after_5_min() {
     assert_eq!(err.to_string(), "peer is useless");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_reevaluate_interest_every_min() {
     setup(true);
 
@@ -432,7 +424,7 @@ async fn test_reevaluate_interest_every_min() {
     .unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_block_request_timeout_not_affected_by_other_messages() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
@@ -471,7 +463,7 @@ async fn test_block_request_timeout_not_affected_by_other_messages() {
     assert_eq!(err.to_string(), "peer failed to respond to requests within 20s");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_block_request_extra_retry_when_peer_has_seeded() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
@@ -527,7 +519,7 @@ async fn test_block_request_extra_retry_when_peer_has_seeded() {
     assert_eq!(err.to_string(), "peer failed to respond to requests within 20s");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_respect_peer_reqq() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
@@ -598,7 +590,7 @@ async fn test_respect_peer_reqq() {
     }
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_always_keep_reqq_requests_in_flight() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
@@ -732,7 +724,7 @@ async fn test_always_keep_reqq_requests_in_flight() {
     });
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_clear_pending_requests_when_peer_chokes() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/screenshots.torrent"; // piece length 16K
@@ -779,7 +771,7 @@ async fn test_clear_pending_requests_when_peer_chokes() {
     assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_keep_reqq_requests_in_flight_when_rx_is_faster_than_tx() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/pcap.torrent"; // piece size > 16K
