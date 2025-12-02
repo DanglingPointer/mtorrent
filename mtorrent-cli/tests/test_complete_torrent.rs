@@ -28,7 +28,6 @@ trait Peer {
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
-        runner: pwp::ConnectionIoDriver,
         content_storage: data::StorageClient,
         metainfo_storage: data::StorageClient,
         metainfo: Rc<Metainfo>,
@@ -46,7 +45,6 @@ impl Peer for Leech {
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
-        runner: pwp::ConnectionIoDriver,
         storage: data::StorageClient,
         _metainfo_storage: data::StorageClient,
         metainfo: Rc<Metainfo>,
@@ -54,9 +52,6 @@ impl Peer for Leech {
         assert!(ext_chans.is_none());
 
         let info = get_piece_info(&metainfo);
-        task::spawn_local(async move {
-            let _ = runner.await;
-        });
 
         task::spawn_local(async move {
             let pwp::UploadChannels(_tx, mut rx) = upload_chans;
@@ -360,15 +355,11 @@ impl Peer for Seeder {
         download_chans: pwp::DownloadChannels,
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
-        runner: pwp::ConnectionIoDriver,
         content_storage: data::StorageClient,
         meta_storage: data::StorageClient,
         metainfo: Rc<Metainfo>,
     ) {
         let pieces = get_piece_info(&metainfo);
-        task::spawn_local(async move {
-            let _ = runner.await;
-        });
         if let Some(ext_chans) = ext_chans {
             Self::seed_metainfo(
                 index,
@@ -419,23 +410,21 @@ async fn listening_peer<P: Peer>(
             if verify_remote_addr {
                 assert_eq!(remote_addr, expected_remote_addr);
             }
-            let (download_chans, upload_chans, ext_chans, runner) =
-                pwp::channels_for_inbound_connection(
-                    &[index + b'0'; 20],
-                    None,
-                    extensions_enabled,
-                    remote_addr,
-                    stream,
-                )
-                .await
-                .unwrap();
+            let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
+                &[index + b'0'; 20],
+                None,
+                extensions_enabled,
+                remote_addr,
+                stream,
+            )
+            .await
+            .unwrap();
             P::run(
                 index,
                 peer_count,
                 download_chans,
                 upload_chans,
                 ext_chans,
-                runner,
                 content_storage.clone(),
                 metainfo_storage.clone(),
                 metainfo.clone(),
@@ -480,7 +469,7 @@ async fn connecting_peer<P: Peer>(
         time::sleep(sec!(1)).await;
     };
     stream.set_nodelay(true).unwrap();
-    let (download_chans, upload_chans, ext_chans, runner) = pwp::channels_for_outbound_connection(
+    let (download_chans, upload_chans, ext_chans) = pwp::channels_for_outbound_connection(
         &[index + b'0'; 20],
         &info_hash,
         false,
@@ -497,7 +486,6 @@ async fn connecting_peer<P: Peer>(
         download_chans,
         upload_chans,
         ext_chans,
-        runner,
         content_storage,
         metainfo_storage,
         metainfo,

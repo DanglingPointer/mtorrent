@@ -3,20 +3,19 @@ use super::handshake::*;
 use super::message::*;
 use bytes::BufMut;
 use futures_channel::mpsc;
-use futures_util::future::BoxFuture;
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::FutureExt;
+use futures_util::{SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use std::future::Future;
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, tcp};
+use tokio::task;
 use tokio::time::{sleep, timeout};
 use tokio::{select, try_join};
 
@@ -37,7 +36,7 @@ struct PeerInfo {
 
 /// Channel for communicating with a single peer.
 pub struct PeerChannel<Q> {
-    peer_info: Rc<PeerInfo>,
+    peer_info: Arc<PeerInfo>,
     inner: Q,
 }
 
@@ -66,13 +65,13 @@ type TxChannel<Msg> = PeerChannel<mpsc::Sender<Option<Msg>>>;
 
 impl<Msg> RxChannel<Msg> {
     /// Wait for the next message received from the peer.
-    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited.
+    /// Returns [`ChannelError::ConnectionClosed`] if actor has exited.
     pub async fn receive_message(&mut self) -> Result<Msg, ChannelError> {
         self.inner.next().await.ok_or(ChannelError::ConnectionClosed)
     }
 
     /// Wait up to `deadline` for the next message received from the peer.
-    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited,
+    /// Returns [`ChannelError::ConnectionClosed`] if actor has exited,
     /// or [`ChannelError::Timeout`] if the deadline has elapsed.
     pub async fn receive_message_timed(&mut self, deadline: Duration) -> Result<Msg, ChannelError> {
         timeout(deadline, self.receive_message()).await.or(Err(ChannelError::Timeout))?
@@ -82,7 +81,7 @@ impl<Msg> RxChannel<Msg> {
 impl<Msg> TxChannel<Msg> {
     /// Send a single message to the peer. The async call will only return once
     /// the message has been successfully written to the socket.
-    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited.
+    /// Returns [`ChannelError::ConnectionClosed`] if actor has exited.
     pub async fn send_message(&mut self, msg: Msg) -> Result<(), ChannelError> {
         self.inner.send(Some(msg)).await?;
         self.inner.send(None).await?;
@@ -91,7 +90,7 @@ impl<Msg> TxChannel<Msg> {
 
     /// Send a single message to the peer. The async call will return either once
     /// the message has been successfully written to the socket, or when `deadline` has elapsed.
-    /// Returns [`ChannelError::ConnectionClosed`] if [`ConnectionIoDriver`] has exited,
+    /// Returns [`ChannelError::ConnectionClosed`] if actor has exited,
     /// or [`ChannelError::Timeout`] if the deadline has elapsed.
     pub async fn send_message_timed(
         &mut self,
@@ -125,32 +124,17 @@ pub struct ExtendedChannels(pub ExtendedTxChannel, pub ExtendedRxChannel);
 
 // ------
 
-/// Actor that handles a single TCP connection to a peer.
-/// Reads inbound messages from the socket, parses them, and pushes into the appropriate channel (Upload/Download/Extended).
-/// Similarly, reads outbound messages from Upload/Download/Extended channels, serializes them and writes into the socket.
-/// Exits on socket error or if one or more channels have been closed.
-pub struct ConnectionIoDriver(BoxFuture<'static, io::Result<()>>);
-
-impl Future for ConnectionIoDriver {
-    type Output = io::Result<()>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0.as_mut().poll(cx)
-    }
-}
-
-// ------
-
 const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 
 /// Perform handshake on an inbound connection from a peer, and set up [`PeerChannel`]s.
+/// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
 pub async fn channels_for_inbound_connection(
     local_peer_id: &[u8; 20],
     info_hash: Option<&[u8; 20]>,
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     socket: TcpStream,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)> {
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash.unwrap_or(&[0u8; 20]),
@@ -161,10 +145,14 @@ pub async fn channels_for_inbound_connection(
         do_handshake_incoming(&remote_addr, socket, &local_handshake, info_hash.is_none()),
     )
     .await??;
-    Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
+    let (download, upload, extensions, runner) =
+        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled);
+    task::spawn_local(runner);
+    Ok((download, upload, extensions))
 }
 
 /// Perform handshake on an outbound connection to a peer, and set up [`PeerChannel`]s.
+/// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
 pub async fn channels_for_outbound_connection(
     local_peer_id: &[u8; 20],
     info_hash: &[u8; 20],
@@ -172,7 +160,7 @@ pub async fn channels_for_outbound_connection(
     remote_addr: SocketAddr,
     socket: TcpStream,
     remote_peer_id: Option<&[u8; 20]>,
-) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)> {
+) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)> {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
         info_hash: *info_hash,
@@ -183,10 +171,14 @@ pub async fn channels_for_outbound_connection(
         do_handshake_outgoing(&remote_addr, socket, &local_handshake, remote_peer_id),
     )
     .await??;
-    Ok(setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled))
+    let (download, upload, extensions, runner) =
+        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled);
+    task::spawn_local(runner);
+    Ok((download, upload, extensions))
 }
 
 /// Set up [`PeerChannel`]s for a fake stream without performing a handshake.
+/// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
 #[cfg(feature = "mocks")]
 pub fn channels_from_mock<S>(
     peer_addr: SocketAddr,
@@ -195,7 +187,7 @@ pub fn channels_from_mock<S>(
     mock_socket: S,
 ) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>)
 where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + 'static,
 {
     let (download, upload, extensions, runner) = setup_channels(
         StreamHolder(mock_socket),
@@ -203,7 +195,7 @@ where
         remote_handshake,
         extension_protocol_enabled,
     );
-    tokio::task::spawn(async move {
+    tokio::task::spawn_local(async move {
         let _ = runner.await;
     });
     (download, upload, extensions)
@@ -211,11 +203,11 @@ where
 
 // ------
 
-trait SplittableStream: Send + Unpin {
-    type Ingress<'i>: AsyncRead + Send + Unpin
+trait SplittableStream: Unpin {
+    type Ingress<'i>: AsyncRead + Unpin
     where
         Self: 'i;
-    type Egress<'e>: AsyncWrite + Send + Unpin
+    type Egress<'e>: AsyncWrite + Unpin
     where
         Self: 'e;
 
@@ -231,21 +223,30 @@ impl SplittableStream for TcpStream {
     }
 }
 
+impl SplittableStream for local_pipe::DuplexEnd {
+    type Ingress<'i> = &'i mut local_pipe::ReadEnd;
+    type Egress<'e> = &'e mut local_pipe::WriteEnd;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
+        self.split()
+    }
+}
+
 #[cfg(any(feature = "mocks", test))]
 struct StreamHolder<S>(S)
 where
-    S: AsyncRead + AsyncWrite + Send + Unpin;
+    S: AsyncRead + AsyncWrite + Unpin;
 
 #[cfg(any(feature = "mocks", test))]
 impl<S> SplittableStream for StreamHolder<S>
 where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + 'static,
 {
-    type Ingress<'i> = tokio::io::ReadHalf<&'i mut S>;
-    type Egress<'e> = tokio::io::WriteHalf<&'e mut S>;
+    type Ingress<'i> = local_split::ReadHalf<&'i mut S>;
+    type Egress<'e> = local_split::WriteHalf<&'e mut S>;
 
     fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
-        tokio::io::split(&mut self.0)
+        local_split::split(&mut self.0)
     }
 }
 
@@ -253,10 +254,15 @@ where
 
 fn setup_channels<S>(
     mut stream: S,
-    remote_ip: SocketAddr,
+    remote_addr: SocketAddr,
     remote_handshake: Handshake,
     extended_protocol_enabled: bool,
-) -> (DownloadChannels, UploadChannels, Option<ExtendedChannels>, ConnectionIoDriver)
+) -> (
+    DownloadChannels,
+    UploadChannels,
+    Option<ExtendedChannels>,
+    impl Future<Output = io::Result<()>>,
+)
 where
     S: SplittableStream + 'static,
 {
@@ -264,9 +270,9 @@ where
 
     let extended_protocol_supported = is_extension_protocol_enabled(&remote_handshake.reserved);
 
-    let info = Rc::new(PeerInfo {
+    let info = Arc::new(PeerInfo {
         handshake_info: remote_handshake,
-        remote_addr: remote_ip,
+        remote_addr,
     });
 
     let (local_uploader_msg_in, local_uploader_msg_out) =
@@ -307,21 +313,27 @@ where
         let (ingress, egress) = stream.split();
         let receiver = IngressProcessor {
             source: ingress,
-            remote_ip,
+            remote_ip: remote_addr,
             ul_msg_sink: remote_uploader_msg_in,
             dl_msg_sink: remote_downloader_msg_in,
             ext_msg_sink: remote_extended_msg_in,
         };
         let sender = EgressProcessor {
             sink: egress,
-            remote_ip,
+            remote_ip: remote_addr,
             dl_msg_source: local_downloader_msg_out,
             ul_msg_source: local_uploader_msg_out,
             ext_msg_source: local_extended_msg_out,
         };
-        try_join!(receiver.read_messages(), sender.write_messages()).map(|_| ())
+        try_join!(receiver.read_messages(), sender.write_messages())
+            .map(|_| ())
+            .inspect_err(|e| {
+                if !matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) {
+                    log::warn!("Peer runner for {remote_addr} exited: {e}");
+                }
+            })
     }
-    .boxed();
+    .boxed_local();
 
     let download_rx = DownloadRxChannel {
         inner: remote_uploader_msg_out,
@@ -345,7 +357,7 @@ where
         DownloadChannels(download_tx, download_rx),
         UploadChannels(upload_tx, upload_rx),
         extended_channels,
-        ConnectionIoDriver(actor_fut),
+        actor_fut,
     )
 }
 
@@ -785,7 +797,7 @@ mod tests {
         join!(download_fut, upload_fut, run_fut);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "local")]
     async fn test_write_downloader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Interested]).wait(sec!(0)).build();
         let (mut download, _upload, _, runner) = setup_channels!(
@@ -795,7 +807,7 @@ mod tests {
             false,
         );
 
-        task::spawn(async move {
+        task::spawn_local(async move {
             let _ = runner.await;
         });
 
@@ -803,7 +815,7 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "local")]
     async fn test_write_uploader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Unchoke]).wait(sec!(0)).build();
         let (_download, mut upload, _, runner) = setup_channels!(
@@ -813,7 +825,7 @@ mod tests {
             false,
         );
 
-        task::spawn(async move {
+        task::spawn_local(async move {
             let _ = runner.await;
         });
 
@@ -821,7 +833,7 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "local")]
     async fn test_write_extended_messages() {
         let socket = MockBuilder::new()
             .write(msgs![
@@ -847,7 +859,7 @@ mod tests {
         assert!(extended.is_some());
         let ExtendedChannels(mut tx, _rx) = extended.unwrap();
 
-        task::spawn(async move {
+        task::spawn_local(async move {
             let _ = runner.await;
         });
 
@@ -1191,7 +1203,7 @@ mod tests {
             .await;
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(start_paused = true, flavor = "local")]
     async fn test_receiver_times_out_after_2_min() {
         let (sock1, _sock2) = io::duplex(0);
         let (_download, _upload, _, runner) = setup_channels!(
@@ -1203,7 +1215,7 @@ mod tests {
 
         let (mut result_sender, mut result_receiver) = mpsc::channel::<io::Result<()>>(1);
 
-        task::spawn(async move {
+        task::spawn_local(async move {
             let result = runner.await;
             result_sender.try_send(result).unwrap();
         });
@@ -1283,7 +1295,7 @@ mod tests {
             .await;
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(start_paused = true, flavor = "local")]
     async fn test_channel_receive_zero_timeout() {
         let socket = MockBuilder::new()
             .read(msgs![
@@ -1300,7 +1312,7 @@ mod tests {
             false,
         );
 
-        task::spawn(async move {
+        task::spawn_local(async move {
             let _ = runner.await;
         });
 
