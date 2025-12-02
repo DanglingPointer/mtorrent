@@ -6,6 +6,8 @@ use futures_channel::mpsc;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
+use mtorrent_utils::duplex::DuplexPipe;
+use mtorrent_utils::duplex::LocalDuplexPipe;
 use std::future::Future;
 use std::io;
 use std::mem::MaybeUninit;
@@ -15,6 +17,9 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::io::ReadHalf;
+use tokio::io::SimplexStream;
+use tokio::io::WriteHalf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, tcp};
 use tokio::time::{sleep, timeout};
@@ -231,6 +236,26 @@ impl SplittableStream for TcpStream {
     }
 }
 
+impl SplittableStream for DuplexPipe {
+    type Ingress<'i> = &'i mut ReadHalf<SimplexStream>;
+    type Egress<'e> = &'e mut WriteHalf<SimplexStream>;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
+        let Self(read, write) = self;
+        (read, write)
+    }
+}
+
+impl SplittableStream for LocalDuplexPipe {
+    type Ingress<'i> = &'i mut local_pipe::Reader;
+    type Egress<'e> = &'e mut local_pipe::Writer;
+
+    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
+        let Self(read, write) = self;
+        (read, write)
+    }
+}
+
 #[cfg(any(feature = "mocks", test))]
 struct StreamHolder<S>(S)
 where
@@ -241,8 +266,8 @@ impl<S> SplittableStream for StreamHolder<S>
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    type Ingress<'i> = tokio::io::ReadHalf<&'i mut S>;
-    type Egress<'e> = tokio::io::WriteHalf<&'e mut S>;
+    type Ingress<'i> = ReadHalf<&'i mut S>;
+    type Egress<'e> = WriteHalf<&'e mut S>;
 
     fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
         tokio::io::split(&mut self.0)

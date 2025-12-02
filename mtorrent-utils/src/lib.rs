@@ -3,6 +3,7 @@
 pub mod bandwidth;
 pub mod benc;
 pub mod connect_throttle;
+pub mod duplex;
 pub mod fifo_set;
 pub mod ip;
 pub mod peer_id;
