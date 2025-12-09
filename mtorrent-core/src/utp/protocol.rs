@@ -12,7 +12,7 @@ pub enum TypeVer {
     Syn = 0x41,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     type_ver: TypeVer,
     extension: u8,
@@ -132,11 +132,20 @@ impl<'d> ExtensionIter<'d> {
     }
 }
 
+pub fn skip_extensions(buffer: &mut impl Buf, header: &Header) {
+    if header.has_extensions() {
+        let mut extensions = ExtensionIter::new(buffer.chunk());
+        while extensions.next().is_some() {}
+        let headers_len = buffer.chunk().len() - extensions.remainder().len();
+        buffer.advance(headers_len);
+    }
+}
+
 pub struct ConnectionState {
     conn_id_recv: u16,
     conn_id_send: u16,
-    seq_nr: u16, // last tx seq_nr
-    ack_nr: u16, // last rx seq_nr
+    last_local_seq: u16,  // last tx seq_nr
+    last_remote_seq: u16, // last rx seq_nr
     remote_wnd: u32,
     local_wnd: u32,
 
@@ -153,8 +162,8 @@ impl ConnectionState {
         Self {
             conn_id_recv,
             conn_id_send,
-            seq_nr: 0,
-            ack_nr: 0,
+            last_local_seq: 0,
+            last_remote_seq: 0,
             remote_wnd: 0,
             local_wnd: Self::LOCAL_WINDOW,
             packet_size: Self::INIT_PACKET_SIZE,
@@ -166,8 +175,8 @@ impl ConnectionState {
         Self {
             conn_id_recv: syn.connection_id + 1,
             conn_id_send: syn.connection_id,
-            seq_nr: rand::random(),
-            ack_nr: syn.seq_nr,
+            last_local_seq: rand::random(),
+            last_remote_seq: syn.seq_nr,
             remote_wnd: syn.wnd_size,
             local_wnd: Self::LOCAL_WINDOW,
             packet_size: Self::INIT_PACKET_SIZE,
@@ -184,20 +193,20 @@ impl ConnectionState {
 
     pub fn validate_header(&self, received_header: &Header) -> bool {
         received_header.connection_id == self.conn_id_recv
-            && (received_header.seq_nr == self.ack_nr + 1
+            && (received_header.seq_nr == self.last_remote_seq + 1
                 || received_header.type_ver == TypeVer::State)
     }
 
     pub fn process_header(&mut self, received_header: &Header) {
         self.remote_wnd = received_header.wnd_size;
-        if received_header.type_ver != TypeVer::State || self.ack_nr == 0 {
-            self.ack_nr = received_header.seq_nr;
+        if received_header.type_ver != TypeVer::State || self.last_remote_seq == 0 {
+            self.last_remote_seq = received_header.seq_nr;
         }
     }
 
     pub fn generate_header(&mut self, type_ver: TypeVer) -> Header {
         if type_ver != TypeVer::State {
-            self.seq_nr += 1;
+            self.last_local_seq += 1;
         }
         Header {
             type_ver,
@@ -214,8 +223,95 @@ impl ConnectionState {
                 .unwrap_or_default(),
             timestamp_diff_us: 0, // TODO
             wnd_size: self.local_wnd,
-            seq_nr: self.seq_nr,
-            ack_nr: self.ack_nr,
+            seq_nr: self.last_local_seq,
+            ack_nr: self.last_remote_seq,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_header() {
+        let header = Header {
+            type_ver: TypeVer::Syn,
+            extension: 0,
+            connection_id: 0x1234,
+            timestamp_us: 0x56789abc,
+            timestamp_diff_us: 0xdef01234,
+            wnd_size: 0x456789ab,
+            seq_nr: 0x9abc,
+            ack_nr: 0xdef0,
+        };
+
+        let mut buf = Vec::with_capacity(Header::MIN_SIZE);
+        header.encode_to(&mut buf).unwrap();
+
+        let expected_bytes = [
+            0x41, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x45, 0x67,
+            0x89, 0xab, 0x9a, 0xbc, 0xde, 0xf0,
+        ];
+        assert_eq!(&buf[..], &expected_bytes);
+    }
+
+    #[test]
+    fn test_decode_header() {
+        let bytes = [
+            0x21, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x45, 0x67,
+            0x89, 0xab, 0x9a, 0xbc, 0xde, 0xf0,
+        ];
+        let mut buf = &bytes[..];
+        let header = Header::decode_from(&mut buf).unwrap();
+
+        assert_eq!(header.type_ver, TypeVer::State);
+        assert_eq!(header.extension, 0);
+        assert_eq!(header.connection_id, 0x1234);
+        assert_eq!(header.timestamp_us, 0x56789abc);
+        assert_eq!(header.timestamp_diff_us, 0xdef01234);
+        assert_eq!(header.wnd_size, 0x456789ab);
+        assert_eq!(header.seq_nr, 0x9abc);
+        assert_eq!(header.ack_nr, 0xdef0);
+    }
+
+    #[test]
+    fn test_encode_decode_header() {
+        let original_header = Header {
+            type_ver: TypeVer::Fin,
+            extension: 1,
+            connection_id: 0x4321,
+            timestamp_us: 0xabcdef01,
+            timestamp_diff_us: 0x23456789,
+            wnd_size: 0x89abcdef,
+            seq_nr: 0xfedc,
+            ack_nr: 0xba98,
+        };
+
+        let mut buf = Vec::with_capacity(Header::MIN_SIZE);
+        original_header.encode_to(&mut buf).unwrap();
+
+        let mut buf_slice = &buf[..];
+        let decoded_header = Header::decode_from(&mut buf_slice).unwrap();
+
+        assert_eq!(original_header, decoded_header);
+    }
+
+    #[test]
+    fn test_skip_extensions() {
+        let mut data_with_ext = &[0x01, 0x02, 0x03, 0x04, 0x00, b'm'][..]; // ext_type=1, len=2, data=[0x03, 0x04], ext_type=0
+        let header = Header {
+            type_ver: TypeVer::Data,
+            extension: 1,
+            connection_id: 0,
+            timestamp_us: 0,
+            timestamp_diff_us: 0,
+            wnd_size: 0,
+            seq_nr: 0,
+            ack_nr: 0,
+        };
+
+        skip_extensions(&mut data_with_ext, &header);
+        assert_eq!(data_with_ext, &[b'm'][..]); // All extension bytes should be skipped
     }
 }
