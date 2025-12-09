@@ -12,7 +12,7 @@ pub enum TypeVer {
     Syn = 0x41,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     type_ver: TypeVer,
     extension: u8,
@@ -132,6 +132,15 @@ impl<'d> ExtensionIter<'d> {
     }
 }
 
+pub fn skip_extensions(buffer: &mut impl Buf, header: &Header) {
+    if header.has_extensions() {
+        let mut extensions = ExtensionIter::new(buffer.chunk());
+        while extensions.next().is_some() {}
+        let headers_len = buffer.chunk().len() - extensions.remainder().len();
+        buffer.advance(headers_len);
+    }
+}
+
 pub struct ConnectionState {
     conn_id_recv: u16,
     conn_id_send: u16,
@@ -217,5 +226,92 @@ impl ConnectionState {
             seq_nr: self.seq_nr,
             ack_nr: self.ack_nr,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_header() {
+        let header = Header {
+            type_ver: TypeVer::Syn,
+            extension: 0,
+            connection_id: 0x1234,
+            timestamp_us: 0x56789abc,
+            timestamp_diff_us: 0xdef01234,
+            wnd_size: 0x456789ab,
+            seq_nr: 0x9abc,
+            ack_nr: 0xdef0,
+        };
+
+        let mut buf = Vec::with_capacity(Header::MIN_SIZE);
+        header.encode_to(&mut buf).unwrap();
+
+        let expected_bytes = [
+            0x41, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x45, 0x67,
+            0x89, 0xab, 0x9a, 0xbc, 0xde, 0xf0,
+        ];
+        assert_eq!(&buf[..], &expected_bytes);
+    }
+
+    #[test]
+    fn test_decode_header() {
+        let bytes = [
+            0x21, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x45, 0x67,
+            0x89, 0xab, 0x9a, 0xbc, 0xde, 0xf0,
+        ];
+        let mut buf = &bytes[..];
+        let header = Header::decode_from(&mut buf).unwrap();
+
+        assert_eq!(header.type_ver, TypeVer::State);
+        assert_eq!(header.extension, 0);
+        assert_eq!(header.connection_id, 0x1234);
+        assert_eq!(header.timestamp_us, 0x56789abc);
+        assert_eq!(header.timestamp_diff_us, 0xdef01234);
+        assert_eq!(header.wnd_size, 0x456789ab);
+        assert_eq!(header.seq_nr, 0x9abc);
+        assert_eq!(header.ack_nr, 0xdef0);
+    }
+
+    #[test]
+    fn test_encode_decode_header() {
+        let original_header = Header {
+            type_ver: TypeVer::Fin,
+            extension: 1,
+            connection_id: 0x4321,
+            timestamp_us: 0xabcdef01,
+            timestamp_diff_us: 0x23456789,
+            wnd_size: 0x89abcdef,
+            seq_nr: 0xfedc,
+            ack_nr: 0xba98,
+        };
+
+        let mut buf = Vec::with_capacity(Header::MIN_SIZE);
+        original_header.encode_to(&mut buf).unwrap();
+
+        let mut buf_slice = &buf[..];
+        let decoded_header = Header::decode_from(&mut buf_slice).unwrap();
+
+        assert_eq!(original_header, decoded_header);
+    }
+
+    #[test]
+    fn test_skip_extensions() {
+        let mut data_with_ext = &[0x01, 0x02, 0x03, 0x04, 0x00, b'm'][..]; // ext_type=1, len=2, data=[0x03, 0x04], ext_type=0
+        let header = Header {
+            type_ver: TypeVer::Data,
+            extension: 1,
+            connection_id: 0,
+            timestamp_us: 0,
+            timestamp_diff_us: 0,
+            wnd_size: 0,
+            seq_nr: 0,
+            ack_nr: 0,
+        };
+
+        skip_extensions(&mut data_with_ext, &header);
+        assert_eq!(data_with_ext, &[b'm'][..]); // All extension bytes should be skipped
     }
 }
