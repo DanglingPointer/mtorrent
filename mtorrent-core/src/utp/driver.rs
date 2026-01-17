@@ -10,6 +10,7 @@ use tokio::net::UdpSocket;
 
 pub(super) enum Command {
     AddConnection((SocketAddr, ConnectionHandle)),
+    ResetAll,
 }
 
 pub(super) struct ConnectionHandle {
@@ -25,6 +26,7 @@ pub struct IoDriver {
     connections: HashMap<SocketAddr, ConnectionHandle>,
     pending_tx: Vec<(SocketAddr, Bytes)>,
     unknown_source_rx: local_bounded::Sender<(SocketAddr, Bytes)>,
+    reset_in_progress: bool,
 }
 
 impl IoDriver {
@@ -39,6 +41,7 @@ impl IoDriver {
             connections: HashMap::new(),
             pending_tx: Vec::new(),
             unknown_source_rx: unknown_source_reporter,
+            reset_in_progress: false,
         }
     }
 
@@ -50,19 +53,45 @@ impl IoDriver {
     }
 
     fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<ControlFlow<()>> {
+        if self.reset_in_progress {
+            if self.connections.is_empty() {
+                self.reset_in_progress = false;
+                log::info!("uTP reset complete");
+            } else {
+                // wait for all connections to close
+                return Poll::Pending;
+            }
+        }
+
         if let Poll::Ready(result) = self.commands.poll_next_unpin(cx) {
             // handle command
             match result {
                 Some(Command::AddConnection((peer_addr, connection))) => {
                     match self.connections.entry(peer_addr) {
-                        Entry::Occupied(_) => {
-                            log::error!("Not adding connection to {peer_addr}: already exists");
+                        Entry::Occupied(mut entry) => {
+                            if entry.get().ingress.is_closed() || entry.get().egress.is_closed() {
+                                // replace closed connection
+                                entry.insert(connection);
+                            } else {
+                                log::error!("Not adding connection to {peer_addr}: already exists");
+                            }
                         }
                         Entry::Vacant(e) => {
                             e.insert(connection);
                         }
                     }
                     Poll::Ready(ControlFlow::Continue(()))
+                }
+                Some(Command::ResetAll) => {
+                    self.pending_tx.clear();
+                    for connection in self.connections.values_mut() {
+                        // fake an empty inbound packet which will fail parsing and trigger an outbound RST and connection exit
+                        connection.ingress.queue().clear();
+                        _ = connection.ingress.try_send(Bytes::new());
+                        connection.egress.queue().clear();
+                    }
+                    self.reset_in_progress = true;
+                    Poll::Pending // yield to allow connections to process the reset
                 }
                 None => {
                     // application exiting

@@ -129,4 +129,10 @@ impl ConnectionSpawner {
         );
         Some(left)
     }
+
+    /// Reset all active connections by sending RST packets.
+    pub fn reset_all(&mut self) {
+        self.0.queue().clear();
+        let _ = self.0.try_send(driver::Command::ResetAll);
+    }
 }

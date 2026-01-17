@@ -1,13 +1,12 @@
 use super::super::PeerReporter;
 use futures_util::StreamExt;
-use local_async_utils::prelude::*;
 use mtorrent_core::pwp;
 use mtorrent_core::utp;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;
+use std::ops::ControlFlow;
 use std::time::Duration;
-use tokio::join;
 use tokio::net::UdpSocket;
 use tokio::runtime;
 use tokio::sync::mpsc;
@@ -15,32 +14,25 @@ use tokio::sync::oneshot;
 use tokio::task;
 use tokio::time;
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
+use tokio::{join, select};
 
-pub fn launch_utp(
-    pwp_runtime: &runtime::Handle,
-    local_addr: SocketAddr,
-    peer_reporter: PeerReporter,
-    canceller: CancellationToken,
-) -> UtpHandle {
+pub fn launch_utp(pwp_runtime: &runtime::Handle, local_addr: SocketAddr) -> UtpHandle {
     let (cmd_sender, cmd_receiver) = mpsc::channel(1);
     pwp_runtime.spawn(async move {
-        // the canceller below is mostly needed when binding UDP socket
-        task::spawn_local(canceller.run_until_cancelled_owned(async move {
-            match UdpSocket::bind(local_addr).await {
-                Ok(socket) => {
+        match UdpSocket::bind(local_addr).await {
+            Ok(socket) => {
+                task::spawn_local(async move {
                     let (connection_spawner, connect_reporter, io_driver) = utp::init(socket);
                     join!(
                         io_driver.run(),
-                        handle_commands(cmd_receiver, connection_spawner),
-                        handle_accepted(peer_reporter, connect_reporter)
+                        bridge_task(connection_spawner, cmd_receiver, connect_reporter)
                     );
-                }
-                Err(e) => {
-                    log::error!("Failed to create uTP socket: {e}");
-                }
+                });
             }
-        }));
+            Err(e) => {
+                log::error!("Failed to create uTP socket: {e}");
+            }
+        }
     });
     UtpHandle(cmd_sender)
 }
@@ -66,6 +58,9 @@ pub(super) type ConnectResult =
     io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)>;
 
 enum Command {
+    Restart {
+        reporter: PeerReporter,
+    },
     OutboundConnect {
         args: OutboundConnectArgs,
         resp: oneshot::Sender<ConnectResult>,
@@ -76,6 +71,7 @@ enum Command {
     },
 }
 
+#[derive(Clone)]
 pub struct UtpHandle(mpsc::Sender<Command>);
 
 impl UtpHandle {
@@ -104,15 +100,35 @@ impl UtpHandle {
         self.0.send(cmd).await.map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
         resp_rx.await.map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?
     }
+
+    pub(crate) async fn restart(&self, peer_reporter: PeerReporter) -> io::Result<()> {
+        self.0
+            .send(Command::Restart {
+                reporter: peer_reporter,
+            })
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
+    }
 }
 
-async fn handle_commands(
-    mut receiver: mpsc::Receiver<Command>,
+async fn bridge_task(
     mut connection_spawner: utp::ConnectionSpawner,
+    mut cmd_receiver: mpsc::Receiver<Command>,
+    mut connect_reporter: utp::ConnectReporter,
 ) {
-    let _sw = info_stopwatch!(Duration::ZERO, "handle_commands() task");
-    while let Some(cmd) = receiver.recv().await {
+    async fn handle_command(
+        cmd: Option<Command>,
+        connection_spawner: &mut utp::ConnectionSpawner,
+        reporter_option: &mut Option<PeerReporter>,
+    ) -> ControlFlow<()> {
+        let Some(cmd) = cmd else {
+            return ControlFlow::Break(());
+        };
         match cmd {
+            Command::Restart { reporter } => {
+                *reporter_option = Some(reporter);
+                connection_spawner.reset_all();
+            }
             Command::OutboundConnect { args, resp } => {
                 let deadline = Instant::now() + args.timeout;
                 let Some(stream) =
@@ -120,7 +136,7 @@ async fn handle_commands(
                 else {
                     // uTP shutdown
                     _ = resp.send(Err(io::ErrorKind::BrokenPipe.into()));
-                    return;
+                    return ControlFlow::Break(());
                 };
                 task::spawn_local(async move {
                     let ret = time::timeout_at(
@@ -145,7 +161,7 @@ async fn handle_commands(
                 else {
                     // uTP shutdown
                     _ = resp.send(Err(io::ErrorKind::BrokenPipe.into()));
-                    return;
+                    return ControlFlow::Break(());
                 };
                 task::spawn_local(async move {
                     let ret = time::timeout_at(
@@ -163,17 +179,44 @@ async fn handle_commands(
                 });
             }
         }
+        ControlFlow::Continue(())
     }
-}
 
-async fn handle_accepted(peer_reporter: PeerReporter, mut connect_reporter: utp::ConnectReporter) {
-    let _sw = info_stopwatch!(Duration::ZERO, "handle_accepted() task");
-    loop {
-        let Some((addr, data)) = connect_reporter.next().await else {
-            break;
+    async fn handle_connect(
+        connect: Option<(SocketAddr, utp::InboundConnectData)>,
+        reporter_option: &mut Option<PeerReporter>,
+    ) -> ControlFlow<()> {
+        let Some((addr, data)) = connect else {
+            return ControlFlow::Break(());
         };
-        if !peer_reporter.report_accepted_utp(addr, data).await {
-            break;
+        match reporter_option.as_ref() {
+            Some(reporter) => {
+                if !reporter.report_accepted_utp(addr, data).await {
+                    reporter_option.take();
+                }
+            }
+            None => {
+                log::warn!("Ignored inbound utp connect: no reporter");
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    let mut reporter = None;
+
+    loop {
+        select! {
+            biased;
+            cmd = cmd_receiver.recv() => {
+                if handle_command(cmd, &mut connection_spawner, &mut reporter).await.is_break() {
+                    break;
+                }
+            }
+            connect = connect_reporter.next() => {
+                if handle_connect(connect, &mut reporter).await.is_break() {
+                    break;
+                }
+            }
         }
     }
 }
