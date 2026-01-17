@@ -169,12 +169,20 @@ async fn preliminary_stage(
     let ctx =
         ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
 
-    let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
+    let (peer_reporter, connect_throttle) = ops::connect_control(|peer_reporter| {
+        let utp_handle: ops::UtpHandle = ops::launch_utp(
+            pwp_runtime,
+            listener_addr,
+            peer_reporter.clone(),
+            canceller.child_token(),
+        );
+        ops::PreliminaryConnectionData {
             ctx_handle: ctx.clone(),
             pwp_worker_handle: pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
-        });
+            utp_handle,
+        }
+    });
     tasks.spawn_local(connect_throttle.run());
 
     dht_handle.map(|dht_cmds| {
@@ -260,15 +268,23 @@ async fn main_stage(
     let ctx: ops::Handle<_> =
         ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
 
-    let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::MainConnectionData {
+    let (peer_reporter, connect_throttle) = ops::connect_control(|peer_reporter| {
+        let utp_handle: ops::UtpHandle = ops::launch_utp(
+            &handles.pwp_runtime,
+            listener_addr,
+            peer_reporter.clone(),
+            canceller.child_token(),
+        );
+        ops::MainConnectionData {
             content_storage,
             metainfo_storage,
             ctx_handle: ctx.clone(),
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
-        });
+            utp_handle,
+        }
+    });
     tasks.spawn_local(connect_throttle.run());
 
     handles.dht_handle.as_ref().map(|dht_cmds| {

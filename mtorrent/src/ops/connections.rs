@@ -1,6 +1,7 @@
 use derive_more::Debug;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_core::utp;
 use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
 use rand::Rng;
 use std::net::SocketAddr;
@@ -23,7 +24,13 @@ struct OutboundConnect {
 #[derive(Debug)]
 struct InboundConnect {
     addr: SocketAddr,
-    stream: TcpStream,
+    data: InboundData,
+}
+
+#[derive(Debug)]
+enum InboundData {
+    Tcp(TcpStream),
+    Utp(utp::InboundConnectData),
 }
 
 #[derive(Clone)]
@@ -45,7 +52,27 @@ impl PeerReporter {
     }
 
     pub async fn report_accepted(&self, addr: SocketAddr, stream: TcpStream) -> bool {
-        self.accepted_reporter.send(InboundConnect { addr, stream }).await.is_ok()
+        self.accepted_reporter
+            .send(InboundConnect {
+                addr,
+                data: InboundData::Tcp(stream),
+            })
+            .await
+            .is_ok()
+    }
+
+    pub async fn report_accepted_utp(
+        &self,
+        addr: SocketAddr,
+        data: utp::InboundConnectData,
+    ) -> bool {
+        self.accepted_reporter
+            .send(InboundConnect {
+                addr,
+                data: InboundData::Utp(data),
+            })
+            .await
+            .is_ok()
     }
 }
 
@@ -62,10 +89,21 @@ pub trait PeerConnector {
         peer_addr: SocketAddr,
     ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
 
+    fn outbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
     fn inbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
         stream: TcpStream,
+    ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
+
+    fn inbound_utp_connect_and_handshake(
+        &self,
+        peer_addr: SocketAddr,
+        data: utp::InboundConnectData,
     ) -> impl Future<Output = io::Result<Self::PeerConnection>>;
 
     fn run_connection(
@@ -224,10 +262,16 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     log::debug!("{connect:?} initiated");
     let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
-    let connect_result =
+    let mut connect_result =
         time::timeout_at(connect_deadline, connector.outbound_connect_and_handshake(connect.addr))
             .await
             .unwrap_or_else(|e| Err(io::Error::from(e)));
+
+    #[expect(clippy::overly_complex_bool_expr)]
+    if connect_result.is_err() && false {
+        // TODO: enable once tests are updated
+        connect_result = connector.outbound_utp_connect_and_handshake(connect.addr).await;
+    }
 
     let connection = match connect_result {
         Ok(connection) => connection,
@@ -282,11 +326,22 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     log::debug!("{connect:?} accepted");
     let connect_deadline = Instant::now() + with_jitter(connector.connect_timeout());
 
-    let connection = time::timeout_at(
-        connect_deadline,
-        connector.inbound_connect_and_handshake(connect.addr, connect.stream),
-    )
-    .await??;
+    let connection = match connect.data {
+        InboundData::Tcp(stream) => {
+            time::timeout_at(
+                connect_deadline,
+                connector.inbound_connect_and_handshake(connect.addr, stream),
+            )
+            .await??
+        }
+        InboundData::Utp(data) => {
+            time::timeout_at(
+                connect_deadline,
+                connector.inbound_utp_connect_and_handshake(connect.addr, data),
+            )
+            .await??
+        }
+    };
 
     log::debug!("Inbound connection from {} succeeded", connect.addr);
 

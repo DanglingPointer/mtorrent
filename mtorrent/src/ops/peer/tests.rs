@@ -1,6 +1,7 @@
 use super::testutils::*;
 use crate::ops::PeerConnector;
 use crate::ops::PeerReporter;
+use crate::ops::UtpHandle;
 use crate::ops::ctx;
 use crate::utils::startup;
 use local_async_utils::prelude::*;
@@ -152,6 +153,7 @@ async fn run_listening_seeder(
         pwp_worker_handle: runtime::Handle::current(),
         peer_reporter: PeerReporter::new_mock(),
         piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+        utp_handle: UtpHandle::new_mock(),
     });
 
     let listener = TcpListener::bind(listener_ip).await.unwrap();
