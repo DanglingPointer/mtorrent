@@ -6,8 +6,6 @@ mod retransmitter;
 
 use bytes::Bytes;
 use connection::Connection;
-use driver::IoDriver;
-use futures_util::FutureExt;
 use futures_util::{Stream, StreamExt, TryFutureExt};
 use local_async_utils::prelude::*;
 use protocol::Header;
@@ -19,16 +17,18 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::{task, time};
 
+pub use driver::IoDriver;
+
 /// Initialize the uTP subsystem.
-pub fn init(socket: UdpSocket) -> (ConnectionSpawner, ConnectReporter) {
+pub fn init(socket: UdpSocket) -> (ConnectionSpawner, ConnectReporter, IoDriver) {
     let (cmd_sender, cmd_receiver) = local_bounded::channel(1);
     let (connect_sender, connect_receiver) = local_bounded::channel(64);
 
-    task::spawn_local(
-        IoDriver::new(cmd_receiver, socket, connect_sender)
-            .inspect(|()| log::info!("uTP I/O driver exited")),
-    );
-    (ConnectionSpawner(cmd_sender), ConnectReporter(connect_receiver))
+    (
+        ConnectionSpawner(cmd_sender),
+        ConnectReporter(connect_receiver),
+        IoDriver::new(cmd_receiver, socket, connect_sender),
+    )
 }
 
 /// Opaque data for an inbound connection attempt.

@@ -1,24 +1,24 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    net::SocketAddr,
-    pin::Pin,
-    task::{Context, Poll, ready},
-};
-
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use tokio::{net::UdpSocket, task};
+use mtorrent_utils::loop_select::loop_select;
+use std::collections::hash_map::{Entry, HashMap};
+use std::net::SocketAddr;
+use std::ops::ControlFlow;
+use std::task::{Context, Poll};
+use tokio::net::UdpSocket;
 
-pub enum Command {
+pub(super) enum Command {
     AddConnection((SocketAddr, ConnectionHandle)),
 }
 
-pub struct ConnectionHandle {
-    pub egress: local_bounded::Receiver<Bytes>,
-    pub ingress: local_bounded::Sender<Bytes>,
+pub(super) struct ConnectionHandle {
+    pub(super) egress: local_bounded::Receiver<Bytes>,
+    pub(super) ingress: local_bounded::Sender<Bytes>,
 }
 
+/// [`IoDriver`] is responsible for sending and receiving UDP packets
+/// and dispatching them to the appropriate connections.
 pub struct IoDriver {
     commands: local_bounded::Receiver<Command>,
     socket: UdpSocket,
@@ -28,7 +28,7 @@ pub struct IoDriver {
 }
 
 impl IoDriver {
-    pub fn new(
+    pub(super) fn new(
         command_receiver: local_bounded::Receiver<Command>,
         socket: UdpSocket,
         unknown_source_reporter: local_bounded::Sender<(SocketAddr, Bytes)>,
@@ -42,114 +42,120 @@ impl IoDriver {
         }
     }
 
-    fn poll_run(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        loop {
-            let coop = ready!(task::coop::poll_proceed(cx));
-            let mut made_progress = false;
+    /// Run the I/O driver.
+    pub async fn run(mut self) {
+        log::info!("uTP I/O driver started");
+        loop_select(&mut self, [Self::poll_commands, Self::poll_egress, Self::poll_ingress]).await;
+        log::info!("uTP I/O driver exited");
+    }
 
-            if let Poll::Ready(result) = self.commands.poll_next_unpin(cx) {
-                // handle command
-                match result {
-                    Some(Command::AddConnection((peer_addr, connection))) => {
-                        match self.connections.entry(peer_addr) {
-                            Entry::Occupied(_) => {
-                                log::error!("Not adding connection to {peer_addr}: already exists");
-                            }
-                            Entry::Vacant(e) => {
-                                e.insert(connection);
-                            }
+    fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<ControlFlow<()>> {
+        if let Poll::Ready(result) = self.commands.poll_next_unpin(cx) {
+            // handle command
+            match result {
+                Some(Command::AddConnection((peer_addr, connection))) => {
+                    match self.connections.entry(peer_addr) {
+                        Entry::Occupied(_) => {
+                            log::error!("Not adding connection to {peer_addr}: already exists");
                         }
-                        made_progress = true;
+                        Entry::Vacant(e) => {
+                            e.insert(connection);
+                        }
                     }
-                    None => return Poll::Ready(()),
+                    Poll::Ready(ControlFlow::Continue(()))
+                }
+                None => {
+                    // application exiting
+                    Poll::Ready(ControlFlow::Break(()))
                 }
             }
-
-            if let Some((remote_addr, packet)) = self.pending_tx.last() {
-                // has pending egress, try sending it
-                if let Poll::Ready(Ok(())) = self.socket.poll_send_ready(cx) {
-                    match self.socket.try_send_to(packet, *remote_addr) {
-                        Ok(bytes_sent) if bytes_sent != packet.len() => {
-                            log::error!(
-                                "Incomplete send to {remote_addr}: {bytes_sent}/{}",
-                                packet.len()
-                            );
-                            self.connections.remove(remote_addr);
-                        }
-                        Err(e) => {
-                            log::error!("Send failed to {remote_addr}: {e}");
-                            self.connections.remove(remote_addr);
-                        }
-                        Ok(_) => {}
-                    }
-                    self.pending_tx.pop();
-                    made_progress = true;
-                }
-            } else {
-                // iterate through connections and fill the egress queue with at most 1 packet from each connection
-                self.connections.retain(|remote_addr, connection| {
-                    match connection.egress.poll_next_unpin(cx) {
-                        Poll::Ready(None) => {
-                            made_progress = true;
-                            false
-                        }
-                        Poll::Ready(Some(packet)) => {
-                            made_progress = true;
-                            self.pending_tx.push((*remote_addr, packet));
-                            true
-                        }
-                        Poll::Pending => true,
-                    }
-                });
-            }
-
-            if let Poll::Ready(Ok(())) = self.socket.poll_recv_ready(cx) {
-                // handle ingress
-                let mut buf = BytesMut::new();
-                if let Ok((_bytes_read, source_addr)) = self.socket.try_recv_buf_from(&mut buf) {
-                    match self.connections.entry(source_addr) {
-                        Entry::Occupied(mut connection) => {
-                            match connection.get_mut().ingress.try_send(buf.freeze()) {
-                                Ok(_) => {}
-                                Err(local_sync_error::TrySendError::Full(_buf)) => {
-                                    log::warn!("Dropping received packet from {source_addr}");
-                                }
-                                Err(local_sync_error::TrySendError::Closed(_buf)) => {
-                                    connection.remove();
-                                }
-                            }
-                        }
-                        Entry::Vacant(_) => {
-                            match self.unknown_source_rx.try_send((source_addr, buf.freeze())) {
-                                Ok(_) => {}
-                                Err(local_sync_error::TrySendError::Full(_)) => {
-                                    log::warn!(
-                                        "Dropping received packet from unknown source {source_addr}"
-                                    );
-                                }
-                                Err(local_sync_error::TrySendError::Closed(_)) => {
-                                    return Poll::Ready(());
-                                }
-                            }
-                        }
-                    }
-                    made_progress = true;
-                }
-            }
-
-            if !made_progress {
-                return Poll::Pending;
-            }
-
-            coop.made_progress();
+        } else {
+            Poll::Pending
         }
     }
-}
 
-impl Future for IoDriver {
-    type Output = ();
+    fn poll_egress(&mut self, cx: &mut Context<'_>) -> Poll<ControlFlow<()>> {
+        let mut made_progress = false;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().poll_run(cx)
+        if let Some((remote_addr, packet)) = self.pending_tx.last() {
+            // has pending egress, try sending it
+            if let Poll::Ready(Ok(())) = self.socket.poll_send_ready(cx) {
+                match self.socket.try_send_to(packet, *remote_addr) {
+                    Ok(bytes_sent) if bytes_sent != packet.len() => {
+                        log::error!(
+                            "Incomplete send to {remote_addr}: {bytes_sent}/{}",
+                            packet.len()
+                        );
+                        self.connections.remove(remote_addr);
+                    }
+                    Err(e) => {
+                        log::error!("Send failed to {remote_addr}: {e}");
+                        self.connections.remove(remote_addr);
+                    }
+                    Ok(_) => {}
+                }
+                self.pending_tx.pop();
+                made_progress = true;
+            }
+        } else {
+            // iterate through connections and fill the egress queue with at most 1 packet from each connection
+            self.connections.retain(|remote_addr, connection| {
+                match connection.egress.poll_next_unpin(cx) {
+                    Poll::Ready(None) => {
+                        made_progress = true;
+                        false
+                    }
+                    Poll::Ready(Some(packet)) => {
+                        made_progress = true;
+                        self.pending_tx.push((*remote_addr, packet));
+                        true
+                    }
+                    Poll::Pending => true,
+                }
+            });
+        }
+
+        if made_progress {
+            Poll::Ready(ControlFlow::Continue(()))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn poll_ingress(&mut self, cx: &mut Context<'_>) -> Poll<ControlFlow<()>> {
+        if let Poll::Ready(Ok(())) = self.socket.poll_recv_ready(cx) {
+            // handle ingress
+            let mut buf = BytesMut::new();
+            if let Ok((_bytes_read, source_addr)) = self.socket.try_recv_buf_from(&mut buf) {
+                match self.connections.entry(source_addr) {
+                    Entry::Occupied(mut connection) => {
+                        match connection.get_mut().ingress.try_send(buf.freeze()) {
+                            Ok(_) => {}
+                            Err(local_sync_error::TrySendError::Full(_buf)) => {
+                                log::warn!("Dropping received packet from {source_addr}");
+                            }
+                            Err(local_sync_error::TrySendError::Closed(_buf)) => {
+                                connection.remove();
+                            }
+                        }
+                    }
+                    Entry::Vacant(_) => {
+                        match self.unknown_source_rx.try_send((source_addr, buf.freeze())) {
+                            Ok(_) => {}
+                            Err(local_sync_error::TrySendError::Full(_)) => {
+                                log::warn!(
+                                    "Dropping received packet from unknown source {source_addr}"
+                                );
+                            }
+                            Err(local_sync_error::TrySendError::Closed(_)) => {
+                                return Poll::Ready(ControlFlow::Break(()));
+                            }
+                        }
+                    }
+                }
+                return Poll::Ready(ControlFlow::Continue(()));
+            }
+        }
+        Poll::Pending
     }
 }
