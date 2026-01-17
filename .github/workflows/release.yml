@@ -1,0 +1,47 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+    - 'v[0-9]+.[0-9]+.[0-9]+'
+
+# https://github.com/PRO-2684/castwright/blob/main/.github/workflows/release.yml
+
+jobs:
+  create-release:
+    name: Create release
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+        - os: ubuntu-latest
+          bin: mtorrent-cli
+        - os: windows-latest
+          bin: mtorrent-cli.exe
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build executable
+      run: cargo build --release --bin mtorrent-cli
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: target/release/${{ matrix.platform.bin }}
+
+  publish-release:
+    name: Publish release to crates.io
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+    - uses: actions/checkout@v5
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Log in to crates.io
+      run: |-
+        echo "${{ secrets.CARGO_TOKEN }}" | cargo login
+    - name: Publish to crates.io
+      run: cargo publish --workspace
