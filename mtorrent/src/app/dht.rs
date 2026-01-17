@@ -15,7 +15,7 @@ pub struct Config {
     /// Maximum number of outbound queries in flight.
     /// Uses an internal default if `None`.
     pub max_concurrent_queries: Option<usize>,
-    /// Directory for storing persitent data between boots.
+    /// Directory for storing data persistent across boots.
     pub config_dir: PathBuf,
     /// Create and maintain port mappings via UPnP.
     pub use_upnp: bool,

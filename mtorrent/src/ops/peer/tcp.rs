@@ -33,6 +33,7 @@ fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     socket.set_reuseport(true)?;
     // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0 timeout
     // See https://stackoverflow.com/a/71975993
+    #[expect(deprecated)]
     socket.set_linger(Some(sec!(0)))?;
     socket.set_nodelay(true)?;
     socket.bind(local_addr)?;
