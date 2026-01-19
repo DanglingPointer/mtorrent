@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     config_dir: Option<PathBuf>,
 
+    /// Port for peer connections (both TCP and uTP)
+    #[arg(short, long)]
+    port: Option<u16>,
+
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
@@ -52,10 +56,11 @@ fn main() -> io::Result<()> {
         .with_module_level("mtorrent_core", log::LevelFilter::Info)
         .with_module_level("mtorrent_utils", log::LevelFilter::Info)
         .with_module_level("mtorrent_dht", log::LevelFilter::Info)
-        // .with_module_level("mtorrent::ops::connections", log::LevelFilter::Debug)
+        .with_module_level("mtorrent_core::utp", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::ops::connections", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::metadata", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)
-        // .with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace)
+        // .with_module_level("mtorrent_core::pwp", log::LevelFilter::Trace)
         .init()
         .map_err(io::Error::other)?;
 
@@ -132,7 +137,7 @@ fn main() -> io::Result<()> {
                 config_dir: local_data_dir,
                 output_dir,
                 use_upnp: !cli.no_upnp,
-                pwp_port: None,
+                pwp_port: cli.port,
             },
             app::main::Context {
                 dht_handle: dht_cmds,

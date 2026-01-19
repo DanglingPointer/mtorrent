@@ -303,8 +303,8 @@ mod tests {
             timestamp_us: 0x56789abc,
             timestamp_diff_us: 0xdef01234,
             wnd_size: 0x456789ab,
-            seq_nr: 0x9abc,
-            ack_nr: 0xdef0,
+            seq_nr: 0x9abc.into(),
+            ack_nr: 0xdef0.into(),
         };
 
         let mut buf = Vec::with_capacity(Header::MIN_SIZE);
@@ -332,8 +332,8 @@ mod tests {
         assert_eq!(header.timestamp_us, 0x56789abc);
         assert_eq!(header.timestamp_diff_us, 0xdef01234);
         assert_eq!(header.wnd_size, 0x456789ab);
-        assert_eq!(header.seq_nr, 0x9abc);
-        assert_eq!(header.ack_nr, 0xdef0);
+        assert_eq!(header.seq_nr, 0x9abc.into());
+        assert_eq!(header.ack_nr, 0xdef0.into());
     }
 
     #[test]
@@ -345,8 +345,8 @@ mod tests {
             timestamp_us: 0xabcdef01,
             timestamp_diff_us: 0x23456789,
             wnd_size: 0x89abcdef,
-            seq_nr: 0xfedc,
-            ack_nr: 0xba98,
+            seq_nr: 0xfedc.into(),
+            ack_nr: 0xba98.into(),
         };
 
         let mut buf = Vec::with_capacity(Header::MIN_SIZE);
@@ -368,8 +368,8 @@ mod tests {
             timestamp_us: 0,
             timestamp_diff_us: 0,
             wnd_size: 0,
-            seq_nr: 0,
-            ack_nr: 0,
+            seq_nr: 0.into(),
+            ack_nr: 0.into(),
         };
 
         let mut iter = ExtensionIter::new(&header, data_with_ext.as_slice());
@@ -395,8 +395,8 @@ mod tests {
             timestamp_us: 0,
             timestamp_diff_us: 0,
             wnd_size: 0,
-            seq_nr: 0,
-            ack_nr: 0,
+            seq_nr: 0.into(),
+            ack_nr: 0.into(),
         };
 
         skip_extensions(&mut data_with_ext, &header).unwrap();
@@ -406,28 +406,5 @@ mod tests {
     #[test]
     fn test_current_timestamp() {
         assert_ne!(current_timestamp_us(), 0);
-    }
-
-    #[test]
-    fn test_sequence_number_comparison() {
-        let seq1: u16 = u16::MAX;
-        let seq2: u16 = 0;
-        assert!(seq1.is_older_or_equal(seq2));
-        assert!(!seq2.is_older_or_equal(seq1));
-
-        let seq1: u16 = u16::MAX - 1;
-        let seq2: u16 = u16::MAX;
-        assert!(seq1.is_older_or_equal(seq2));
-        assert!(!seq2.is_older_or_equal(seq1));
-
-        let seq1 = 0u16;
-        let seq2 = u16::MAX / 2;
-        assert!(seq1.is_older_or_equal(seq2));
-        assert!(!seq2.is_older_or_equal(seq1));
-
-        let seq1 = u16::MAX / 2 + 1;
-        let seq2 = 0u16;
-        assert!(!seq1.is_older_or_equal(seq2)); // FIXME:
-        assert!(!seq2.is_older_or_equal(seq1));
     }
 }

@@ -149,3 +149,82 @@ impl Retransmitter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::seq::seq;
+    use super::*;
+    use futures_util::FutureExt;
+    use tokio::time;
+
+    #[tokio::test(start_paused = true)]
+    async fn test_regular_retransmit() {
+        let mut retransmitter = Retransmitter::new();
+
+        let send_time = Instant::now();
+        retransmitter.add_new_packet(Bytes::from_static(b"packet1"), seq(1));
+        retransmitter.add_new_packet(Bytes::from_static(b"packet2"), seq(2));
+        assert_eq!(retransmitter.send_queue.len(), 2);
+
+        for i in 1..=2 {
+            let retransmit = retransmitter.next_retransmit().await;
+            assert_eq!(&retransmit[..], b"packet1");
+            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
+
+            let retransmit = retransmitter.next_retransmit().await;
+            assert_eq!(&retransmit[..], b"packet2");
+            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
+        }
+
+        // Acknowledge packet 1
+        retransmitter.process_ack(seq(1));
+        assert_eq!(retransmitter.send_queue.len(), 1);
+
+        for i in 3..=4 {
+            let retransmit = retransmitter.next_retransmit().await;
+            assert_eq!(&retransmit[..], b"packet2");
+            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
+        }
+
+        retransmitter.process_ack(seq(2));
+        assert_eq!(retransmitter.send_queue.len(), 0);
+        time::timeout(Duration::MAX / 2, retransmitter.next_retransmit())
+            .await
+            .unwrap_err();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_fast_retransmit() {
+        let mut retransmitter = Retransmitter::new();
+
+        retransmitter.add_new_packet(Bytes::from_static(b"packet0"), seq(10));
+        retransmitter.process_ack(seq(10));
+        time::timeout(Duration::MAX / 2, retransmitter.next_retransmit())
+            .await
+            .unwrap_err();
+
+        let send_time = Instant::now();
+        retransmitter.add_new_packet(Bytes::from_static(b"packet1"), seq(11));
+        retransmitter.add_new_packet(Bytes::from_static(b"packet2"), seq(12));
+        assert_eq!(retransmitter.send_queue.len(), 2);
+
+        time::sleep(millisec!(10)).await;
+        retransmitter.process_ack(seq(10));
+        time::sleep(millisec!(10)).await;
+        retransmitter.process_ack(seq(10));
+
+        let retransmit = retransmitter.next_retransmit().now_or_never().unwrap();
+        assert_eq!(&retransmit[..], b"packet1");
+        assert!(retransmitter.next_retransmit().now_or_never().is_none());
+
+        for i in 1..=2 {
+            let retransmit = retransmitter.next_retransmit().await;
+            assert_eq!(&retransmit[..], b"packet2");
+            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i);
+
+            let retransmit = retransmitter.next_retransmit().await;
+            assert_eq!(&retransmit[..], b"packet1");
+            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i + millisec!(20));
+        }
+    }
+}

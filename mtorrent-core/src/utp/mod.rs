@@ -4,6 +4,9 @@ mod protocol;
 mod retransmitter;
 mod seq;
 
+#[cfg(test)]
+mod tests;
+
 use bytes::Bytes;
 use connection::Connection;
 use futures_util::{FutureExt, Stream, StreamExt};

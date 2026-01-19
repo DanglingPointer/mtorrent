@@ -106,7 +106,10 @@ mod tests {
 
     #[test]
     fn test_read_metainfo_and_spawn_single_file() {
-        let info = input::Metainfo::from_file("../mtorrent-cli/tests/assets/pcap.torrent").unwrap();
+        let info = input::Metainfo::from_file(
+            "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent",
+        )
+        .unwrap();
 
         let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
         let filedir = Path::new(parent_dir).join("files");

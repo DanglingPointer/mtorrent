@@ -385,7 +385,9 @@ mod tests {
 
     #[test]
     fn test_read_torrent_file_without_announce_list() {
-        let info = Metainfo::from_file("../mtorrent-cli/tests/assets/pcap.torrent").unwrap();
+        let info =
+            Metainfo::from_file("../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent")
+                .unwrap();
 
         let announce = info.announce().unwrap();
         assert_eq!("http://localhost:8000/announce", announce, "announce: {announce}");
