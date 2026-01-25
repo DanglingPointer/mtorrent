@@ -2,24 +2,67 @@ use std::collections::vec_deque::{IntoIter, Iter};
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
-/// Bounded fifo queue that ensures uniqueness of its elements.
-#[derive(Debug)]
-pub struct BoundedFifoSet<T> {
-    ringbuf: VecDeque<T>,
-    set: HashSet<T>, // for performance
-    max_capacity: usize,
+pub trait Policy: Clone {
+    fn capacity(&self) -> usize;
 }
 
-impl<T> BoundedFifoSet<T> {
+#[derive(Clone, Copy)]
+pub struct Bounded(usize);
+impl Policy for Bounded {
+    fn capacity(&self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Unbounded;
+impl Policy for Unbounded {
+    fn capacity(&self) -> usize {
+        usize::MAX
+    }
+}
+
+#[derive(Debug)]
+pub struct FifoSet<T, P: Policy> {
+    ringbuf: VecDeque<T>,
+    set: HashSet<T>, // for performance
+    policy: P,
+}
+
+pub type UnboundedFifoSet<T> = FifoSet<T, Unbounded>;
+pub type BoundedFifoSet<T> = FifoSet<T, Bounded>;
+
+impl<T> FifoSet<T, Bounded> {
     /// New [`BoundedFifoSet`] that can hold up to `capacity` elements.
     pub fn new(capacity: usize) -> Self {
+        assert_ne!(capacity, 0, "zero capacity is not supported");
         Self {
             ringbuf: VecDeque::with_capacity(capacity),
             set: HashSet::with_capacity(capacity + 1),
-            max_capacity: capacity,
+            policy: Bounded(capacity),
+        }
+    }
+}
+
+impl<T> FifoSet<T, Unbounded> {
+    pub fn new() -> Self {
+        Self {
+            ringbuf: VecDeque::new(),
+            set: HashSet::new(),
+            policy: Unbounded,
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            ringbuf: VecDeque::with_capacity(capacity),
+            set: HashSet::with_capacity(capacity),
+            policy: Unbounded,
+        }
+    }
+}
+
+impl<T, P: Policy> FifoSet<T, P> {
     pub fn iter(&self) -> Iter<'_, T> {
         self.ringbuf.iter()
     }
@@ -35,12 +78,24 @@ impl<T> BoundedFifoSet<T> {
     }
 }
 
-impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
+impl<T: Eq + Hash + Clone, P: Policy> FifoSet<T, P> {
+    /// Remove oldest element.
+    pub fn remove_first(&mut self) -> Option<T> {
+        self.ringbuf.pop_front().inspect(|item| {
+            self.set.remove(item);
+        })
+    }
+}
+
+impl<T: Eq + Hash + Clone> FifoSet<T, Bounded> {
     /// Add a new element unless it already exists.
     /// Removes the oldest element if the maximum capacity has been reached.
+    ///
+    /// # Returns
+    /// `true` if the element has been inserted, `false` if it was already present.
     pub fn insert_or_replace(&mut self, item: T) -> bool {
         if self.set.insert(item.clone()) {
-            if self.ringbuf.len() == self.max_capacity {
+            if self.ringbuf.len() == self.policy.capacity() {
                 let popped = self.ringbuf.pop_front().unwrap_or_else(|| unreachable!());
                 self.set.remove(&popped);
             }
@@ -52,17 +107,38 @@ impl<T: Eq + Hash + Clone> BoundedFifoSet<T> {
     }
 }
 
-impl<T: Clone> Clone for BoundedFifoSet<T> {
-    fn clone(&self) -> Self {
-        Self {
-            ringbuf: self.ringbuf.clone(),
-            set: self.set.clone(),
-            max_capacity: self.max_capacity,
+impl<T: Eq + Hash + Clone> FifoSet<T, Unbounded> {
+    /// Add a new element ignoring capacity. Does nothing if the element already exists.
+    ///
+    /// # Returns
+    /// `true` if the element has been inserted, `false` if it was already present.
+    pub fn insert(&mut self, item: T) -> bool {
+        if self.set.insert(item.clone()) {
+            self.ringbuf.push_back(item);
+            true
+        } else {
+            false
         }
     }
 }
 
-impl<T> IntoIterator for BoundedFifoSet<T> {
+impl<T> Default for FifoSet<T, Unbounded> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Clone, P: Policy> Clone for FifoSet<T, P> {
+    fn clone(&self) -> Self {
+        Self {
+            ringbuf: self.ringbuf.clone(),
+            set: self.set.clone(),
+            policy: self.policy.clone(),
+        }
+    }
+}
+
+impl<T, P: Policy> IntoIterator for FifoSet<T, P> {
     type Item = T;
 
     type IntoIter = IntoIter<T>;
@@ -72,7 +148,7 @@ impl<T> IntoIterator for BoundedFifoSet<T> {
     }
 }
 
-impl<'a, T> IntoIterator for &'a BoundedFifoSet<T> {
+impl<'a, T, P: Policy> IntoIterator for &'a FifoSet<T, P> {
     type Item = &'a T;
 
     type IntoIter = Iter<'a, T>;

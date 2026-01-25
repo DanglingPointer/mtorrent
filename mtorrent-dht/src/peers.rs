@@ -1,6 +1,6 @@
 use super::u160::U160;
 use local_async_utils::prelude::*;
-use mtorrent_utils::bounded_fifo_set::BoundedFifoSet;
+use mtorrent_utils::fifo_set::BoundedFifoSet;
 use sha1_smol::Sha1;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
