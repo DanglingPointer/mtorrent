@@ -1169,20 +1169,20 @@ mod tests {
                 });
 
                 time::sleep(sec!(30)).await;
-                assert!(reader.try_next().is_err());
+                assert!(reader.try_recv().is_err());
 
                 task::yield_now().await;
-                while let Ok(Some(byte)) = reader.try_next() {
+                while let Ok(byte) = reader.try_recv() {
                     buf.push(byte);
                 }
                 assert_eq!(4, buf.len());
                 assert_eq!(&[0u8; 4], &buf[..4]);
 
                 time::sleep(sec!(30)).await;
-                assert!(reader.try_next().is_err());
+                assert!(reader.try_recv().is_err());
 
                 task::yield_now().await;
-                while let Ok(Some(byte)) = reader.try_next() {
+                while let Ok(byte) = reader.try_recv() {
                     buf.push(byte);
                 }
                 assert_eq!(8, buf.len());
@@ -1209,13 +1209,10 @@ mod tests {
         });
 
         time::sleep(sec!(120)).await;
-        assert!(result_receiver.try_next().is_err());
+        assert!(result_receiver.try_recv().is_err());
 
         task::yield_now().await;
-        let error = result_receiver
-            .try_next()
-            .expect("Runner not finished")
-            .expect("channel closed");
+        let error = result_receiver.try_recv().expect("Runner not finished");
         assert_eq!(io::ErrorKind::TimedOut, error.unwrap_err().kind());
     }
 
@@ -1245,11 +1242,10 @@ mod tests {
                 });
 
                 time::sleep(TIMEOUT).await;
-                assert!(result_receiver.try_next().is_err());
+                assert!(result_receiver.try_recv().is_err());
 
                 task::yield_now().await;
-                let result =
-                    result_receiver.try_next().expect("send not finished").expect("channel closed");
+                let result = result_receiver.try_recv().expect("send not finished");
                 assert!(matches!(result, Err(ChannelError::Timeout)));
             })
             .await;
@@ -1278,13 +1274,10 @@ mod tests {
                 });
 
                 time::sleep(TIMEOUT).await;
-                assert!(result_receiver.try_next().is_err());
+                assert!(result_receiver.try_recv().is_err());
 
                 task::yield_now().await;
-                let result = result_receiver
-                    .try_next()
-                    .expect("receive not finished")
-                    .expect("channel closed");
+                let result = result_receiver.try_recv().expect("receive not finished");
                 assert!(matches!(result, Err(ChannelError::Timeout)));
             })
             .await;
