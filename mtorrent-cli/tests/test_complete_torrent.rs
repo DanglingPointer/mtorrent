@@ -948,14 +948,12 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     .await;
 
     let mtorrent = task::spawn(async move {
-        time::sleep(sec!(2)).await; // wait for listening peers to launch
         process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
             .arg(MULTIFILE_METAINFO_FILE_WITH_TRACKER)
             .arg("-o")
             .arg(output_dir)
             .arg("--config-dir")
             .arg(output_dir)
-            .arg("--no-upnp")
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
