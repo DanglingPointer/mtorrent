@@ -5,6 +5,7 @@ use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
 use mtorrent_utils::info_stopwatch;
+use rand::RngExt;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -15,6 +16,7 @@ use tokio::{select, task, time};
 use tokio_util::sync::CancellationToken;
 
 const PING_INTERVAL: Duration = min!(1);
+const PING_JITTER: Duration = sec!(5);
 const GET_PEERS_INTERVAL: Duration = sec!(30);
 
 macro_rules! is_valid_addr {
@@ -113,7 +115,9 @@ pub async fn keep_alive_node(node: Node, ctx: Rc<Ctx>) -> Result<()> {
         }
 
         // sleep until next ping time (with some jitter to avoid bursts)
-        time::sleep(PING_INTERVAL + sec!(rand::random::<u64>() % 10)).await;
+        let min_sleep = PING_INTERVAL - PING_JITTER;
+        let max_sleep = PING_INTERVAL + PING_JITTER;
+        time::sleep(rand::rng().random_range(min_sleep..=max_sleep)).await;
     }
 }
 

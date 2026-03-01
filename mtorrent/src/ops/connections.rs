@@ -3,7 +3,7 @@ use local_async_utils::prelude::*;
 use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_core::utp;
 use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
-use rand::Rng;
+use rand::RngExt;
 use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;

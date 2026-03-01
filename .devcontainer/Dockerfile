@@ -1,4 +1,4 @@
-FROM rust:1.90.0
+FROM rust:1.94.0
 
 RUN rustup component add clippy rustfmt llvm-tools-preview
 

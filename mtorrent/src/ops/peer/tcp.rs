@@ -1,5 +1,4 @@
 use super::super::PeerReporter;
-use local_async_utils::prelude::*;
 use mtorrent_core::pwp;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
@@ -23,8 +22,7 @@ fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     socket.set_reuseport(true)?;
     // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0 timeout
     // See https://stackoverflow.com/a/71975993
-    #[expect(deprecated)]
-    socket.set_linger(Some(sec!(0)))?;
+    socket.set_zero_linger()?;
     socket.set_nodelay(true)?;
     socket.bind(local_addr)?;
     Ok(socket)
