@@ -1,5 +1,5 @@
 use core::fmt;
-use rand::Rng;
+use rand::RngExt;
 use std::ops::Deref;
 
 #[derive(Debug, Clone, Copy)]

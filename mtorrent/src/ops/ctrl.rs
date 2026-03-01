@@ -144,7 +144,7 @@ const MAX_JITTER: Duration = sec!(5);
 
 #[cfg(not(test))]
 fn with_jitter(duration: Duration) -> Duration {
-    use rand::Rng;
+    use rand::RngExt;
     let min = duration - MAX_JITTER;
     let max = duration + MAX_JITTER;
     rand::rng().random_range(min..=max)
