@@ -84,9 +84,9 @@ impl ConnectionSpawner {
     const PIPE_CAPACITY: usize = crate::pwp::MAX_BLOCK_SIZE;
     const INGRESS_QUEUE: usize = 64;
 
-    /// Create a new outbound connection.
-    /// # Returns
-    /// `None` if `IoDriver` has been shut down, otherwise a stream for the new connection.
+    /// Establish a new outbound connection to `remote_addr`. Returns after a successful uTP handshake.
+    /// # Error
+    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already exists.
     pub async fn outbound_connection(
         &self,
         remote_addr: SocketAddr,
@@ -124,9 +124,9 @@ impl ConnectionSpawner {
         Ok(left)
     }
 
-    /// Create a new inbound connection.
-    /// # Returns
-    /// `None` if `IoDriver` has been shut down, otherwise a stream for the new connection.
+    /// Establish a new inbound connection from `remote_addr`. Returns after a successful uTP handshake.
+    /// # Error
+    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already exists.
     pub async fn inbound_connection(
         &self,
         remote_addr: SocketAddr,
@@ -160,7 +160,7 @@ impl ConnectionSpawner {
         Ok(left)
     }
 
-    /// Close all connections by sending RST packets.
+    /// Close all connections by sending RESET packets.
     pub async fn reset_connections(&self) {
         let _ = self.cmds.send(udp::Command::ResetConnections).await;
     }

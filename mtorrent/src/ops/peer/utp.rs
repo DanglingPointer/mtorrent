@@ -114,38 +114,32 @@ async fn bridge_task(
     mut cmd_receiver: mpsc::Receiver<Command>,
     mut connect_reporter: utp::ConnectReporter,
 ) {
-    let mut reporter_option = None;
+    struct Bridge {
+        reporter: Option<PeerReporter>,
+        connection_spawner: utp::ConnectionSpawner,
+    }
 
-    macro_rules! report_inbound {
-        ($connect:expr) => {{
-            let Some((addr, data)) = $connect else {
-                break;
-            };
-            match reporter_option.as_ref() {
+    impl Bridge {
+        async fn report_inbound(&mut self, addr: SocketAddr, data: utp::InboundConnectData) {
+            match self.reporter.as_ref() {
                 Some(reporter) => {
                     if !reporter.report_accepted_utp(addr, data).await {
-                        reporter_option.take();
+                        self.reporter.take();
                     }
                 }
                 None => {
                     log::warn!("Ignored inbound uTP connect: no reporter");
                 }
             }
-        }};
-    }
-
-    macro_rules! process_command {
-        ($cmd:expr) => {{
-            let Some(cmd) = $cmd else {
-                break;
-            };
+        }
+        async fn process_command(&mut self, cmd: Command) {
             match cmd {
                 Command::Restart { reporter } => {
-                    reporter_option = Some(reporter);
-                    connection_spawner.reset_connections().await;
+                    self.reporter = Some(reporter);
+                    self.connection_spawner.reset_connections().await;
                 }
                 Command::OutboundConnect { args, resp } => {
-                    let spawner = connection_spawner.clone();
+                    let spawner = self.connection_spawner.clone();
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
                             let stream = spawner.outbound_connection(args.peer_addr).await?;
@@ -165,7 +159,7 @@ async fn bridge_task(
                     });
                 }
                 Command::InboundConnect { args, resp } => {
-                    let spawner = connection_spawner.clone();
+                    let spawner = self.connection_spawner.clone();
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
                             let stream =
@@ -185,14 +179,29 @@ async fn bridge_task(
                     });
                 }
             }
-        }};
+        }
     }
+
+    let mut bridge = Bridge {
+        reporter: None,
+        connection_spawner,
+    };
 
     loop {
         select! {
             biased;
-            cmd = cmd_receiver.recv() => process_command!(cmd),
-            connect = connect_reporter.next() => report_inbound!(connect),
+            cmd = cmd_receiver.recv() => {
+                let Some(cmd) = cmd else {
+                    break;
+                };
+                bridge.process_command(cmd).await;
+            }
+            connect = connect_reporter.next() => {
+                let Some((addr, data)) = connect else {
+                    break;
+                };
+                bridge.report_inbound(addr, data).await;
+            }
         }
     }
 }

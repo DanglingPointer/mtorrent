@@ -6,7 +6,7 @@
 # mtorrent-core
 
 Basic types for building asynchronous Tokio-based BitTorrent clients. Contains following:
-- full implementation of the peer wire protocol
+- full implementation of the peer wire protocol over TCP and uTP
 - HTTP and UDP tracker protocols
 - parsing of metainfo files and magnet links
 - managing download and upload of data

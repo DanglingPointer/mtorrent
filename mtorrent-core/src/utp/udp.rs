@@ -38,8 +38,9 @@ fn is_transient_error(e: &io::ErrorKind) -> bool {
     )
 }
 
-/// [`UdpDemux`] is responsible for sending and receiving UDP packets
-/// and dispatching them to the appropriate connections.
+/// [`UdpDemux`] keeps track of all active connections and their associated peer addresses,
+/// handles sending and receiving UDP packets, and dispatches them to the appropriate connections based on the source address.
+/// Packets from unknown sources are reported to the application via a separate channel.
 pub struct UdpDemux {
     commands: mpsc::Receiver<Command>,
     socket: UdpSocket,
@@ -221,6 +222,9 @@ impl UdpDemux {
                     }
                     Err(local_sync_error::TrySendError::Closed(_buf)) => {
                         connection.remove();
+                        log::warn!(
+                            "Dropping received packet from a recently closed connection to {source_addr}"
+                        );
                         // TODO: should we report this as unknown source?
                     }
                 }
