@@ -119,7 +119,7 @@ where
     }
 }
 
-const PROTO_STR: &[u8] = b"\x13BitTorrent protocol";
+pub(crate) const PROTO_STR: &[u8] = b"\x13BitTorrent protocol";
 
 async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
     mut source: S,

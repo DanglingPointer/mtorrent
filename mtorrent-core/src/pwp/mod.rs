@@ -15,3 +15,5 @@ pub use message::{
 pub use states::*;
 
 pub const MAX_BLOCK_SIZE: usize = 16 * 1024;
+
+pub(crate) use handshake::PROTO_STR as PROTOCOL_STRING;
