@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::{cmp, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
-/// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory `parent_dir`.
-/// If the files don't exist, new files with the specified size will be created.
+/// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory
+/// `parent_dir`. If the files don't exist, new files with the specified size will be created.
 pub fn new_async_storage(
     parent_dir: impl AsRef<Path>,
     length_path_it: impl Iterator<Item = (usize, PathBuf)>,
@@ -24,7 +24,8 @@ pub fn new_async_storage(
 pub struct StorageServer(GenericStorageServer<fs::File>);
 
 impl StorageServer {
-    /// Start serving commands received from [`StorageClient`]. Filesystem operations will be performed synchronously in the current thread.
+    /// Start serving commands received from [`StorageClient`]. Filesystem operations will be
+    /// performed synchronously in the current thread.
     pub async fn run(self) {
         self.0.run().await;
     }
@@ -37,8 +38,8 @@ pub struct StorageClient {
 }
 
 impl StorageClient {
-    /// Write bytes `data` at `global_offset` relative to the start of the first file managed by this storage.
-    /// Returns once the filesystem write operation is finished.
+    /// Write bytes `data` at `global_offset` relative to the start of the first file managed by
+    /// this storage. Returns once the filesystem write operation is finished.
     pub async fn write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
         let (result_sender, result_receiver) = oneshot::channel::<WriteResult>();
         self.channel.send(Command::WriteBlock {
@@ -49,8 +50,9 @@ impl StorageClient {
         result_receiver.await?
     }
 
-    /// Schedule write of `data` at `global_offset` relative to the start of the first file managed by this storage.
-    /// Returns immediately without waiting for the result of the filesystem operation.
+    /// Schedule write of `data` at `global_offset` relative to the start of the first file managed
+    /// by this storage. Returns immediately without waiting for the result of the filesystem
+    /// operation.
     pub fn start_write_block(&self, global_offset: usize, data: Vec<u8>) -> Result<(), Error> {
         self.channel.send(Command::WriteBlock {
             global_offset,
@@ -60,7 +62,8 @@ impl StorageClient {
         Ok(())
     }
 
-    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by this storage.
+    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by
+    /// this storage.
     pub async fn read_block(&self, global_offset: usize, length: usize) -> Result<Vec<u8>, Error> {
         let (result_sender, result_receiver) = oneshot::channel::<ReadResult>();
         self.channel.send(Command::ReadBlock {
@@ -71,8 +74,9 @@ impl StorageClient {
         result_receiver.await?
     }
 
-    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by this storage,
-    /// calculate their SHA-1 hash, and compare it to `expected_sha`. Return whether the two hashes are identical.
+    /// Read `length` bytes at `global_offset` relative to the start of the first file managed by
+    /// this storage, calculate their SHA-1 hash, and compare it to `expected_sha`. Return
+    /// whether the two hashes are identical.
     pub async fn verify_block(
         &self,
         global_offset: usize,

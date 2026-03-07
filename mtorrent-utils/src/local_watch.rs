@@ -1,5 +1,6 @@
 use local_async_utils::prelude::*;
-use std::{cell::Cell, rc::Rc};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct Sender<T> {

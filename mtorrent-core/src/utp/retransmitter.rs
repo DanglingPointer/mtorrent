@@ -1,12 +1,12 @@
 use super::seq::Seq;
 use bytes::Bytes;
 use local_async_utils::prelude::*;
+use std::collections::VecDeque;
 use std::future::poll_fn;
-use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use std::{cmp, collections::VecDeque};
+use std::{cmp, mem};
 use tokio::time::{Instant, Sleep, sleep_until};
 
 struct InFlight {

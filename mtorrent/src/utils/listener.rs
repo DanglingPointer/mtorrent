@@ -1,13 +1,18 @@
 use mtorrent_core::pwp::{PeerOrigin, PeerState};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt, net::SocketAddr, ops::ControlFlow, time::Duration};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::net::SocketAddr;
+use std::ops::ControlFlow;
+use std::time::Duration;
 
 /// Listener for monitoring progress of a single torrent download.
 pub trait StateListener {
     /// Interval of periodic state snapshots.
     const INTERVAL: Duration;
 
-    /// Callback invoked once every [`StateListener::INTERVAL`] sec. The download will stop if it returns [`ControlFlow::Break`].
+    /// Callback invoked once every [`StateListener::INTERVAL`] sec. The download will stop if it
+    /// returns [`ControlFlow::Break`].
     fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) -> ControlFlow<()>;
 }
 

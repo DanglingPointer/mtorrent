@@ -62,11 +62,13 @@ impl<const SIZE: usize> Bucket<SIZE> {
 const BUCKET_COUNT: usize = bits_of::<U160>();
 
 /// A fully pre-allocated Kademlia routing table as defined in <https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf>.
-/// Shouldn't be put on stack due to its size. The table enforces uniqueness of node IDs, but not of their addresses.
+/// Shouldn't be put on stack due to its size. The table enforces uniqueness of node IDs, but not of
+/// their addresses.
 ///
-/// A bucket at index `i` contains nodes whose distance to the `local_id` is `2^(159-i) <= d < 2^(160-i)`.
-/// E.g. the bucket at index `0` contains nodes furthest away from `local_id`.
-/// Note that buckets closest to `local_id` still allocate `BUCKET_SIZE` slots even though they can never become full.
+/// A bucket at index `i` contains nodes whose distance to the `local_id` is `2^(159-i) <= d <
+/// 2^(160-i)`. E.g. the bucket at index `0` contains nodes furthest away from `local_id`.
+/// Note that buckets closest to `local_id` still allocate `BUCKET_SIZE` slots even though they can
+/// never become full.
 pub struct RoutingTable<const BUCKET_SIZE: usize> {
     buckets: [Bucket<BUCKET_SIZE>; BUCKET_COUNT],
     local_id: U160,
@@ -138,7 +140,8 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     }
 
     #[expect(dead_code)]
-    /// Return all nodes currently in the table sorted from the lowest to the highest distance to `target`.
+    /// Return all nodes currently in the table sorted from the lowest to the highest distance to
+    /// `target`.
     pub fn all_nodes_by_dist_asc(&self, target: &U160) -> impl Iterator<Item = &Node> {
         let mut nodes_by_dist_asc = BTreeMap::<_, &Node>::new();
         for node in self.buckets.iter().flat_map(Bucket::iter) {
@@ -151,7 +154,8 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
     /// Return N closest nodes to `target` where `0 <= N < max_count+2*BUCKET_SIZE`.
     ///
     /// Check `target` bucket first, then go through the adjacent buckets.
-    /// This means the result is semi-sorted: closest buckets go first, but the nodes within each bucket are not sorted.
+    /// This means the result is semi-sorted: closest buckets go first, but the nodes within each
+    /// bucket are not sorted.
     pub fn get_closest_nodes(
         &self,
         target: &U160,
@@ -217,7 +221,8 @@ impl<const BUCKET_SIZE: usize> Drop for RoutingTable<BUCKET_SIZE> {
 mod tests {
     use super::*;
     use bitvec::prelude::*;
-    use std::{collections::HashSet, net::Ipv4Addr};
+    use std::collections::HashSet;
+    use std::net::Ipv4Addr;
 
     type RoutingTable = super::RoutingTable<16>;
 

@@ -1,18 +1,13 @@
 use super::super::PeerReporter;
 use futures_util::StreamExt;
-use mtorrent_core::pwp;
-use mtorrent_core::utp;
+use mtorrent_core::{pwp, utp};
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
-use tokio::runtime;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::task;
-use tokio::time;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
-use tokio::{join, select};
+use tokio::{join, runtime, select, task, time};
 
 pub fn launch_utp(pwp_runtime: &runtime::Handle, local_addr: SocketAddr) -> UtpHandle {
     let (cmd_sender, cmd_receiver) = mpsc::channel(1);

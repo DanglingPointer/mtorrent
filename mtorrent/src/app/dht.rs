@@ -1,6 +1,5 @@
 use mtorrent_dht as dht;
-use mtorrent_utils::info_stopwatch;
-use mtorrent_utils::{ip, upnp, worker};
+use mtorrent_utils::{info_stopwatch, ip, upnp, worker};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;

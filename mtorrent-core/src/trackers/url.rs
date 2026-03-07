@@ -1,5 +1,6 @@
 use derive_more::{Debug, Deref};
-use serde::{Deserialize, Serialize, Serializer, de::IntoDeserializer};
+use serde::de::IntoDeserializer;
+use serde::{Deserialize, Serialize, Serializer};
 use std::str::FromStr;
 
 /// Parsed tracker address.

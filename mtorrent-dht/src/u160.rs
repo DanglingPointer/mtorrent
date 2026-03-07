@@ -3,8 +3,7 @@ use bitvec::prelude::*;
 use derive_more::{Debug, Deref};
 use mtorrent_utils::benc;
 use std::ops::BitXor;
-use std::str;
-use std::{fmt, iter};
+use std::{fmt, iter, str};
 
 /// 160-bit unsigned integer that supports bitwise XOR and comparisons.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Deref)]

@@ -1,13 +1,9 @@
 use super::testutils::*;
-use crate::ops::PeerConnector;
-use crate::ops::PeerReporter;
-use crate::ops::UtpHandle;
-use crate::ops::ctx;
+use crate::ops::{PeerConnector, PeerReporter, UtpHandle, ctx};
 use crate::utils::startup;
 use local_async_utils::prelude::*;
-use mtorrent_core::msgs;
-use mtorrent_core::pwp;
 use mtorrent_core::pwp::{BlockInfo, MAX_BLOCK_SIZE};
+use mtorrent_core::{msgs, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};

@@ -1,7 +1,8 @@
 use super::msgs;
 use local_async_utils::prelude::*;
 use mtorrent_utils::benc;
-use std::{borrow::Cow, io};
+use std::borrow::Cow;
+use std::io;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 

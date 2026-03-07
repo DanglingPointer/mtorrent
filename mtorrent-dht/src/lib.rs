@@ -1,4 +1,5 @@
-//! Complete implementation of Kademlia-based Distributed Hash Table (DHT) used in the BitTorrent protocol.
+//! Complete implementation of Kademlia-based Distributed Hash Table (DHT) used in the BitTorrent
+//! protocol.
 //!
 //! Example usage:
 //! ```no_run
@@ -26,7 +27,6 @@
 //! # });
 //!
 //! // now send commands to the `cmd_sender` from a different task or runtime
-//!
 //! ```
 
 mod cmds;

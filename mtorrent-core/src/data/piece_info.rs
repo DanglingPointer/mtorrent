@@ -9,7 +9,8 @@ pub struct PieceInfo {
 }
 
 impl PieceInfo {
-    /// Create new [`PieceInfo`] from an iterator over 20-bytes slices representing SHA-1 hashes of the pieces of a torrent.
+    /// Create new [`PieceInfo`] from an iterator over 20-bytes slices representing SHA-1 hashes of
+    /// the pieces of a torrent.
     pub fn new<'a, I: Iterator<Item = &'a [u8]>>(
         piece_it: I,
         piece_length: usize,
@@ -27,8 +28,9 @@ impl PieceInfo {
         }
     }
 
-    /// Get global offset relative to the start of the entire torrent (a single entity possibly comprised of multiple files).
-    /// Returns [`Error::InvalidLocation`] if the resulting index of the start or the end of the data is out of bounds.
+    /// Get global offset relative to the start of the entire torrent (a single entity possibly
+    /// comprised of multiple files). Returns [`Error::InvalidLocation`] if the resulting index
+    /// of the start or the end of the data is out of bounds.
     pub fn global_offset(
         &self,
         piece_index: usize,

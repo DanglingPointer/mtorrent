@@ -4,7 +4,8 @@ use mtorrent_core::pwp::PeerOrigin;
 use mtorrent_dht as dht;
 use mtorrent_utils::info_stopwatch;
 use std::time::Duration;
-use tokio::{select, sync::mpsc, time};
+use tokio::sync::mpsc;
+use tokio::{select, time};
 
 /// Start dht search of `info_hash` and relay results into `peer_sink`.
 /// Restart search every minute, exit if the search terminates by itself.

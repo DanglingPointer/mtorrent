@@ -6,8 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::Duration;
 use std::{cmp, io};
-use tokio::select;
-use tokio::time;
+use tokio::{select, time};
 
 type CtxHandle = ctx::Handle<ctx::MainCtx>;
 

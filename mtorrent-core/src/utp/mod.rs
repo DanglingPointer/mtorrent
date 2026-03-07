@@ -45,7 +45,8 @@ pub fn init(socket: UdpSocket) -> (ConnectionSpawner, ConnectReporter, UdpDemux)
 #[derive(Debug, Clone)]
 pub struct InboundConnectData(Header);
 
-/// Stream of inbound connection attempts (i.e. received SYN packets that don't belong to an existing connection).
+/// Stream of inbound connection attempts (i.e. received SYN packets that don't belong to an
+/// existing connection).
 pub struct ConnectReporter(local_bounded::Receiver<(SocketAddr, Bytes)>);
 
 impl Stream for ConnectReporter {
@@ -84,9 +85,10 @@ impl ConnectionSpawner {
     const PIPE_CAPACITY: usize = crate::pwp::MAX_BLOCK_SIZE;
     const INGRESS_QUEUE: usize = 64;
 
-    /// Establish a new outbound connection to `remote_addr`. Returns after a successful uTP handshake.
-    /// # Error
-    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already exists.
+    /// Establish a new outbound connection to `remote_addr`. Returns after a successful uTP
+    /// handshake. # Error
+    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already
+    /// exists.
     pub async fn outbound_connection(
         &self,
         remote_addr: SocketAddr,
@@ -124,9 +126,10 @@ impl ConnectionSpawner {
         Ok(left)
     }
 
-    /// Establish a new inbound connection from `remote_addr`. Returns after a successful uTP handshake.
-    /// # Error
-    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already exists.
+    /// Establish a new inbound connection from `remote_addr`. Returns after a successful uTP
+    /// handshake. # Error
+    /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already
+    /// exists.
     pub async fn inbound_connection(
         &self,
         remote_addr: SocketAddr,

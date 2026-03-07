@@ -8,8 +8,9 @@ mod search;
 
 pub(crate) use announces::{make_periodic_announces, make_preliminary_announces};
 pub(crate) use connections::*;
-pub(crate) use ctx::{Handle, MainCtx, PreliminaryCtx};
-pub(crate) use ctx::{periodic_metadata_check, periodic_state_dump};
+pub(crate) use ctx::{
+    Handle, MainCtx, PreliminaryCtx, periodic_metadata_check, periodic_state_dump,
+};
 pub(crate) use peer::{
     MainConnectionData, PreliminaryConnectionData, UtpHandle, launch_utp, run_pwp_listener,
 };

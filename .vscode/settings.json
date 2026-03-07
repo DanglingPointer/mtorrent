@@ -24,6 +24,9 @@
     "rust-analyzer.runnables.extraTestBinaryArgs": [
         "--nocapture"
     ],
+    "rust-analyzer.rustfmt.extraArgs": [
+        "+nightly"
+    ],
     "gitlens.codeLens.enabled": false,
     "editor.semanticTokenColorCustomizations": {
         "rules": {

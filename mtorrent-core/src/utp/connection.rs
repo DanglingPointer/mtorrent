@@ -1,7 +1,8 @@
 use super::protocol::{ConnectionState, Header, TypeVer, ValidationError, skip_extensions};
 use super::retransmitter::Retransmitter;
 use super::seq::Seq;
-use bytes::{BufMut, Bytes, BytesMut, buf::Limit};
+use bytes::buf::Limit;
+use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{FutureExt, StreamExt};
 use local_async_utils::prelude::*;
 use log::log_enabled;
@@ -237,7 +238,8 @@ impl Connection {
         mut egress: local_bounded::Sender<Bytes>,
         hasher_factory: &impl BuildHasher,
     ) -> io::Result<Self> {
-        // create random connection id which is constant for a given addr, so that we don't drop late packets after reconnect
+        // create random connection id which is constant for a given addr, so that we don't drop
+        // late packets after reconnect
         let conn_id = hasher_factory.hash_one(peer_addr) as u16;
         let mut state = ConnectionState::new_outbound(conn_id);
 

@@ -6,7 +6,8 @@ use tokio::task;
 /// Type alias for the poll function signature used in [`loop_select`].
 pub type LoopSelectPollFn<D, O> = fn(&mut D, &mut Context<'_>) -> Poll<ControlFlow<O>>;
 
-/// Future that runs multiple poll functions in a loop until one of them returns [`ControlFlow::Break`].
+/// Future that runs multiple poll functions in a loop until one of them returns
+/// [`ControlFlow::Break`].
 pub struct LoopSelectUnpin<'c, D: Unpin, O, const N: usize> {
     data: &'c mut D,
     poll_fns: [LoopSelectPollFn<D, O>; N],

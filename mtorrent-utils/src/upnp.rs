@@ -1,6 +1,7 @@
 use igd_next::{SearchOptions, aio};
 use local_async_utils::prelude::*;
-use std::{mem, net::SocketAddr};
+use std::mem;
+use std::net::SocketAddr;
 
 type AsyncGateway = aio::Gateway<aio::tokio::Tokio>;
 type BlockingGateway = igd_next::Gateway;

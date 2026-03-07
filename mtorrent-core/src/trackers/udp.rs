@@ -427,8 +427,9 @@ impl TryFrom<&[u8]> for ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::net::{Ipv6Addr, SocketAddrV4};
-    use std::{cell::Cell, rc::Rc};
+    use std::rc::Rc;
     use tokio::join;
 
     #[test]

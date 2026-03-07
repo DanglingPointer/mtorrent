@@ -1,6 +1,7 @@
 FROM rust:1.94.0
 
-RUN rustup component add clippy rustfmt llvm-tools-preview
+RUN rustup component add clippy llvm-tools-preview
+RUN rustup component add --toolchain nightly rustfmt
 
 # install nextest
 RUN curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin

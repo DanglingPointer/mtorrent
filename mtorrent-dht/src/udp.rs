@@ -1,7 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
-use mtorrent_utils::benc;
-use mtorrent_utils::debug_stopwatch;
+use mtorrent_utils::{benc, debug_stopwatch};
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -166,11 +165,13 @@ impl<'s> Future for Egress<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{msgs::*, u160::U160};
+    use crate::msgs::*;
+    use crate::u160::U160;
     use local_async_utils::prelude::*;
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::{io, iter};
-    use tokio::{task, time::timeout};
+    use tokio::task;
+    use tokio::time::timeout;
 
     async fn create_ipv4_socket(port: u16) -> io::Result<UdpSocket> {
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await

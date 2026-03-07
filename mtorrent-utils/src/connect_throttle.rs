@@ -5,7 +5,8 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 /// Connection slot for a given remote address. No other connections to the same remote address
-/// will be allowed until [`ConnectPermit`] goes out of scope. Each permit takes up one capacity slot.
+/// will be allowed until [`ConnectPermit`] goes out of scope. Each permit takes up one capacity
+/// slot.
 pub struct ConnectPermit {
     addr: SocketAddr,
     connected_peers: Rc<sealed::Set<SocketAddr>>,
@@ -39,8 +40,8 @@ pub struct ConnectThrottle {
 }
 
 impl ConnectThrottle {
-    /// Create new throttle that allows up to `max_connections` concurrent permits, and keeps track of
-    /// `remembered_peers` last addresses that have been issued a permit.
+    /// Create new throttle that allows up to `max_connections` concurrent permits, and keeps track
+    /// of `remembered_peers` last addresses that have been issued a permit.
     pub fn new(max_connections: usize, remembered_peers: usize) -> Self {
         Self {
             connected_peers: Rc::new(sealed::Set::with_capacity(max_connections)),
@@ -49,9 +50,10 @@ impl ConnectThrottle {
         }
     }
 
-    /// Wait for a slot for an outbound connection or return immediately if the maximum capacity hasn't
-    /// been reached yet. Returns [`None`] if already connected to `remote_addr`, or was connected until
-    /// recently (with the exception of reconnects), otherwise returns a permit for the given remote address.
+    /// Wait for a slot for an outbound connection or return immediately if the maximum capacity
+    /// hasn't been reached yet. Returns [`None`] if already connected to `remote_addr`, or was
+    /// connected until recently (with the exception of reconnects), otherwise returns a permit
+    /// for the given remote address.
     pub async fn permit_for_outbound(
         &mut self,
         remote_addr: SocketAddr,
@@ -98,7 +100,8 @@ impl ConnectThrottle {
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use tokio_test::{assert_pending, assert_ready, task::spawn};
+    use tokio_test::task::spawn;
+    use tokio_test::{assert_pending, assert_ready};
 
     macro_rules! addr {
         ($addr:literal) => {

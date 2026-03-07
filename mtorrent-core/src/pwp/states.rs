@@ -222,7 +222,8 @@ impl PeerStates {
         self.peers.iter()
     }
 
-    /// Total number of bytes uploaded to all peers during the entire lifetime (including peers that have been erased).
+    /// Total number of bytes uploaded to all peers during the entire lifetime (including peers that
+    /// have been erased).
     pub fn uploaded_bytes(&self) -> usize {
         self.previously_uploaded_bytes
             + self.peers.values().map(|state| state.upload.bytes_sent).sum::<usize>()

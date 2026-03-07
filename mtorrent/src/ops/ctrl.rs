@@ -1,7 +1,6 @@
 use super::ctx;
 use local_async_utils::prelude::*;
-use mtorrent_core::input;
-use mtorrent_core::pwp;
+use mtorrent_core::{input, pwp};
 use mtorrent_utils::benc;
 use std::collections::BTreeMap;
 use std::io;
@@ -248,7 +247,8 @@ pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
         // needed for integration tests to make sure we report all downloaded pieces before exiting
         return false;
     }
-    // finish if we have downloaded everything, and all active leeches (if any) have received at least 50 blocks
+    // finish if we have downloaded everything, and all active leeches (if any) have received at
+    // least 50 blocks
     ctx.accountant.missing_bytes() == 0
         && !ctx.peer_states.iter().any(|(_, state)| {
             is_active_leech(state) && state.upload.bytes_sent < pwp::MAX_BLOCK_SIZE * 50
@@ -676,8 +676,8 @@ mod tests {
         // for _ in 0..ips.len() - MAX_LEECH_COUNT {
         //     let ip = it.next().unwrap();
         //     let action = active_upload_next_action(ip, &peer_states);
-        //     assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}", ip);
-        //     peer_states.update_upload(
+        //     assert_eq!(action, LeechUploadAction::DeactivateUploadAndLinger(sec!(30)), "{:?}",
+        // ip);     peer_states.update_upload(
         //         ip,
         //         &pwp::UploadState {
         //             am_choking: true,

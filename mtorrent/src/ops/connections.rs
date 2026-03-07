@@ -301,8 +301,8 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         }
     };
 
-    // Try both TCP and uTP connections, prioritizing TCP. If both fail, return the non-fatal error if any,
-    // otherwise the fatal error.
+    // Try both TCP and uTP connections, prioritizing TCP. If both fail, return the non-fatal error
+    // if any, otherwise the fatal error.
     let connect_result = select! {
         biased;
         Some(tcp_connection) = tcp_connect => {

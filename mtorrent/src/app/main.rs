@@ -33,9 +33,11 @@ pub struct Config {
 pub struct Context {
     /// Handle to the DHT system if present.
     pub dht_handle: Option<dht::CommandSink>,
-    /// Handle to a Tokio runtime that will be used for peer wire protocol I/O and communication with trackers.
+    /// Handle to a Tokio runtime that will be used for peer wire protocol I/O and communication
+    /// with trackers.
     pub pwp_runtime: runtime::Handle,
-    /// Handle to a Tokio runtime that will be used for scheduling filesystem operations on the downloaded data.
+    /// Handle to a Tokio runtime that will be used for scheduling filesystem operations on the
+    /// downloaded data.
     pub storage_runtime: runtime::Handle,
 }
 
@@ -86,7 +88,8 @@ pub async fn single_torrent(
         cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
     );
 
-    // create port mappings and get public ip to send correct listening port to trackers and peers later
+    // create port mappings and get public ip to send correct listening port to trackers and peers
+    // later
     let public_pwp_addr = if cfg.use_upnp {
         let _g = ctx.pwp_runtime.enter();
         let internal_addr = SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into();

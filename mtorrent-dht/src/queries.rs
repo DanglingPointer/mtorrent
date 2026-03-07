@@ -4,7 +4,9 @@ mod manager;
 mod tests;
 
 use super::error::Error;
-use super::{msgs::*, u160::U160, udp};
+use super::msgs::*;
+use super::u160::U160;
+use super::udp;
 use derive_more::derive::From;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;

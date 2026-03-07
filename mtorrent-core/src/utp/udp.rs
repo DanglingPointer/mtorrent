@@ -39,8 +39,9 @@ fn is_transient_error(e: &io::ErrorKind) -> bool {
 }
 
 /// [`UdpDemux`] keeps track of all active connections and their associated peer addresses,
-/// handles sending and receiving UDP packets, and dispatches them to the appropriate connections based on the source address.
-/// Packets from unknown sources are reported to the application via a separate channel.
+/// handles sending and receiving UDP packets, and dispatches them to the appropriate connections
+/// based on the source address. Packets from unknown sources are reported to the application via a
+/// separate channel.
 pub struct UdpDemux {
     commands: mpsc::Receiver<Command>,
     socket: UdpSocket,
@@ -92,7 +93,8 @@ impl UdpDemux {
                     log::info!("uTP Demux {} initiated", $reason);
                     self.pending_tx.clear();
                     for connection in self.connections.values_mut() {
-                        // fake an empty inbound packet which will fail parsing and trigger an outbound RST and connection exit
+                        // fake an empty inbound packet which will fail parsing and trigger an
+                        // outbound RST and connection exit
                         connection.ingress.queue().clear();
                         _ = connection.ingress.try_send(Bytes::new());
                     }
@@ -167,7 +169,8 @@ impl UdpDemux {
                 made_progress = true;
             }
         } else {
-            // iterate through connections and fill the egress queue with at most 1 packet from each connection
+            // iterate through connections and fill the egress queue with at most 1 packet from each
+            // connection
             self.connections.retain(|remote_addr, connection| {
                 match connection.egress.poll_next_unpin(cx) {
                     Poll::Ready(None) => {

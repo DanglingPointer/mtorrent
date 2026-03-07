@@ -349,7 +349,8 @@ fn test_concurrent_outgoing_queries_out_of_order() {
 async fn test_outgoing_query_retransmissions() {
     task::LocalSet::new()
         .run_until(async {
-            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).
+            // init();
             SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
             let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
             let (_incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
@@ -432,7 +433,8 @@ async fn test_outgoing_simultaneous_retransmissions() {
     // 13500 get peers timeout
     task::LocalSet::new()
         .run_until(async {
-            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).
+            // init();
             SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
             let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
             let (_incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
@@ -513,7 +515,8 @@ async fn test_outgoing_interleaved_retransmissions_and_timer_cleanup() {
     // 11000 get_peers timeout
     task::LocalSet::new()
         .run_until(async {
-            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+            // let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).
+            // init();
             SLEEP_ENABLED.with(|sleep_enabled| sleep_enabled.set(true));
             let (outgoing_msgs_sink, mut outgoing_msgs_source) = mpsc::channel(8);
             let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);

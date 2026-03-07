@@ -3,8 +3,7 @@ use super::handshake::*;
 use super::message::*;
 use bytes::BufMut;
 use futures_channel::mpsc;
-use futures_util::FutureExt;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use std::future::Future;
 use std::io;
@@ -15,9 +14,8 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpStream, tcp};
-use tokio::task;
 use tokio::time::{sleep, timeout};
-use tokio::{select, try_join};
+use tokio::{select, task, try_join};
 
 /// Error type for receiving messages from,
 /// or sending them to, a [`PeerChannel`].
