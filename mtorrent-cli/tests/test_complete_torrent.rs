@@ -389,6 +389,7 @@ async fn listening_peer<P: Peer>(
     peer_count: usize,
     listening_addr: SocketAddr,
     expected_remote_addr: SocketAddr,
+    info_hash: [u8; 20],
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
     metainfo: Rc<Metainfo>,
@@ -411,7 +412,7 @@ async fn listening_peer<P: Peer>(
             }
             let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
                 &[index + b'0'; 20],
-                None,
+                &info_hash,
                 extensions_enabled,
                 remote_addr,
                 stream,
@@ -452,6 +453,7 @@ async fn listening_utp_peer<P: Peer>(
     peer_count: usize,
     listening_addr: SocketAddr,
     expected_remote_addr: SocketAddr,
+    info_hash: [u8; 20],
     content_storage: data::StorageClient,
     metainfo_storage: data::StorageClient,
     metainfo: Rc<Metainfo>,
@@ -483,7 +485,7 @@ async fn listening_utp_peer<P: Peer>(
                     .unwrap();
             let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
                 &[index + b'0'; 20],
-                None,
+                &info_hash,
                 extensions_enabled,
                 remote_addr,
                 stream,
@@ -698,6 +700,7 @@ async fn launch_peers<P: Peer>(
                             num_peers,
                             listen_addr,
                             remote_ip,
+                            info_hash,
                             content_storage.clone(),
                             meta_storage.clone(),
                             metainfo.clone(),
@@ -717,6 +720,7 @@ async fn launch_peers<P: Peer>(
                             num_peers,
                             listen_addr,
                             remote_ip,
+                            info_hash,
                             content_storage.clone(),
                             meta_storage.clone(),
                             metainfo.clone(),

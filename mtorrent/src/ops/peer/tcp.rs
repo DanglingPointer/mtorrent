@@ -74,7 +74,7 @@ pub async fn new_inbound_connection(
         .spawn(async move {
             pwp::channels_for_inbound_connection(
                 &local_peer_id,
-                Some(&info_hash),
+                &info_hash,
                 extension_protocol_enabled,
                 remote_ip,
                 stream,

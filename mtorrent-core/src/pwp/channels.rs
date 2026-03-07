@@ -128,7 +128,7 @@ const HANDSHAKE_TIMEOUT: Duration = sec!(10);
 /// Must be called inside [`tokio::runtime::LocalRuntime`](https://docs.rs/tokio/latest/tokio/runtime/struct.LocalRuntime.html).
 pub async fn channels_for_inbound_connection<S>(
     local_peer_id: &[u8; 20],
-    info_hash: Option<&[u8; 20]>,
+    info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     socket: S,
@@ -138,14 +138,12 @@ where
 {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
-        info_hash: *info_hash.unwrap_or(&[0u8; 20]),
+        info_hash: *info_hash,
         reserved: reserved_bits(extension_protocol_enabled),
     };
-    let (socket, remote_handshake) = timeout(
-        HANDSHAKE_TIMEOUT,
-        do_handshake_incoming(&remote_addr, socket, &local_handshake, info_hash.is_none()),
-    )
-    .await??;
+    let (socket, remote_handshake) =
+        timeout(HANDSHAKE_TIMEOUT, do_handshake_incoming(&remote_addr, socket, &local_handshake))
+            .await??;
     let (download, upload, extensions, runner) =
         setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled);
     task::spawn_local(runner);
