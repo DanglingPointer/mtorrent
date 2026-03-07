@@ -98,7 +98,7 @@ impl EgressProcessor {
                             log::debug!("Egress processor for {peer_addr} exiting: pipe failure ({e})");
                             return Ok(());
                         }
-                        Ok(0) if Limit::limit(&send_buffer) > 0 => {
+                        Ok(0) if send_buffer.remaining_mut() > 0 => {
                             log::debug!("Egress processor for {peer_addr} exiting: pipe closed");
                             return Ok(());
                         }

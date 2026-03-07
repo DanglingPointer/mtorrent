@@ -161,7 +161,7 @@ async fn bridge_task(
                                 spawner.inbound_connection(args.peer_addr, args.data).await?;
                             let channels = pwp::channels_for_inbound_connection(
                                 &args.local_peer_id,
-                                Some(&args.info_hash),
+                                &args.info_hash,
                                 args.extension_protocol_enabled,
                                 args.peer_addr,
                                 stream,

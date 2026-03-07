@@ -1,7 +1,8 @@
 use bitvec::prelude::*;
-use std::io;
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use std::{io, mem};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
 /// Representation of the reserved bits in a handshake.
 pub type ReservedBits = BitArray<[u8; 8], Lsb0>;
@@ -40,7 +41,6 @@ pub(super) async fn do_handshake_incoming<S>(
     remote_ip: &SocketAddr,
     mut socket: S,
     local_handshake: &Handshake,
-    use_remote_info_hash: bool,
 ) -> io::Result<(S, Handshake)>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -52,25 +52,15 @@ where
 
     let mut remote_handshake = Handshake::default();
 
-    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved).await?;
+    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved).await?;
     socket.read_exact(&mut remote_handshake.info_hash).await?;
-    if !use_remote_info_hash && local_handshake.info_hash != remote_handshake.info_hash {
+    if local_handshake.info_hash != remote_handshake.info_hash {
         return Err(io::Error::other("info_hash doesn't match"));
     }
 
-    let mut writer = BufWriter::new(socket);
-    writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
-    if use_remote_info_hash {
-        writer.write_all(&remote_handshake.info_hash).await?;
-    } else {
-        writer.write_all(&local_handshake.info_hash).await?;
-    }
-    writer.write_all(&local_handshake.peer_id).await?;
-    writer.flush().await?;
+    write_handshake(&mut socket, local_handshake).await?;
 
-    let mut socket = writer.into_inner();
     socket.read_exact(&mut remote_handshake.peer_id).await?;
-
     if remote_handshake.peer_id == local_handshake.peer_id {
         // possible because some trackers include our own external ip
         Err(io::Error::other("incoming connect from ourselves"))
@@ -86,7 +76,7 @@ where
 
 pub(super) async fn do_handshake_outgoing<S>(
     remote_ip: &SocketAddr,
-    socket: S,
+    mut socket: S,
     local_handshake: &Handshake,
     expected_remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(S, Handshake)>
@@ -97,16 +87,11 @@ where
     // then wait for the entire remote handshake,
     log::debug!("Starting outgoing handshake with {remote_ip}");
 
-    let mut writer = BufWriter::new(socket);
-    writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
-    writer.write_all(&local_handshake.info_hash).await?;
-    writer.write_all(&local_handshake.peer_id).await?;
-    writer.flush().await?;
+    write_handshake(&mut socket, local_handshake).await?;
 
     let mut remote_handshake = Handshake::default();
 
-    let mut socket = writer.into_inner();
-    socket = read_pstr_and_reserved(socket, &mut remote_handshake.reserved)
+    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved)
         .await
         .map_err(io::Error::other)?; // convert to Other to avoid reconnect
 
@@ -116,7 +101,9 @@ where
     }
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
-    if matches!(expected_remote_peer_id, Some(id) if id != &remote_handshake.peer_id) {
+    if let Some(expected_pid) = expected_remote_peer_id
+        && expected_pid != &remote_handshake.peer_id
+    {
         return Err(io::Error::other("remote peer_id doesn't match"));
     }
 
@@ -132,35 +119,41 @@ where
     }
 }
 
-async fn write_pstr_and_reserved<S: AsyncWriteExt + Unpin>(
-    mut sink: S,
-    reserved: &ReservedBits,
-) -> io::Result<S> {
-    sink.write_all(&[19u8]).await?;
-    sink.write_all("BitTorrent protocol".as_bytes()).await?;
-    sink.write_all(&reserved.data).await?;
-    Ok(sink)
-}
+const PROTO_STR: &[u8] = b"\x13BitTorrent protocol";
 
 async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
     mut source: S,
     reserved: &mut ReservedBits,
-) -> io::Result<S> {
-    let pstr_len = {
-        let mut pstr_len_byte = [0u8; 1];
-        source.read_exact(&mut pstr_len_byte).await?;
-        pstr_len_byte[0] as usize
-    };
-    let pstr = {
-        let mut pstr_bytes = vec![0u8; pstr_len];
-        source.read_exact(&mut pstr_bytes).await?;
-        String::from_utf8_lossy(&pstr_bytes).to_string()
-    };
-    if pstr != "BitTorrent protocol" {
-        return Err(io::Error::other(format!("Unknown protocol: '{pstr}'")));
+) -> io::Result<()> {
+    let mut pstr = [0u8; mem::size_of_val(PROTO_STR)];
+    source.read_exact(&mut pstr).await?;
+    if pstr != PROTO_STR {
+        return Err(io::Error::other(format!(
+            "Unknown protocol: '{}'",
+            String::from_utf8_lossy(&pstr)
+        )));
     }
     source.read_exact(&mut reserved.data).await?;
-    Ok(source)
+    Ok(())
+}
+
+const TOTAL_HANDSHAKE_LEN: usize = mem::size_of::<Handshake>() + mem::size_of_val(PROTO_STR);
+
+async fn write_handshake<S: AsyncWriteExt + Unpin>(
+    mut sink: S,
+    handshake: &Handshake,
+) -> io::Result<()> {
+    let mut buf = [MaybeUninit::uninit(); TOTAL_HANDSHAKE_LEN];
+    let mut writer = ReadBuf::uninit(&mut buf);
+
+    writer.put_slice(PROTO_STR);
+    writer.put_slice(&handshake.reserved.data);
+    writer.put_slice(&handshake.info_hash);
+    writer.put_slice(&handshake.peer_id);
+
+    sink.write_all(writer.filled()).await?;
+    sink.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -198,12 +191,8 @@ mod tests {
             .unwrap()
             .1
         };
-        let server_hs_fut = async {
-            do_handshake_incoming(&IP, server_stream, &server_hs_data, false)
-                .await
-                .unwrap()
-                .1
-        };
+        let server_hs_fut =
+            async { do_handshake_incoming(&IP, server_stream, &server_hs_data).await.unwrap().1 };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             join!(client_hs_fut, server_hs_fut);
@@ -212,48 +201,6 @@ mod tests {
         assert_eq!(client_hs_data, received_client_hs);
         assert!(received_client_hs.reserved[44]);
         assert!(received_client_hs.reserved[56]);
-    }
-
-    #[tokio::test]
-    async fn test_handshake_any_server_info_hash() {
-        let (server_stream, client_stream) = duplex(1024);
-
-        let client_hs_data = Handshake {
-            peer_id: [1u8; 20],
-            info_hash: [7u8; 20],
-            reserved: BitArray::ZERO,
-        };
-        let server_hs_data = Handshake {
-            peer_id: [2u8; 20],
-            info_hash: [7u8; 20],
-            reserved: BitArray::from([0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x04]),
-        };
-
-        let client_hs_fut = async {
-            do_handshake_outgoing(
-                &IP,
-                client_stream,
-                &client_hs_data,
-                Some(&server_hs_data.peer_id),
-            )
-            .await
-            .unwrap()
-            .1
-        };
-        let server_hs_fut = async {
-            do_handshake_incoming(&IP, server_stream, &server_hs_data, true)
-                .await
-                .unwrap()
-                .1
-        };
-
-        let (received_server_hs, received_client_hs): (Handshake, Handshake) =
-            join!(client_hs_fut, server_hs_fut);
-
-        assert_eq!(server_hs_data, received_server_hs);
-        assert_eq!(client_hs_data, received_client_hs);
-        assert!(received_server_hs.reserved[44]);
-        assert!(received_server_hs.reserved[58]);
     }
 
     #[tokio::test]
@@ -278,7 +225,7 @@ mod tests {
             assert_eq!("remote peer_id doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            _ = do_handshake_incoming(&IP, server_stream, &server_hs_data, true).await;
+            _ = do_handshake_incoming(&IP, server_stream, &server_hs_data).await;
         };
         join!(client_hs_fut, server_hs_fut);
     }
@@ -299,7 +246,7 @@ mod tests {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &hs_data, false).await;
+            let result = do_handshake_incoming(&IP, server_stream, &hs_data).await;
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         };
@@ -326,7 +273,7 @@ mod tests {
             assert!(result.is_err());
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, false).await;
+            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("info_hash doesn't match", error.to_string())
         };
