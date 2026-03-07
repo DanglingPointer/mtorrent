@@ -3,7 +3,7 @@
 //! and integration with a Kademlia-based Distributed Hash Table (DHT).
 //!
 //! Example usage:
-//! - CLI application: [`mtorrent-cli`](https://github.com/DanglingPointer/mtorrent/blob/master/mtorrent-cli/)
+//! - CLI application: [`mtorrent-cli`](https://github.com/DanglingPointer/mtorrent/blob/main/mtorrent-cli/)
 //! - GUI application: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui/)
 
 /// Application modules.
