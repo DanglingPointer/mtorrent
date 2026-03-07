@@ -86,7 +86,8 @@ impl ConnectionSpawner {
     const INGRESS_QUEUE: usize = 64;
 
     /// Establish a new outbound connection to `remote_addr`. Returns after a successful uTP
-    /// handshake. # Error
+    /// handshake.
+    /// # Error
     /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already
     /// exists.
     pub async fn outbound_connection(
@@ -127,7 +128,8 @@ impl ConnectionSpawner {
     }
 
     /// Establish a new inbound connection from `remote_addr`. Returns after a successful uTP
-    /// handshake. # Error
+    /// handshake.
+    /// # Error
     /// If [`UdpDemux`] has been shut down or if uTP handshake failed or if the connection already
     /// exists.
     pub async fn inbound_connection(
