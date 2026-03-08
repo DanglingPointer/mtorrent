@@ -432,6 +432,7 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
             let mut readbuf = ReadBuf::uninit(buffer);
             msg.into().encode(&mut readbuf)?;
             sink.write_all(readbuf.filled()).await?;
+            sink.flush().await?;
             Ok(())
         }
 
