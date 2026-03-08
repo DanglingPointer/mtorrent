@@ -2,7 +2,7 @@ use super::protocol::{ConnectionState, Header, TypeVer, ValidationError, skip_ex
 use super::retransmitter::Retransmitter;
 use super::seq::Seq;
 use bytes::buf::Limit;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures_util::{FutureExt, StreamExt};
 use local_async_utils::prelude::*;
 use log::log_enabled;
@@ -151,7 +151,7 @@ impl IngressProcessor {
                             with!(|state| state.process_header(&header));
                         }
                         TypeVer::Data => {
-                            if let Err(e) = self.sender.write_all_buf(&mut packet).await {
+                            if let Err(e) = write_and_flush(&mut self.sender, &mut packet).await {
                                 log::debug!(
                                     "Ingress processor for {peer_addr} exiting: pipe closed ({e})"
                                 );
@@ -217,6 +217,15 @@ async fn resend_until_received(
             return received.ok_or(io::ErrorKind::BrokenPipe.into());
         }
     }
+}
+
+async fn write_and_flush(
+    w: &mut (impl AsyncWriteExt + Unpin),
+    src: &mut impl Buf,
+) -> io::Result<()> {
+    w.write_all_buf(src).await?;
+    w.flush().await?;
+    Ok(())
 }
 
 pub struct Connection {
@@ -312,7 +321,7 @@ impl Connection {
         skip_extensions(&mut packet, &header)?;
         match header.type_ver() {
             TypeVer::Data => {
-                pipe.write_all_buf(&mut packet).await?;
+                write_and_flush(&mut pipe, &mut packet).await?;
                 state.process_header(&header);
                 ack_required_reporter.signal_one();
             }

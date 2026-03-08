@@ -93,14 +93,14 @@ pub(super) async fn do_handshake_outgoing<S>(
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
-    // Send local hanshake up until peer id,
+    // Send entire local handshake,
     // then wait for the entire remote handshake,
-    // then send local peer id.
     log::debug!("Starting outgoing handshake with {remote_ip}");
 
     let mut writer = BufWriter::new(socket);
     writer = write_pstr_and_reserved(writer, &local_handshake.reserved).await?;
     writer.write_all(&local_handshake.info_hash).await?;
+    writer.write_all(&local_handshake.peer_id).await?;
     writer.flush().await?;
 
     let mut remote_handshake = Handshake::default();
@@ -119,8 +119,6 @@ where
     if matches!(expected_remote_peer_id, Some(id) if id != &remote_handshake.peer_id) {
         return Err(io::Error::other("remote peer_id doesn't match"));
     }
-
-    socket.write_all(&local_handshake.peer_id).await?;
 
     if remote_handshake.peer_id == local_handshake.peer_id {
         Err(io::Error::other("connecting to ourselves"))
@@ -280,8 +278,7 @@ mod tests {
             assert_eq!("remote peer_id doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, true).await;
-            assert!(result.is_err());
+            _ = do_handshake_incoming(&IP, server_stream, &server_hs_data, true).await;
         };
         join!(client_hs_fut, server_hs_fut);
     }
