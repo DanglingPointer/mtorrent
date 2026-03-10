@@ -5,6 +5,7 @@ use bytes::BufMut;
 use futures_channel::mpsc;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
+use mtorrent_utils::split_stream::SplitStream;
 use std::future::Future;
 use std::io;
 use std::mem::MaybeUninit;
@@ -13,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::{TcpStream, tcp};
 use tokio::time::{sleep, timeout};
 use tokio::{select, task, try_join};
 
@@ -134,7 +134,7 @@ pub async fn channels_for_inbound_connection<S>(
     socket: S,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
 where
-    S: AsyncRead + AsyncWrite + SplittableStream + 'static,
+    S: AsyncRead + AsyncWrite + SplitStream + 'static,
 {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
@@ -163,7 +163,7 @@ pub async fn channels_for_outbound_connection<S>(
     remote_peer_id: Option<&[u8; 20]>,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
 where
-    S: AsyncRead + AsyncWrite + SplittableStream + 'static,
+    S: AsyncRead + AsyncWrite + SplitStream + 'static,
 {
     let local_handshake = Handshake {
         peer_id: *local_peer_id,
@@ -207,43 +207,13 @@ where
 
 // ------
 
-/// Helper trait for efficiently splitting a stream into read and write halves.
-pub trait SplittableStream: Unpin {
-    type Ingress<'i>: AsyncRead + Unpin
-    where
-        Self: 'i;
-    type Egress<'e>: AsyncWrite + Unpin
-    where
-        Self: 'e;
-
-    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>);
-}
-
-impl SplittableStream for TcpStream {
-    type Ingress<'i> = tcp::ReadHalf<'i>;
-    type Egress<'e> = tcp::WriteHalf<'e>;
-
-    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
-        TcpStream::split(self)
-    }
-}
-
-impl SplittableStream for local_pipe::DuplexEnd {
-    type Ingress<'i> = &'i mut local_pipe::ReadEnd;
-    type Egress<'e> = &'e mut local_pipe::WriteEnd;
-
-    fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
-        self.split()
-    }
-}
-
 #[cfg(any(feature = "mocks", test))]
 struct StreamHolder<S>(S)
 where
     S: AsyncRead + AsyncWrite + Unpin;
 
 #[cfg(any(feature = "mocks", test))]
-impl<S> SplittableStream for StreamHolder<S>
+impl<S> SplitStream for StreamHolder<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
 {
@@ -269,7 +239,7 @@ fn setup_channels<S>(
     impl Future<Output = io::Result<()>>,
 )
 where
-    S: SplittableStream + 'static,
+    S: SplitStream + 'static,
 {
     const MAX_INCOMING_QUEUE: usize = 20;
 
