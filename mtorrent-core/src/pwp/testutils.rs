@@ -42,6 +42,7 @@ impl AnyMessage {
 /// # use mtorrent_core::pwp::*;
 /// msgs![DownloaderMessage::Interested, DownloaderMessage::NotInterested];
 /// ```
+#[doc(hidden)]
 #[macro_export]
 macro_rules! msgs {
     ($($arg:expr),+ $(,)? ) => {{

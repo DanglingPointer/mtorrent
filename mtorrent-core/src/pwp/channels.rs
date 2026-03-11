@@ -1,8 +1,10 @@
 use super::MAX_BLOCK_SIZE;
 use super::handshake::*;
 use super::message::*;
+use crate::pe;
 use bytes::BufMut;
 use futures_channel::mpsc;
+use futures_util::future::LocalBoxFuture;
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use local_async_utils::prelude::*;
 use mtorrent_utils::split_stream::SplitStream;
@@ -30,6 +32,7 @@ pub enum ChannelError {
 struct PeerInfo {
     handshake_info: Handshake,
     remote_addr: SocketAddr,
+    encrypted: bool,
 }
 
 /// Channel for communicating with a single peer.
@@ -46,6 +49,10 @@ impl<Q> PeerChannel<Q> {
     /// Handshake received from the peer upon connecting.
     pub fn remote_info(&self) -> &Handshake {
         &self.peer_info.handshake_info
+    }
+    /// Whether the connection to the peer is encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.peer_info.encrypted
     }
 }
 
@@ -132,6 +139,7 @@ pub async fn channels_for_inbound_connection<S>(
     extension_protocol_enabled: bool,
     remote_addr: SocketAddr,
     socket: S,
+    mut crypto: Option<pe::Crypto>,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
 where
     S: AsyncRead + AsyncWrite + SplitStream + 'static,
@@ -141,11 +149,13 @@ where
         info_hash: *info_hash,
         reserved: reserved_bits(extension_protocol_enabled),
     };
-    let (socket, remote_handshake) =
-        timeout(HANDSHAKE_TIMEOUT, do_handshake_incoming(&remote_addr, socket, &local_handshake))
-            .await??;
+    let (socket, remote_handshake) = timeout(
+        HANDSHAKE_TIMEOUT,
+        do_handshake_incoming(&remote_addr, socket, &local_handshake, crypto.as_mut()),
+    )
+    .await??;
     let (download, upload, extensions, runner) =
-        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled);
+        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled, crypto);
     task::spawn_local(runner);
     Ok((download, upload, extensions))
 }
@@ -159,6 +169,7 @@ pub async fn channels_for_outbound_connection<S>(
     remote_addr: SocketAddr,
     socket: S,
     remote_peer_id: Option<&[u8; 20]>,
+    mut crypto: Option<pe::Crypto>,
 ) -> io::Result<(DownloadChannels, UploadChannels, Option<ExtendedChannels>)>
 where
     S: AsyncRead + AsyncWrite + SplitStream + 'static,
@@ -170,11 +181,17 @@ where
     };
     let (socket, remote_handshake) = timeout(
         HANDSHAKE_TIMEOUT,
-        do_handshake_outgoing(&remote_addr, socket, &local_handshake, remote_peer_id),
+        do_handshake_outgoing(
+            &remote_addr,
+            socket,
+            &local_handshake,
+            remote_peer_id,
+            crypto.as_mut(),
+        ),
     )
     .await??;
     let (download, upload, extensions, runner) =
-        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled);
+        setup_channels(socket, remote_addr, remote_handshake, extension_protocol_enabled, crypto);
     task::spawn_local(runner);
     Ok((download, upload, extensions))
 }
@@ -196,6 +213,7 @@ where
         peer_addr,
         remote_handshake,
         extension_protocol_enabled,
+        None,
     );
     tokio::task::spawn_local(async move {
         let _ = runner.await;
@@ -226,10 +244,11 @@ where
 // ------
 
 fn setup_channels<S>(
-    mut stream: S,
+    stream: S,
     remote_addr: SocketAddr,
     remote_handshake: Handshake,
     extended_protocol_enabled: bool,
+    crypto: Option<pe::Crypto>,
 ) -> (
     DownloadChannels,
     UploadChannels,
@@ -246,6 +265,7 @@ where
     let info = Arc::new(PeerInfo {
         handshake_info: remote_handshake,
         remote_addr,
+        encrypted: crypto.is_some(),
     });
 
     let (local_uploader_msg_in, local_uploader_msg_out) =
@@ -282,31 +302,18 @@ where
             (None, None, None)
         };
 
-    let actor_fut = async move {
-        let (ingress, egress) = stream.split();
-        let receiver = IngressProcessor {
-            source: ingress,
-            remote_ip: remote_addr,
-            ul_msg_sink: remote_uploader_msg_in,
-            dl_msg_sink: remote_downloader_msg_in,
-            ext_msg_sink: remote_extended_msg_in,
-        };
-        let sender = EgressProcessor {
-            sink: egress,
-            remote_ip: remote_addr,
-            dl_msg_source: local_downloader_msg_out,
-            ul_msg_source: local_uploader_msg_out,
-            ext_msg_source: local_extended_msg_out,
-        };
-        try_join!(receiver.read_messages(), sender.write_messages())
-            .map(|_| ())
-            .inspect_err(|e| {
-                if !matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) {
-                    log::warn!("Peer runner for {remote_addr} exited: {e}");
-                }
-            })
-    }
-    .boxed_local();
+    let receiver = IngressProcessor {
+        remote_ip: remote_addr,
+        ul_msg_sink: remote_uploader_msg_in,
+        dl_msg_sink: remote_downloader_msg_in,
+        ext_msg_sink: remote_extended_msg_in,
+    };
+    let sender = EgressProcessor {
+        remote_ip: remote_addr,
+        dl_msg_source: local_downloader_msg_out,
+        ul_msg_source: local_uploader_msg_out,
+        ext_msg_source: local_extended_msg_out,
+    };
 
     let download_rx = DownloadRxChannel {
         inner: remote_uploader_msg_out,
@@ -330,22 +337,65 @@ where
         DownloadChannels(download_tx, download_rx),
         UploadChannels(upload_tx, upload_rx),
         extended_channels,
-        actor_fut,
+        make_io_task(stream, receiver, sender, crypto),
     )
 }
 
-struct IngressProcessor<S: AsyncReadExt + Unpin> {
-    source: S,
+fn make_io_task<'s>(
+    mut stream: impl SplitStream + 's,
+    receiver: IngressProcessor,
+    sender: EgressProcessor,
+    crypto: Option<pe::Crypto>,
+) -> LocalBoxFuture<'s, io::Result<()>> {
+    async fn run_io(
+        ingress: IngressProcessor,
+        egress: EgressProcessor,
+        source: impl AsyncReadExt + Unpin,
+        sink: impl AsyncWriteExt + Unpin,
+    ) -> io::Result<()> {
+        let remote_addr = egress.remote_ip;
+        try_join!(biased; ingress.read_messages(source), egress.write_messages(sink)).inspect_err(
+            |e| {
+                if !matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) {
+                    log::warn!("Peer runner for {remote_addr} exited: {e}");
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    if let Some(pe::Crypto {
+        encryptor,
+        decryptor,
+    }) = crypto
+    {
+        async move {
+            let (source, sink) = stream.split();
+            let source = pe::DecryptingBufReader::new(source, decryptor);
+            let sink = pe::EncryptingWriter::new(sink, encryptor);
+            run_io(receiver, sender, source, sink).await
+        }
+        .boxed_local()
+    } else {
+        async move {
+            let (source, sink) = stream.split();
+            run_io(receiver, sender, source, sink).await
+        }
+        .boxed_local()
+    }
+}
+
+struct IngressProcessor {
     remote_ip: SocketAddr,
     ul_msg_sink: mpsc::Sender<UploaderMessage>,
     dl_msg_sink: mpsc::Sender<DownloaderMessage>,
     ext_msg_sink: Option<mpsc::Sender<ExtendedMessage>>,
 }
 
-impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
+impl IngressProcessor {
     const RECV_TIMEOUT: Duration = sec!(120);
 
-    async fn read_messages(mut self) -> io::Result<()> {
+    async fn read_messages<S: AsyncReadExt + Unpin>(mut self, mut source: S) -> io::Result<()> {
         async fn read_one(
             buffer: &mut [MaybeUninit<u8>],
             mut source: impl AsyncReadExt + Unpin,
@@ -379,7 +429,7 @@ impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
             }
 
             let received =
-                timeout(Self::RECV_TIMEOUT, read_one(&mut buffer, &mut self.source)).await??;
+                timeout(Self::RECV_TIMEOUT, read_one(&mut buffer, &mut source)).await??;
 
             let received = match UploaderMessage::try_from(received) {
                 Ok(msg) => forward_and_continue!(msg, self.ul_msg_sink),
@@ -406,18 +456,17 @@ impl<S: AsyncReadExt + Unpin> IngressProcessor<S> {
     }
 }
 
-struct EgressProcessor<S: AsyncWriteExt + Unpin> {
-    sink: S,
+struct EgressProcessor {
     remote_ip: SocketAddr,
     dl_msg_source: mpsc::Receiver<Option<DownloaderMessage>>,
     ul_msg_source: mpsc::Receiver<Option<UploaderMessage>>,
     ext_msg_source: Option<mpsc::Receiver<Option<(ExtendedMessage, u8)>>>,
 }
 
-impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
+impl EgressProcessor {
     const PING_INTERVAL: Duration = sec!(30);
 
-    async fn write_messages(mut self) -> io::Result<()> {
+    async fn write_messages<S: AsyncWriteExt + Unpin>(mut self, mut sink: S) -> io::Result<()> {
         fn channel_closed_err() -> io::Error {
             io::Error::new(io::ErrorKind::BrokenPipe, "Channel closed")
         }
@@ -444,25 +493,25 @@ impl<S: AsyncWriteExt + Unpin> EgressProcessor<S> {
                     dl_msg = self.dl_msg_source.next() => {
                         if let Some(msg) = dl_msg.ok_or_else(channel_closed_err)? {
                             log::trace!("{} <= {}", self.remote_ip, msg);
-                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                            write_one(&mut buffer, &mut sink, msg).await?;
                         }
                     }
                     $(ext_msg = $ext_msg_source.next() => {
                         if let Some(msg) = ext_msg.ok_or_else(channel_closed_err)? {
                             log::trace!("{} <= {}", self.remote_ip, msg.0);
-                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                            write_one(&mut buffer, &mut sink, msg).await?;
                         }
                     })?
                     ul_msg = self.ul_msg_source.next() => {
                         if let Some(msg) = ul_msg.ok_or_else(channel_closed_err)? {
                             log::trace!("{} <= {}", self.remote_ip, msg);
-                            write_one(&mut buffer, &mut self.sink, msg).await?;
+                            write_one(&mut buffer, &mut sink, msg).await?;
                         }
                     }
                     _ = sleep(Self::PING_INTERVAL) => {
                         let ping_msg = PeerMessage::KeepAlive;
                         log::trace!("{} <= {:?}", self.remote_ip, &ping_msg);
-                        write_one(&mut buffer, &mut self.sink, ping_msg).await?;
+                        write_one(&mut buffer, &mut sink, ping_msg).await?;
                     }
                 }
             };
@@ -571,7 +620,7 @@ mod tests {
 
     macro_rules! setup_channels {
         ($stream:expr, $($args:expr),+ $(,)?) => {
-            setup_channels(StreamHolder($stream), $($args),+)
+            setup_channels(StreamHolder($stream), $($args),+, None)
         };
     }
 

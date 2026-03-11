@@ -1,6 +1,7 @@
 use super::super::PeerReporter;
+use bytes::BytesMut;
 use futures_util::StreamExt;
-use mtorrent_core::{pwp, utp};
+use mtorrent_core::{pe, pwp, utp};
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;
@@ -34,6 +35,7 @@ pub(super) struct OutboundConnectArgs {
     pub(super) local_peer_id: PeerId,
     pub(super) info_hash: [u8; 20],
     pub(super) extension_protocol_enabled: bool,
+    pub(super) protocol_encryption_enabled: bool,
     pub(super) peer_addr: SocketAddr,
     pub(super) deadline: Instant,
 }
@@ -137,17 +139,23 @@ async fn bridge_task(
                     let spawner = self.connection_spawner.clone();
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
-                            let stream = spawner.outbound_connection(args.peer_addr).await?;
-                            let channels = pwp::channels_for_outbound_connection(
+                            let mut stream = spawner.outbound_connection(args.peer_addr).await?;
+                            let crypto = if args.protocol_encryption_enabled {
+                                pe::outbound_handshake(&mut stream, &args.info_hash, &[0u8; 0][..])
+                                    .await?
+                            } else {
+                                None
+                            };
+                            pwp::channels_for_outbound_connection(
                                 &args.local_peer_id,
                                 &args.info_hash,
                                 args.extension_protocol_enabled,
                                 args.peer_addr,
                                 stream,
                                 None,
+                                crypto,
                             )
-                            .await?;
-                            Ok(channels)
+                            .await
                         })
                         .await;
                         _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));
@@ -159,15 +167,38 @@ async fn bridge_task(
                         let ret = time::timeout_at(args.deadline, async {
                             let stream =
                                 spawner.inbound_connection(args.peer_addr, args.data).await?;
-                            let channels = pwp::channels_for_inbound_connection(
-                                &args.local_peer_id,
-                                &args.info_hash,
-                                args.extension_protocol_enabled,
-                                args.peer_addr,
-                                stream,
-                            )
-                            .await?;
-                            Ok(channels)
+                            match pe::is_stream_unencrypted(stream).await? {
+                                pe::MaybeEncrypted::Plain(stream) => {
+                                    pwp::channels_for_inbound_connection(
+                                        &args.local_peer_id,
+                                        &args.info_hash,
+                                        args.extension_protocol_enabled,
+                                        args.peer_addr,
+                                        stream,
+                                        None,
+                                    )
+                                    .await
+                                }
+                                pe::MaybeEncrypted::Encrypted(mut stream) => {
+                                    let mut ia_buffer = BytesMut::new();
+                                    let crypto = pe::inbound_handshake(
+                                        &mut stream,
+                                        &args.info_hash,
+                                        &mut ia_buffer,
+                                    )
+                                    .await?;
+                                    stream.replace_prefix(ia_buffer.freeze());
+                                    pwp::channels_for_inbound_connection(
+                                        &args.local_peer_id,
+                                        &args.info_hash,
+                                        args.extension_protocol_enabled,
+                                        args.peer_addr,
+                                        stream,
+                                        crypto,
+                                    )
+                                    .await
+                                }
+                            }
                         })
                         .await;
                         _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));

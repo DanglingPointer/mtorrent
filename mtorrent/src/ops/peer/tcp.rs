@@ -1,5 +1,6 @@
 use super::super::PeerReporter;
-use mtorrent_core::pwp;
+use bytes::BytesMut;
+use mtorrent_core::{pe, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -32,6 +33,7 @@ pub async fn new_outbound_connection(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
+    protocol_encryption_enabled: bool,
     peer_addr: SocketAddr,
     local_port: u16,
     pwp_runtime: &runtime::Handle,
@@ -46,7 +48,12 @@ pub async fn new_outbound_connection(
     pwp_runtime
         .spawn(async move {
             let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
-            let stream = socket.connect(peer_addr).await?;
+            let mut stream = socket.connect(peer_addr).await?;
+            let crypto = if protocol_encryption_enabled {
+                pe::outbound_handshake(&mut stream, &info_hash, &[0u8; 0][..]).await?
+            } else {
+                None
+            };
             pwp::channels_for_outbound_connection(
                 &local_peer_id,
                 &info_hash,
@@ -54,6 +61,7 @@ pub async fn new_outbound_connection(
                 peer_addr,
                 stream,
                 None,
+                crypto,
             )
             .await
         })
@@ -72,14 +80,34 @@ pub async fn new_inbound_connection(
     let info_hash = *info_hash;
     pwp_runtime
         .spawn(async move {
-            pwp::channels_for_inbound_connection(
-                &local_peer_id,
-                &info_hash,
-                extension_protocol_enabled,
-                remote_ip,
-                stream,
-            )
-            .await
+            match pe::is_stream_unencrypted(stream).await? {
+                pe::MaybeEncrypted::Plain(stream) => {
+                    pwp::channels_for_inbound_connection(
+                        &local_peer_id,
+                        &info_hash,
+                        extension_protocol_enabled,
+                        remote_ip,
+                        stream,
+                        None,
+                    )
+                    .await
+                }
+                pe::MaybeEncrypted::Encrypted(mut stream) => {
+                    let mut ia_buffer = BytesMut::new();
+                    let crypto =
+                        pe::inbound_handshake(&mut stream, &info_hash, &mut ia_buffer).await?;
+                    stream.replace_prefix(ia_buffer.freeze());
+                    pwp::channels_for_inbound_connection(
+                        &local_peer_id,
+                        &info_hash,
+                        extension_protocol_enabled,
+                        remote_ip,
+                        stream,
+                        crypto,
+                    )
+                    .await
+                }
+            }
         })
         .await?
 }
