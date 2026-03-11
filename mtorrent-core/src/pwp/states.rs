@@ -86,6 +86,7 @@ pub struct PeerState {
     pub upload: UploadState,
     pub extensions: Option<Box<super::ExtendedHandshake>>,
     pub origin: PeerOrigin,
+    pub encryption: bool,
     pub last_download_time: Instant,
     pub last_upload_time: Instant,
 }
@@ -96,6 +97,7 @@ impl Default for PeerState {
             download: Default::default(),
             upload: Default::default(),
             extensions: None,
+            encryption: false,
             origin: Default::default(),
             last_download_time: Instant::now(),
             last_upload_time: Instant::now(),
@@ -104,6 +106,26 @@ impl Default for PeerState {
 }
 
 impl Serialize for PeerState {
+    /// [`PeerState`] is serialized in the following format:
+    /// ```json
+    /// {
+    ///   "download": {
+    ///     "amInterested": false,
+    ///     "peerChoking": true,
+    ///     "bytesReceived": 0,
+    ///     "lastBitrateBps": 0
+    ///   },
+    ///   "upload": {
+    ///     "peerInterested": false,
+    ///     "amChoking": true,
+    ///     "bytesSent": 0,
+    ///     "lastBitrateBps": 0
+    ///   },
+    ///   "client": "n/a",
+    ///   "reqq": null,
+    ///   "origin": "Tracker",
+    ///   "encrypted": false
+    /// }
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -115,6 +137,7 @@ impl Serialize for PeerState {
             client: &'a str,
             reqq: Option<usize>,
             origin: PeerOrigin,
+            encrypted: bool,
         }
         let data = Data {
             download: &self.download,
@@ -126,6 +149,7 @@ impl Serialize for PeerState {
                 .unwrap_or("n/a"),
             reqq: self.extensions.as_ref().and_then(|ext| ext.request_limit),
             origin: self.origin,
+            encrypted: self.encryption,
         };
         data.serialize(serializer)
     }
@@ -182,9 +206,10 @@ impl PeerStates {
     }
 
     /// Update how the peer at `remote_ip` was discovered.
-    pub fn set_origin(&mut self, remote_ip: &SocketAddr, origin: PeerOrigin) {
+    pub fn set_info(&mut self, remote_ip: &SocketAddr, origin: PeerOrigin, encryption: bool) {
         let state = self.peers.entry(*remote_ip).or_default();
         state.origin = origin;
+        state.encryption = encryption;
     }
 
     /// Erase peer.

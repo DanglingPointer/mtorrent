@@ -2,7 +2,7 @@ use futures_util::{StreamExt, future};
 use local_async_utils::prelude::*;
 use mtorrent::utils::startup;
 use mtorrent_core::input::Metainfo;
-use mtorrent_core::{data, input, pwp, utp};
+use mtorrent_core::{data, input, pe, pwp, utp};
 use mtorrent_utils::benc;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
@@ -398,7 +398,7 @@ async fn listening_peer<P: Peer>(
     let verify_remote_addr = !extensions_enabled;
     macro_rules! accept_and_run {
         ($listener:expr) => {{
-            let (stream, remote_addr) = tokio::time::timeout(sec!(20), $listener.accept())
+            let (mut stream, remote_addr) = tokio::time::timeout(sec!(20), $listener.accept())
                 .await
                 .unwrap_or_else(|e| panic!("Peer {index} got stuck accepting ({e})"))
                 .unwrap();
@@ -410,12 +410,17 @@ async fn listening_peer<P: Peer>(
             if verify_remote_addr {
                 assert_eq!(remote_addr, expected_remote_addr);
             }
+            let mut ia = Vec::new();
+            let crypto = pe::inbound_handshake(&mut stream, &info_hash, &mut ia).await.unwrap();
+            assert!(crypto.is_some());
+            assert!(ia.is_empty());
             let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
                 &[index + b'0'; 20],
                 &info_hash,
                 extensions_enabled,
                 remote_addr,
                 stream,
+                crypto,
             )
             .await
             .unwrap();
@@ -478,17 +483,22 @@ async fn listening_utp_peer<P: Peer>(
             if verify_remote_addr {
                 assert_eq!(remote_addr, expected_remote_addr);
             }
-            let stream =
+            let mut stream =
                 time::timeout(sec!(10), connection_spawner.inbound_connection(remote_addr, data))
                     .await
                     .unwrap_or_else(|e| panic!("uTP peer {index} got stuck accepting ({e})"))
                     .unwrap();
+            let mut ia = Vec::new();
+            let crypto = pe::inbound_handshake(&mut stream, &info_hash, &mut ia).await.unwrap();
+            assert!(crypto.is_some());
+            assert!(ia.is_empty());
             let (download_chans, upload_chans, ext_chans) = pwp::channels_for_inbound_connection(
                 &[index + b'0'; 20],
                 &info_hash,
                 extensions_enabled,
                 remote_addr,
                 stream,
+                crypto,
             )
             .await
             .unwrap();
@@ -527,7 +537,7 @@ async fn connecting_peer<P: Peer>(
 ) {
     println!("Peer {index} connecting to {remote_ip}...");
     let start_time = time::Instant::now();
-    let stream = loop {
+    let mut stream = loop {
         let connect_result = time::timeout(sec!(10), TcpStream::connect(remote_ip)).await;
         if let Ok(Ok(result)) = connect_result {
             break result;
@@ -538,6 +548,8 @@ async fn connecting_peer<P: Peer>(
         time::sleep(sec!(1)).await;
     };
     stream.set_nodelay(true).unwrap();
+    let crypto = pe::outbound_handshake(&mut stream, &info_hash, &Vec::new()[..]).await.unwrap();
+    assert!(crypto.is_some());
     let (download_chans, upload_chans, ext_chans) = pwp::channels_for_outbound_connection(
         &[index + b'0'; 20],
         &info_hash,
@@ -545,6 +557,7 @@ async fn connecting_peer<P: Peer>(
         remote_ip,
         stream,
         None,
+        crypto,
     )
     .await
     .expect("connecting peer failed to create channels");
@@ -578,7 +591,7 @@ async fn connecting_utp_peer<P: Peer>(
     let (connection_spawner, _, udp) = utp::init(socket);
     let driver_handle = task::spawn_local(udp.run());
 
-    let stream = loop {
+    let mut stream = loop {
         let deadline = time::Instant::now() + sec!(2);
         let connect_result =
             time::timeout_at(deadline, connection_spawner.outbound_connection(remote_ip)).await;
@@ -592,6 +605,8 @@ async fn connecting_utp_peer<P: Peer>(
         time::sleep_until(deadline).await;
     };
 
+    let crypto = pe::outbound_handshake(&mut stream, &info_hash, &Vec::new()[..]).await.unwrap();
+    assert!(crypto.is_some());
     let (download_chans, upload_chans, ext_chans) = pwp::channels_for_outbound_connection(
         &[index + b'0'; 20],
         &info_hash,
@@ -599,6 +614,7 @@ async fn connecting_utp_peer<P: Peer>(
         remote_ip,
         stream,
         None,
+        crypto,
     )
     .await
     .expect("connecting uTP peer failed to create channels");

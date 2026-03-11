@@ -107,7 +107,13 @@ impl fmt::Display for StateSnapshot<'_> {
         )?;
         write!(f, "Connected peers ({}):", self.peers.len())?;
         for (addr, state) in &self.peers {
-            write!(f, "\n[ {:^21} ]     origin: {:<12}", addr, origin_str(state.origin))?;
+            write!(
+                f,
+                "\n[ {:^21} ]     origin: {:<12} encrypted: {:<12}",
+                addr,
+                origin_str(state.origin),
+                if state.encryption { "🔒" } else { "❌" }
+            )?;
             if let Some(hs) = &state.extensions {
                 write!(
                     f,

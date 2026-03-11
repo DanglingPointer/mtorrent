@@ -32,7 +32,8 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
         super::tcp::new_outbound_connection(
             &local_id.into(),
             metainfo.info_hash(),
-            true,
+            true, // extensions
+            true, // PE
             remote_ip,
             0u16,
             &runtime::Handle::current(),

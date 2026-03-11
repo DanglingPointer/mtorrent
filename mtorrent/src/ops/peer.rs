@@ -131,6 +131,7 @@ async fn run_peer_connection(
     data: &MainConnectionData,
 ) -> io::Result<()> {
     let remote_ip = *download_chans.0.remote_ip();
+    let encryption = download_chans.0.is_encrypted();
 
     let pwp::UploadChannels(tx, rx) = upload_chans;
     let upload_fut = upload::new_peer(
@@ -175,7 +176,7 @@ async fn run_peer_connection(
 
     data.ctx_handle
         .clone()
-        .with(|ctx| ctx.peer_states.set_origin(&remote_ip, origin));
+        .with(|ctx| ctx.peer_states.set_info(&remote_ip, origin, encryption));
 
     try_join!(
         run_download(download.into(), remote_ip, data.ctx_handle.clone()),
@@ -215,6 +216,7 @@ impl PeerConnector for MainConnectionData {
     async fn outbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -235,6 +237,7 @@ impl PeerConnector for MainConnectionData {
                 &local_peer_id,
                 &info_hash,
                 EXTENSION_PROTOCOL_ENABLED,
+                use_pe,
                 peer_addr,
                 local_port,
                 &self.pwp_worker_handle,
@@ -246,6 +249,7 @@ impl PeerConnector for MainConnectionData {
     async fn outbound_utp_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -263,6 +267,7 @@ impl PeerConnector for MainConnectionData {
                 local_peer_id,
                 info_hash,
                 extension_protocol_enabled: EXTENSION_PROTOCOL_ENABLED,
+                protocol_encryption_enabled: use_pe,
                 peer_addr,
                 deadline,
             })
@@ -362,13 +367,14 @@ async fn run_metadata_download(
     ) -> io::Result<()> {
         define_with_ctx!(ctx_handle);
         let peer_addr = *extended_chans.0.remote_ip();
+        let encryption = extended_chans.0.is_encrypted();
 
         let mut peer =
             metadata::new_peer(ctx_handle.clone(), extended_chans, peer_reporter).await?;
         with_ctx!(|ctx| {
             // the bookkeeping below must be done _after_ creating the peer above,
             // otherwise it will be never undone in the case of a send/recv error
-            ctx.peer_states.set_origin(&peer_addr, origin);
+            ctx.peer_states.set_info(&peer_addr, origin, encryption);
         });
         while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
             match peer {
@@ -419,6 +425,7 @@ impl PeerConnector for PreliminaryConnectionData {
     async fn outbound_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -439,6 +446,7 @@ impl PeerConnector for PreliminaryConnectionData {
                 &local_peer_id,
                 &info_hash,
                 true, // extension_protocol_enabled
+                use_pe,
                 peer_addr,
                 local_port,
                 &self.pwp_worker_handle,
@@ -454,6 +462,7 @@ impl PeerConnector for PreliminaryConnectionData {
     async fn outbound_utp_connect_and_handshake(
         &self,
         peer_addr: SocketAddr,
+        use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
         let mut handle = self.ctx_handle.clone();
@@ -472,6 +481,7 @@ impl PeerConnector for PreliminaryConnectionData {
                 local_peer_id,
                 info_hash,
                 extension_protocol_enabled: true,
+                protocol_encryption_enabled: use_pe,
                 peer_addr,
                 deadline,
             })

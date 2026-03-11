@@ -1,3 +1,4 @@
+use crate::pe;
 use bitvec::prelude::*;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -37,10 +38,19 @@ impl Default for Handshake {
     }
 }
 
+macro_rules! decrypt_if_needed {
+    ($crypto:expr, $data:expr) => {
+        if let Some(crypto) = $crypto.as_mut() {
+            crypto.decryptor.decrypt($data);
+        }
+    };
+}
+
 pub(super) async fn do_handshake_incoming<S>(
     remote_ip: &SocketAddr,
     mut socket: S,
     local_handshake: &Handshake,
+    mut crypto: Option<&mut pe::Crypto>,
 ) -> io::Result<(S, Handshake)>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -52,15 +62,20 @@ where
 
     let mut remote_handshake = Handshake::default();
 
-    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved).await?;
+    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved, crypto.as_deref_mut())
+        .await?;
+
     socket.read_exact(&mut remote_handshake.info_hash).await?;
+    decrypt_if_needed!(crypto, &mut remote_handshake.info_hash);
     if local_handshake.info_hash != remote_handshake.info_hash {
         return Err(io::Error::other("info_hash doesn't match"));
     }
 
-    write_handshake(&mut socket, local_handshake).await?;
+    write_handshake(&mut socket, local_handshake, crypto.as_mut().map(|c| &mut c.encryptor))
+        .await?;
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
+    decrypt_if_needed!(crypto, &mut remote_handshake.peer_id);
     if remote_handshake.peer_id == local_handshake.peer_id {
         // possible because some trackers include our own external ip
         Err(io::Error::other("incoming connect from ourselves"))
@@ -79,6 +94,7 @@ pub(super) async fn do_handshake_outgoing<S>(
     mut socket: S,
     local_handshake: &Handshake,
     expected_remote_peer_id: Option<&[u8; 20]>,
+    mut crypto: Option<&mut pe::Crypto>,
 ) -> io::Result<(S, Handshake)>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -87,20 +103,23 @@ where
     // then wait for the entire remote handshake,
     log::debug!("Starting outgoing handshake with {remote_ip}");
 
-    write_handshake(&mut socket, local_handshake).await?;
+    write_handshake(&mut socket, local_handshake, crypto.as_mut().map(|c| &mut c.encryptor))
+        .await?;
 
     let mut remote_handshake = Handshake::default();
 
-    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved)
+    read_pstr_and_reserved(&mut socket, &mut remote_handshake.reserved, crypto.as_deref_mut())
         .await
         .map_err(io::Error::other)?; // convert to Other to avoid reconnect
 
     socket.read_exact(&mut remote_handshake.info_hash).await?;
+    decrypt_if_needed!(crypto, &mut remote_handshake.info_hash);
     if local_handshake.info_hash != remote_handshake.info_hash {
         return Err(io::Error::other("info_hash doesn't match"));
     }
 
     socket.read_exact(&mut remote_handshake.peer_id).await?;
+    decrypt_if_needed!(crypto, &mut remote_handshake.peer_id);
     if let Some(expected_pid) = expected_remote_peer_id
         && expected_pid != &remote_handshake.peer_id
     {
@@ -124,9 +143,11 @@ pub(crate) const PROTO_STR: &[u8] = b"\x13BitTorrent protocol";
 async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
     mut source: S,
     reserved: &mut ReservedBits,
+    mut crypto: Option<&mut pe::Crypto>,
 ) -> io::Result<()> {
     let mut pstr = [0u8; mem::size_of_val(PROTO_STR)];
     source.read_exact(&mut pstr).await?;
+    decrypt_if_needed!(crypto, &mut pstr);
     if pstr != PROTO_STR {
         return Err(io::Error::other(format!(
             "Unknown protocol: '{}'",
@@ -134,6 +155,7 @@ async fn read_pstr_and_reserved<S: AsyncReadExt + Unpin>(
         )));
     }
     source.read_exact(&mut reserved.data).await?;
+    decrypt_if_needed!(crypto, &mut reserved.data);
     Ok(())
 }
 
@@ -142,6 +164,7 @@ const TOTAL_HANDSHAKE_LEN: usize = mem::size_of::<Handshake>() + mem::size_of_va
 async fn write_handshake<S: AsyncWriteExt + Unpin>(
     mut sink: S,
     handshake: &Handshake,
+    encryptor: Option<&mut pe::Encryptor>,
 ) -> io::Result<()> {
     let mut buf = [MaybeUninit::uninit(); TOTAL_HANDSHAKE_LEN];
     let mut writer = ReadBuf::uninit(&mut buf);
@@ -150,6 +173,10 @@ async fn write_handshake<S: AsyncWriteExt + Unpin>(
     writer.put_slice(&handshake.reserved.data);
     writer.put_slice(&handshake.info_hash);
     writer.put_slice(&handshake.peer_id);
+
+    if let Some(enc) = encryptor {
+        enc.encrypt(writer.filled_mut())
+    }
 
     sink.write_all(writer.filled()).await?;
     sink.flush().await?;
@@ -186,13 +213,74 @@ mod tests {
                 client_stream,
                 &client_hs_data,
                 Some(&server_hs_data.peer_id),
+                None,
             )
             .await
             .unwrap()
             .1
         };
-        let server_hs_fut =
-            async { do_handshake_incoming(&IP, server_stream, &server_hs_data).await.unwrap().1 };
+        let server_hs_fut = async {
+            do_handshake_incoming(&IP, server_stream, &server_hs_data, None)
+                .await
+                .unwrap()
+                .1
+        };
+
+        let (received_server_hs, received_client_hs): (Handshake, Handshake) =
+            join!(client_hs_fut, server_hs_fut);
+
+        assert_eq!(server_hs_data, received_server_hs);
+        assert_eq!(client_hs_data, received_client_hs);
+        assert!(received_client_hs.reserved[44]);
+        assert!(received_client_hs.reserved[56]);
+    }
+
+    #[tokio::test]
+    async fn test_handshake_encrypted() {
+        let (server_stream, client_stream) = duplex(1024);
+        let info_hash = [7u8; 20];
+
+        let (outbound_enc, inbound_dec) = pe::crypto_pair(&info_hash);
+        let (inbound_enc, outbound_dec) = pe::crypto_pair(&info_hash);
+
+        let mut outbound_crypto = pe::Crypto {
+            encryptor: outbound_enc,
+            decryptor: outbound_dec,
+        };
+        let mut inbound_crypto = pe::Crypto {
+            encryptor: inbound_enc,
+            decryptor: inbound_dec,
+        };
+
+        let client_hs_data = Handshake {
+            peer_id: [1u8; 20],
+            info_hash: [7u8; 20],
+            reserved: BitArray::from([0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01]),
+        };
+        let server_hs_data = Handshake {
+            peer_id: [2u8; 20],
+            info_hash: [7u8; 20],
+            reserved: BitArray::ZERO,
+        };
+
+        let client_hs_fut = async {
+            do_handshake_outgoing(
+                &IP,
+                client_stream,
+                &client_hs_data,
+                Some(&server_hs_data.peer_id),
+                Some(&mut outbound_crypto),
+            )
+            .await
+            .unwrap()
+            .1
+        };
+        let server_hs_fut = async {
+            do_handshake_incoming(&IP, server_stream, &server_hs_data, Some(&mut inbound_crypto))
+                .await
+                .unwrap()
+                .1
+        };
 
         let (received_server_hs, received_client_hs): (Handshake, Handshake) =
             join!(client_hs_fut, server_hs_fut);
@@ -220,12 +308,13 @@ mod tests {
 
         let client_hs_fut = async {
             let result =
-                do_handshake_outgoing(&IP, client_stream, &client_hs_data, Some(&[0u8; 20])).await;
+                do_handshake_outgoing(&IP, client_stream, &client_hs_data, Some(&[0u8; 20]), None)
+                    .await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("remote peer_id doesn't match", error.to_string(),)
         };
         let server_hs_fut = async {
-            _ = do_handshake_incoming(&IP, server_stream, &server_hs_data).await;
+            _ = do_handshake_incoming(&IP, server_stream, &server_hs_data, None).await;
         };
         join!(client_hs_fut, server_hs_fut);
     }
@@ -241,12 +330,12 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            let result = do_handshake_outgoing(&IP, client_stream, &hs_data, None).await;
+            let result = do_handshake_outgoing(&IP, client_stream, &hs_data, None, None).await;
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &hs_data).await;
+            let result = do_handshake_incoming(&IP, server_stream, &hs_data, None).await;
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         };
@@ -269,11 +358,12 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            let result = do_handshake_outgoing(&IP, client_stream, &client_hs_data, None).await;
+            let result =
+                do_handshake_outgoing(&IP, client_stream, &client_hs_data, None, None).await;
             assert!(result.is_err());
         };
         let server_hs_fut = async {
-            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data).await;
+            let result = do_handshake_incoming(&IP, server_stream, &server_hs_data, None).await;
             let error: io::Error = result.err().unwrap();
             assert_eq!("info_hash doesn't match", error.to_string())
         };
@@ -298,7 +388,7 @@ mod tests {
         };
 
         let client_hs_fut = async {
-            do_handshake_outgoing(&IP, client_stream, &client_hs_data, None)
+            do_handshake_outgoing(&IP, client_stream, &client_hs_data, None, None)
                 .await
                 .unwrap()
                 .1
