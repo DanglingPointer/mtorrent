@@ -26,7 +26,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Build executables
-      run: cargo build --release --bin mtorrent-cli --bin dht_node --bin prettyprint
+      run: cargo build --release --bin mtorrent-cli --bin dht_node
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
@@ -34,7 +34,6 @@ jobs:
         path: |
           target/release/mtorrent-cli${{ matrix.platform.ext }}
           target/release/dht_node${{ matrix.platform.ext }}
-          target/release/prettyprint${{ matrix.platform.ext }}
 
   create-release:
     runs-on: ubuntu-latest
