@@ -4,7 +4,7 @@ use mtorrent_utils::split_stream::SplitStream;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use std::{cmp, io, mem};
+use std::{cmp, io};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, Chain, ReadBuf};
 
 pin_project! {
@@ -229,9 +229,9 @@ impl<T: Buf, S> PrefixedStream<T, S> {
         Self { prefix, stream }
     }
 
-    /// Replaces the prefix buffer with a new one.
-    pub fn replace_prefix(&mut self, new_prefix: T) -> T {
-        mem::replace(&mut self.prefix, new_prefix)
+    /// Consumes the `PrefixedStream`, returning the prefix buffer and the wrapped stream.
+    pub fn into_parts(self) -> (T, S) {
+        (self.prefix, self.stream)
     }
 }
 

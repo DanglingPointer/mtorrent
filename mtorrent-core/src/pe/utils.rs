@@ -1,11 +1,11 @@
 use super::{Decryptor, PrefixedStream};
 use crate::pwp::PROTOCOL_STRING;
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 use std::io;
 use std::mem::MaybeUninit;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
-/// Return value of [`is_stream_unencrypted()`].
+/// Return value of [`detect_encryption()`].
 pub enum MaybeEncrypted<T> {
     Plain(T),
     Encrypted(T),
@@ -13,14 +13,14 @@ pub enum MaybeEncrypted<T> {
 
 /// Determine if the stream is likely encrypted or not by checking if the first bytes match the
 /// BitTorrent protocol string.
-pub async fn is_stream_unencrypted<S: AsyncRead + Unpin>(
+pub async fn detect_encryption<S: AsyncRead + Unpin>(
     mut stream: S,
-) -> io::Result<MaybeEncrypted<PrefixedStream<Bytes, S>>> {
+) -> io::Result<MaybeEncrypted<PrefixedStream<io::Cursor<[u8; PROTOCOL_STRING.len()]>, S>>> {
     let mut buf = [0u8; PROTOCOL_STRING.len()];
     stream.read_exact(&mut buf).await?;
 
-    let buf = Bytes::copy_from_slice(&buf);
-    if buf == PROTOCOL_STRING {
+    let buf = io::Cursor::new(buf);
+    if buf.get_ref() == PROTOCOL_STRING {
         Ok(MaybeEncrypted::Plain(PrefixedStream::new(buf, stream)))
     } else {
         Ok(MaybeEncrypted::Encrypted(PrefixedStream::new(buf, stream)))
@@ -313,7 +313,7 @@ mod tests {
     #[tokio::test]
     async fn test_is_stream_unencrypted() {
         let unencrypted_stream = io::Cursor::new(PROTOCOL_STRING);
-        match is_stream_unencrypted(unencrypted_stream).await.unwrap() {
+        match detect_encryption(unencrypted_stream).await.unwrap() {
             MaybeEncrypted::Plain(mut stream) => {
                 let mut buf = Vec::new();
                 stream.read_to_end(&mut buf).await.unwrap();
@@ -323,7 +323,7 @@ mod tests {
         }
 
         let encrypted_stream = io::Cursor::new(b"not the protocol string");
-        match is_stream_unencrypted(encrypted_stream).await.unwrap() {
+        match detect_encryption(encrypted_stream).await.unwrap() {
             MaybeEncrypted::Plain(_) => panic!("encrypted stream misclassified as unencrypted"),
             MaybeEncrypted::Encrypted(mut stream) => {
                 let mut buf = Vec::new();

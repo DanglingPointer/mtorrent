@@ -80,7 +80,7 @@ pub async fn new_inbound_connection(
     let info_hash = *info_hash;
     pwp_runtime
         .spawn(async move {
-            match pe::is_stream_unencrypted(stream).await? {
+            match pe::detect_encryption(stream).await? {
                 pe::MaybeEncrypted::Plain(stream) => {
                     pwp::channels_for_inbound_connection(
                         &local_peer_id,
@@ -96,7 +96,8 @@ pub async fn new_inbound_connection(
                     let mut ia_buffer = BytesMut::new();
                     let crypto =
                         pe::inbound_handshake(&mut stream, &info_hash, &mut ia_buffer).await?;
-                    stream.replace_prefix(ia_buffer.freeze());
+                    let (_, stream) = stream.into_parts();
+                    let stream = pe::PrefixedStream::new(ia_buffer, stream);
                     pwp::channels_for_inbound_connection(
                         &local_peer_id,
                         &info_hash,

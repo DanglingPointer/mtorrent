@@ -167,7 +167,7 @@ async fn bridge_task(
                         let ret = time::timeout_at(args.deadline, async {
                             let stream =
                                 spawner.inbound_connection(args.peer_addr, args.data).await?;
-                            match pe::is_stream_unencrypted(stream).await? {
+                            match pe::detect_encryption(stream).await? {
                                 pe::MaybeEncrypted::Plain(stream) => {
                                     pwp::channels_for_inbound_connection(
                                         &args.local_peer_id,
@@ -187,7 +187,8 @@ async fn bridge_task(
                                         &mut ia_buffer,
                                     )
                                     .await?;
-                                    stream.replace_prefix(ia_buffer.freeze());
+                                    let (_, stream) = stream.into_parts();
+                                    let stream = pe::PrefixedStream::new(ia_buffer, stream);
                                     pwp::channels_for_inbound_connection(
                                         &args.local_peer_id,
                                         &args.info_hash,
