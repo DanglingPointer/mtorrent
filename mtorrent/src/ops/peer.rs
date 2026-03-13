@@ -125,6 +125,7 @@ async fn run_optional_extensions(peer: Option<extensions::Peer>) -> io::Result<(
 
 async fn run_peer_connection(
     origin: pwp::PeerOrigin,
+    transport: pwp::TransportProto,
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: Option<pwp::ExtendedChannels>,
@@ -176,7 +177,7 @@ async fn run_peer_connection(
 
     data.ctx_handle
         .clone()
-        .with(|ctx| ctx.peer_states.set_info(&remote_ip, origin, encryption));
+        .with(|ctx| ctx.peer_states.set_info(&remote_ip, origin, transport, encryption));
 
     try_join!(
         run_download(download.into(), remote_ip, data.ctx_handle.clone()),
@@ -326,10 +327,12 @@ impl PeerConnector for MainConnectionData {
     async fn run_connection(
         &self,
         origin: pwp::PeerOrigin,
+        transport: pwp::TransportProto,
         connection: Self::PeerConnection,
     ) -> io::Result<()> {
         let (download_chans, upload_chans, extended_chans) = connection;
-        run_peer_connection(origin, download_chans, upload_chans, extended_chans, self).await
+        run_peer_connection(origin, transport, download_chans, upload_chans, extended_chans, self)
+            .await
     }
 }
 
@@ -337,6 +340,7 @@ impl PeerConnector for MainConnectionData {
 
 async fn run_metadata_download(
     origin: pwp::PeerOrigin,
+    transport: pwp::TransportProto,
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: pwp::ExtendedChannels,
@@ -361,6 +365,7 @@ async fn run_metadata_download(
     }
     async fn handle_metadata(
         origin: pwp::PeerOrigin,
+        transport: pwp::TransportProto,
         extended_chans: pwp::ExtendedChannels,
         mut ctx_handle: PreliminaryHandle,
         peer_reporter: PeerReporter,
@@ -374,7 +379,7 @@ async fn run_metadata_download(
         with_ctx!(|ctx| {
             // the bookkeeping below must be done _after_ creating the peer above,
             // otherwise it will be never undone in the case of a send/recv error
-            ctx.peer_states.set_info(&peer_addr, origin, encryption);
+            ctx.peer_states.set_info(&peer_addr, origin, transport, encryption);
         });
         while with_ctx!(|ctx| !ctrl::verify_metadata(ctx)) {
             match peer {
@@ -395,7 +400,7 @@ async fn run_metadata_download(
     try_join!(
         handle_download(download_chans),
         handle_upload(upload_chans),
-        handle_metadata(origin, extended_chans, ctx_handle, peer_reporter),
+        handle_metadata(origin, transport, extended_chans, ctx_handle, peer_reporter),
     )?;
     Ok(())
 }
@@ -553,11 +558,13 @@ impl PeerConnector for PreliminaryConnectionData {
     async fn run_connection(
         &self,
         origin: pwp::PeerOrigin,
+        transport: pwp::TransportProto,
         connection: Self::PeerConnection,
     ) -> io::Result<()> {
         let (download_chans, upload_chans, extended_chans) = connection;
         run_metadata_download(
             origin,
+            transport,
             download_chans,
             upload_chans,
             extended_chans,

@@ -15,6 +15,12 @@ pub enum PeerOrigin {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize)]
+pub enum TransportProto {
+    Tcp,
+    Utp,
+}
+
 /// The current state of the download of data from a remote peer.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +92,7 @@ pub struct PeerState {
     pub upload: UploadState,
     pub extensions: Option<Box<super::ExtendedHandshake>>,
     pub origin: PeerOrigin,
+    pub transport: Option<TransportProto>,
     pub encryption: bool,
     pub last_download_time: Instant,
     pub last_upload_time: Instant,
@@ -99,6 +106,7 @@ impl Default for PeerState {
             extensions: None,
             encryption: false,
             origin: Default::default(),
+            transport: None,
             last_download_time: Instant::now(),
             last_upload_time: Instant::now(),
         }
@@ -124,6 +132,7 @@ impl Serialize for PeerState {
     ///   "client": "n/a",
     ///   "reqq": null,
     ///   "origin": "Tracker",
+    ///   "proto": null,
     ///   "encrypted": false
     /// }
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -137,6 +146,7 @@ impl Serialize for PeerState {
             client: &'a str,
             reqq: Option<usize>,
             origin: PeerOrigin,
+            proto: Option<TransportProto>,
             encrypted: bool,
         }
         let data = Data {
@@ -149,6 +159,7 @@ impl Serialize for PeerState {
                 .unwrap_or("n/a"),
             reqq: self.extensions.as_ref().and_then(|ext| ext.request_limit),
             origin: self.origin,
+            proto: self.transport,
             encrypted: self.encryption,
         };
         data.serialize(serializer)
@@ -206,9 +217,16 @@ impl PeerStates {
     }
 
     /// Update how the peer at `remote_ip` was discovered.
-    pub fn set_info(&mut self, remote_ip: &SocketAddr, origin: PeerOrigin, encryption: bool) {
+    pub fn set_info(
+        &mut self,
+        remote_ip: &SocketAddr,
+        origin: PeerOrigin,
+        transport: TransportProto,
+        encryption: bool,
+    ) {
         let state = self.peers.entry(*remote_ip).or_default();
         state.origin = origin;
+        state.transport = Some(transport);
         state.encryption = encryption;
     }
 

@@ -1,4 +1,4 @@
-use mtorrent_core::pwp::{PeerOrigin, PeerState};
+use mtorrent_core::pwp::{PeerOrigin, PeerState, TransportProto};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -90,6 +90,13 @@ impl fmt::Display for StateSnapshot<'_> {
                 PeerOrigin::Other => "other",
             }
         }
+        fn proto_str(transport: Option<TransportProto>) -> &'static str {
+            match transport {
+                Some(TransportProto::Utp) => "uTP",
+                Some(TransportProto::Tcp) => "TCP",
+                None => "n/a",
+            }
+        }
         writeln!(
             f,
             "Local availability: pieces={}/{} bytes={}/{} metainfo={}/{}",
@@ -109,10 +116,11 @@ impl fmt::Display for StateSnapshot<'_> {
         for (addr, state) in &self.peers {
             write!(
                 f,
-                "\n[ {:^21} ]     origin: {:<12} encrypted: {:<12}",
+                "\n[ {:^21} ]     origin: {:<12} encrypted: {:<8} proto: {:<8}",
                 addr,
                 origin_str(state.origin),
-                if state.encryption { "🔒" } else { "❌" }
+                if state.encryption { "🔒" } else { "❌" },
+                proto_str(state.transport)
             )?;
             if let Some(hs) = &state.extensions {
                 write!(

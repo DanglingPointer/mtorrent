@@ -180,6 +180,7 @@ pub fn dbg_hdr_and_ext(header: &Header, payload: &[u8]) -> impl fmt::Debug {
     Dump { header, payload }
 }
 
+#[derive(Debug)]
 pub struct ConnectionState {
     conn_id_recv: u16,
     conn_id_send: u16,

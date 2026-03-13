@@ -200,8 +200,15 @@ impl PeerBuilder {
                 piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
                 utp_handle: UtpHandle::new_mock(),
             };
-            super::run_peer_connection(pwp::PeerOrigin::Other, dlchans, ulchans, extchans, &data)
-                .await
+            super::run_peer_connection(
+                pwp::PeerOrigin::Other,
+                pwp::TransportProto::Tcp,
+                dlchans,
+                ulchans,
+                extchans,
+                &data,
+            )
+            .await
         };
 
         (ctx_handle_clone, Box::pin(run_future))
@@ -237,6 +244,7 @@ impl PeerBuilder {
 
         let run_future = super::run_metadata_download(
             pwp::PeerOrigin::Other,
+            pwp::TransportProto::Tcp,
             dlchans,
             ulchans,
             extchans.unwrap(),

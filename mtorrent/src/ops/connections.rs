@@ -1,6 +1,6 @@
 use derive_more::Debug;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_core::pwp::{PeerOrigin, TransportProto};
 use mtorrent_core::utp;
 use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
 use rand::RngExt;
@@ -116,6 +116,7 @@ pub trait PeerConnector {
     fn run_connection(
         &self,
         origin: PeerOrigin,
+        transport: TransportProto,
         connection: Self::PeerConnection,
     ) -> impl Future<Output = io::Result<()>>;
 }
@@ -312,10 +313,10 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     let connect_result = select! {
         biased;
         Some(tcp_connection) = tcp_connect => {
-            Ok(tcp_connection)
+            Ok((tcp_connection, TransportProto::Tcp))
         }
         Some(utp_connection) = utp_connect => {
-            Ok(utp_connection)
+            Ok((utp_connection, TransportProto::Utp))
         }
         else => {
             if let Some(e) = non_fatal_error.into_inner() {
@@ -328,7 +329,7 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         }
     };
 
-    let connection = match connect_result {
+    let (connection, transport) = match connect_result {
         Ok(connection) => connection,
         Err(e) => {
             if connect.attempt < connector.max_connect_retries() && !is_fatal_error(&e) {
@@ -348,7 +349,7 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     log::debug!("{connect:?} succeeded");
     let connected_time = Instant::now();
 
-    let run_result = connector.run_connection(connect.origin, connection).await;
+    let run_result = connector.run_connection(connect.origin, transport, connection).await;
 
     // Fatal error means we disconnected the peer intentionally, and
     // <5s since connect means peer probably didn't like our handshake.
@@ -381,22 +382,24 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     log::debug!("{connect:?} accepted");
     let connect_deadline = Instant::now() + with_jitter(connector.connect_retry_interval());
 
-    let connection = match connect.data {
-        InboundData::Tcp(stream) => {
+    let (connection, transport) = match connect.data {
+        InboundData::Tcp(stream) => (
             connector
                 .inbound_connect_and_handshake(connect.addr, connect_deadline, stream)
-                .await?
-        }
-        InboundData::Utp(data) => {
+                .await?,
+            TransportProto::Tcp,
+        ),
+        InboundData::Utp(data) => (
             connector
                 .inbound_utp_connect_and_handshake(connect.addr, connect_deadline, data)
-                .await?
-        }
+                .await?,
+            TransportProto::Utp,
+        ),
     };
 
     log::debug!("Inbound connection from {} succeeded", connect.addr);
 
-    let run_result = connector.run_connection(PeerOrigin::Listener, connection).await;
+    let run_result = connector.run_connection(PeerOrigin::Listener, transport, connection).await;
 
     // Fatal error means we disconnected the peer intentionally
     if let Err(e) = &run_result
@@ -657,12 +660,13 @@ mod tests {
         connector
             .expect_run_connection()
             .once()
-            .withf(move |origin, c| {
+            .withf(move |origin, transport, c| {
                 *origin == PeerOrigin::Tracker
+                    && *transport == TransportProto::Tcp
                     && *c == 43
                     && Instant::now() == start_time + sec!(20)
             })
-            .returning(|_, _| pending::<io::Result<()>>().boxed());
+            .returning(|_, _, _| pending::<io::Result<()>>().boxed());
 
         run_in_local_set! {
             let (reporter, ctrl) = connect_control(move |_| connector);
@@ -740,8 +744,8 @@ mod tests {
             connector
                 .expect_run_connection()
                 .times(9)
-                .with(eq(PeerOrigin::Tracker), eq(42))
-                .returning(move |_, _| {
+                .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+                .returning(move |_, _, _| {
                     async move {
                         sleep(sec!(6)).await;
                         Err(io::Error::from(error_kind))
@@ -780,8 +784,8 @@ mod tests {
         connector
             .expect_run_connection()
             .once()
-            .with(eq(PeerOrigin::Tracker), eq(42))
-            .returning(move |_, _| {
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .returning(move |_, _, _| {
                 async move {
                     sleep(sec!(20)).await;
                     Err(io::Error::from(error_kind))
@@ -821,8 +825,8 @@ mod tests {
         connector
             .expect_run_connection()
             .once()
-            .with(eq(PeerOrigin::Tracker), eq(42))
-            .returning(move |_, _| {
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .returning(move |_, _, _| {
                 async move {
                     sleep(sec!(5)).await;
                     Err(io::Error::from(io::ErrorKind::UnexpectedEof))
@@ -864,8 +868,8 @@ mod tests {
             connector
                 .expect_run_connection()
                 .once()
-                .with(eq(PeerOrigin::Tracker), eq(port as i32))
-                .returning(|_, _| pending::<io::Result<()>>().boxed());
+                .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(port as i32))
+                .returning(|_, _, _| pending::<io::Result<()>>().boxed());
         }
 
         run_in_local_set! {
@@ -1026,8 +1030,8 @@ mod tests {
         connector
             .expect_run_connection()
             .once()
-            .with(eq(PeerOrigin::Tracker), eq(42))
-            .return_once(move |_, _| {
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .return_once(move |_, _, _| {
                 async move {
                     let _token = token_clone;
                     pending::<io::Result<()>>().await
@@ -1072,8 +1076,8 @@ mod tests {
         connector
             .expect_run_connection()
             .once()
-            .with(eq(PeerOrigin::Tracker), eq(42))
-            .return_once(move |_, _| {
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .return_once(move |_, _, _| {
                 async move {
                     let _token = token_clone;
                     pending::<io::Result<()>>().await

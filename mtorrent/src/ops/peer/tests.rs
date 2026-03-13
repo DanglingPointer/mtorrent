@@ -159,8 +159,12 @@ async fn run_listening_seeder(
     let deadline = Instant::now() + data.connect_retry_interval();
     let (dl_chan, ul_chan, ext_chan) =
         data.inbound_connect_and_handshake(addr, deadline, stream).await?;
-    data.run_connection(pwp::PeerOrigin::Listener, (dl_chan, ul_chan, ext_chan))
-        .await?;
+    data.run_connection(
+        pwp::PeerOrigin::Listener,
+        pwp::TransportProto::Tcp,
+        (dl_chan, ul_chan, ext_chan),
+    )
+    .await?;
 
     Ok(())
 }
