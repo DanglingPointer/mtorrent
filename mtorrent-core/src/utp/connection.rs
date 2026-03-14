@@ -86,7 +86,7 @@ impl EgressProcessor {
                     }
                     send_data_if_ready!();
                 }
-                packet = retransmitter.next_retransmit() => {
+                Some(packet) = retransmitter.next() => {
                     self.sender.send(packet).await?;
                     // max packet size might've changed, update send_buffer
                     resize_send_buf(&mut send_buffer, retransmitter.packet_size());

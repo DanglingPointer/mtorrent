@@ -4,7 +4,6 @@ use super::utils::{consume_encrypted, consume_through, sha1_of, xor_arrays};
 use bytes::{Buf, BufMut};
 use crypto_bigint::{Encoding, U768};
 use mtorrent_utils::split_stream::SplitStream;
-use std::borrow::BorrowMut;
 use std::mem::MaybeUninit;
 use std::{cmp, io};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -25,13 +24,13 @@ const fn max_pe4_len() -> usize {
     VC_LEN + 4 /* crypto_select */ + 2 /* padding_len */ + MAX_PADDING_LEN
 }
 
-async fn read_remote_pubkey(mut stream: impl AsyncReadExt + Unpin) -> io::Result<U768> {
+async fn read_remote_pubkey<S: AsyncReadExt + Unpin>(stream: &mut S) -> io::Result<U768> {
     let mut buf = [0u8; DhKeyExchange::KEY_SIZE];
     stream.read_exact(&mut buf).await?;
     Ok(U768::from_be_bytes(buf.into()))
 }
 
-async fn write_padding(mut stream: impl AsyncWriteExt + Unpin) -> io::Result<()> {
+async fn write_padding<S: AsyncWriteExt + Unpin>(stream: &mut S) -> io::Result<()> {
     let padding: [u8; MAX_PADDING_LEN] = rand::random();
     let len = rand::random::<u16>() as usize % MAX_PADDING_LEN;
     stream.write_all(&padding[..len]).await
@@ -55,7 +54,7 @@ pub async fn outbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
     stream.write_all(&dh.local_pubkey().to_be_bytes()).await?;
 
     // receive remote pubkey
-    let remote_pubkey = read_remote_pubkey(stream.borrow_mut()).await?;
+    let remote_pubkey = read_remote_pubkey(stream).await?;
 
     // set up rc4
     let secret = dh.into_shared_secret(&remote_pubkey);
@@ -116,7 +115,7 @@ pub async fn outbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
             vc
         };
         consume_through(
-            ingress.borrow_mut().take((MAX_PADDING_LEN + VC_LEN) as u64),
+            (&mut ingress).take((MAX_PADDING_LEN + VC_LEN) as u64),
             &expected_remote_vc,
         )
         .await?;
@@ -143,13 +142,8 @@ pub async fn outbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
         }
 
         // decrypt and discard padding D
-        consume_encrypted::<MAX_PADDING_LEN>(
-            ingress.borrow_mut(),
-            padding_d_len,
-            &mut decryptor,
-            "padding D",
-        )
-        .await?;
+        consume_encrypted::<MAX_PADDING_LEN>(ingress, padding_d_len, &mut decryptor, "padding D")
+            .await?;
         Ok(())
     };
 
@@ -175,11 +169,11 @@ pub async fn inbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
     let dh = DhKeyExchange::default();
 
     // receive remote pubkey
-    let remote_pubkey = read_remote_pubkey(stream.borrow_mut()).await?;
+    let remote_pubkey = read_remote_pubkey(stream).await?;
 
     // send pubkey + padding B
     stream.write_all(&dh.local_pubkey().to_be_bytes()).await?;
-    write_padding(stream.borrow_mut()).await?;
+    write_padding(stream).await?;
 
     // set up rc4
     let secret = dh.into_shared_secret(&remote_pubkey);
@@ -189,7 +183,7 @@ pub async fn inbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
     // read and discard remote padding A
     let expected_hash_req1_s = sha1_of![b"req1", &secret];
     consume_through(
-        stream.borrow_mut().take((MAX_PADDING_LEN + expected_hash_req1_s.len()) as u64),
+        stream.take((MAX_PADDING_LEN + expected_hash_req1_s.len()) as u64),
         &expected_hash_req1_s,
     )
     .await?;
@@ -242,7 +236,7 @@ pub async fn inbound_handshake<S: AsyncRead + AsyncWrite + SplitStream>(
     let read_pad_c_ia = async {
         // decrypt and discard padding C
         consume_encrypted::<MAX_PADDING_LEN>(
-            ingress.borrow_mut(),
+            &mut ingress,
             padding_c_len,
             &mut decryptor,
             "padding C",

@@ -18,12 +18,13 @@ pub async fn detect_encryption<S: AsyncRead + Unpin>(
 ) -> io::Result<MaybeEncrypted<PrefixedStream<io::Cursor<[u8; PROTOCOL_STRING.len()]>, S>>> {
     let mut buf = [0u8; PROTOCOL_STRING.len()];
     stream.read_exact(&mut buf).await?;
+    let is_unecrypted = buf == PROTOCOL_STRING;
 
-    let buf = io::Cursor::new(buf);
-    if buf.get_ref() == PROTOCOL_STRING {
-        Ok(MaybeEncrypted::Plain(PrefixedStream::new(buf, stream)))
+    let stream = PrefixedStream::new(io::Cursor::new(buf), stream);
+    if is_unecrypted {
+        Ok(MaybeEncrypted::Plain(stream))
     } else {
-        Ok(MaybeEncrypted::Encrypted(PrefixedStream::new(buf, stream)))
+        Ok(MaybeEncrypted::Encrypted(stream))
     }
 }
 

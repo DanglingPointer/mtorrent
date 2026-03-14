@@ -1,8 +1,8 @@
 use super::seq::Seq;
 use bytes::Bytes;
+use futures_util::Stream;
 use local_async_utils::prelude::*;
 use std::collections::VecDeque;
-use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -29,6 +29,19 @@ pub struct Retransmitter {
     timeout: Duration,
     duplicate_ack_count: usize,
     packet_size: usize,
+}
+
+impl Stream for Retransmitter {
+    type Item = Bytes;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.send_queue.is_empty() {
+            self.as_mut().timer.set(None);
+            Poll::Ready(None)
+        } else {
+            self.get_mut().poll_next_retransmit(cx).map(Some)
+        }
+    }
 }
 
 impl Retransmitter {
@@ -78,10 +91,6 @@ impl Retransmitter {
         } else {
             Poll::Pending
         }
-    }
-
-    pub async fn next_retransmit(&mut self) -> Bytes {
-        poll_fn(|cx| self.poll_next_retransmit(cx)).await
     }
 
     pub fn add_new_packet(&mut self, packet: Bytes, seq_nr: Seq) {
@@ -154,7 +163,7 @@ impl Retransmitter {
 mod tests {
     use super::super::seq::seq;
     use super::*;
-    use futures_util::FutureExt;
+    use futures_util::{FutureExt, StreamExt};
     use tokio::time;
 
     #[tokio::test(start_paused = true)]
@@ -167,11 +176,11 @@ mod tests {
         assert_eq!(retransmitter.send_queue.len(), 2);
 
         for i in 1..=2 {
-            let retransmit = retransmitter.next_retransmit().await;
+            let retransmit = retransmitter.next().await.unwrap();
             assert_eq!(&retransmit[..], b"packet1");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
 
-            let retransmit = retransmitter.next_retransmit().await;
+            let retransmit = retransmitter.next().await.unwrap();
             assert_eq!(&retransmit[..], b"packet2");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
         }
@@ -181,14 +190,14 @@ mod tests {
         assert_eq!(retransmitter.send_queue.len(), 1);
 
         for i in 3..=4 {
-            let retransmit = retransmitter.next_retransmit().await;
+            let retransmit = retransmitter.next().await.unwrap();
             assert_eq!(&retransmit[..], b"packet2");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO * i);
         }
 
         retransmitter.process_ack(seq(2));
         assert_eq!(retransmitter.send_queue.len(), 0);
-        time::timeout(Duration::MAX, retransmitter.next_retransmit()).await.unwrap_err();
+        assert!(retransmitter.next().await.is_none());
     }
 
     #[tokio::test(start_paused = true)]
@@ -197,7 +206,7 @@ mod tests {
 
         retransmitter.add_new_packet(Bytes::from_static(b"packet0"), seq(10));
         retransmitter.process_ack(seq(10));
-        time::timeout(Duration::MAX, retransmitter.next_retransmit()).await.unwrap_err();
+        assert!(retransmitter.next().await.is_none());
 
         let send_time = Instant::now();
         retransmitter.add_new_packet(Bytes::from_static(b"packet1"), seq(11));
@@ -209,16 +218,16 @@ mod tests {
         time::sleep(millisec!(10)).await;
         retransmitter.process_ack(seq(10));
 
-        let retransmit = retransmitter.next_retransmit().now_or_never().unwrap();
+        let retransmit = retransmitter.next().now_or_never().unwrap().unwrap();
         assert_eq!(&retransmit[..], b"packet1");
-        assert!(retransmitter.next_retransmit().now_or_never().is_none());
+        assert!(retransmitter.next().now_or_never().is_none());
 
         for i in 1..=2 {
-            let retransmit = retransmitter.next_retransmit().await;
+            let retransmit = retransmitter.next().await.unwrap();
             assert_eq!(&retransmit[..], b"packet2");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i);
 
-            let retransmit = retransmitter.next_retransmit().await;
+            let retransmit = retransmitter.next().await.unwrap();
             assert_eq!(&retransmit[..], b"packet1");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i + millisec!(20));
         }
