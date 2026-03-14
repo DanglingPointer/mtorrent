@@ -14,9 +14,8 @@ impl Seq {
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 #[inline]
-pub fn seq(seq_nr: u16) -> Seq {
+pub const fn seq(seq_nr: u16) -> Seq {
     Seq(seq_nr)
 }
 

@@ -1,4 +1,4 @@
-use super::seq::Seq;
+use super::seq::{Seq, seq};
 use bytes::{Buf, BufMut};
 use log::log_enabled;
 use std::time::{Duration, UNIX_EPOCH};
@@ -184,7 +184,7 @@ pub fn dbg_hdr_and_ext(header: &Header, payload: &[u8]) -> impl fmt::Debug {
 pub struct ConnectionState {
     conn_id_recv: u16,
     conn_id_send: u16,
-    last_local_seq: Seq,  // last tx seq_nr
+    next_local_seq: Seq,  // next tx seq_nr
     last_remote_seq: Seq, // last rx seq_nr
     remote_wnd: u32,
     local_wnd: u32,
@@ -205,7 +205,7 @@ pub enum ValidationError {
 }
 
 impl ConnectionState {
-    const MAX_LOCAL_WINDOW: u32 = 1024 * 32;
+    const MAX_LOCAL_WINDOW: u32 = 128 * 1024;
     const MIN_LOCAL_WINDOW: u32 = 1024;
     const MIN_WINDOW: u32 = 150;
 
@@ -214,7 +214,7 @@ impl ConnectionState {
         Self {
             conn_id_recv,
             conn_id_send,
-            last_local_seq: Seq::ZERO,
+            next_local_seq: Seq::ZERO,
             last_remote_seq: Seq::ZERO,
             remote_wnd: 0,
             local_wnd: Self::MAX_LOCAL_WINDOW,
@@ -227,7 +227,7 @@ impl ConnectionState {
         Self {
             conn_id_recv: syn.connection_id.wrapping_add(1),
             conn_id_send: syn.connection_id,
-            last_local_seq: rand::random::<u16>().into(),
+            next_local_seq: rand::random::<u16>().into(),
             last_remote_seq: syn.seq_nr,
             remote_wnd: syn.wnd_size,
             local_wnd: Self::MAX_LOCAL_WINDOW,
@@ -252,31 +252,21 @@ impl ConnectionState {
             return Err(ValidationError::Invalid("unexpected connection ID"));
         }
 
-        if received_header.ack_nr > self.last_local_seq {
+        if let TypeVer::Syn = received_header.type_ver() {
+            return Err(ValidationError::Duplicate);
+        }
+
+        if received_header.ack_nr >= self.next_local_seq {
             return Err(ValidationError::Invalid("invalid ack nr"));
         }
 
-        match received_header.type_ver {
-            TypeVer::Syn => {
-                if received_header.seq_nr != Seq::ONE {
-                    return Err(ValidationError::Invalid("SYN must have seq 1"));
-                }
-            }
-            TypeVer::Data => {
-                if received_header.seq_nr <= self.last_remote_seq {
-                    return Err(ValidationError::Duplicate);
-                }
-            }
-            TypeVer::State | TypeVer::Fin | TypeVer::Reset => {
-                if received_header.seq_nr < self.last_remote_seq {
-                    return Err(ValidationError::Duplicate);
-                }
-            }
+        if received_header.seq_nr <= self.last_remote_seq {
+            return Err(ValidationError::Duplicate);
         }
 
-        if received_header.seq_nr > self.last_remote_seq + Seq::ONE {
+        if received_header.seq_nr > self.last_remote_seq + seq(1) {
             return Err(ValidationError::OutOfOrder {
-                expected_seq: self.last_remote_seq + Seq::ONE,
+                expected_seq: self.last_remote_seq + seq(1),
                 received_seq: received_header.seq_nr,
             });
         }
@@ -286,8 +276,11 @@ impl ConnectionState {
 
     pub fn process_header(&mut self, received_header: &Header) {
         self.remote_wnd = cmp::max(received_header.wnd_size, Self::MIN_WINDOW);
-        if received_header.type_ver != TypeVer::State || self.last_remote_seq == Seq::ZERO {
+        if received_header.type_ver != TypeVer::State {
             self.last_remote_seq = received_header.seq_nr;
+        } else if self.last_remote_seq == Seq::ZERO {
+            // initial STATE packet during outbound handshake
+            self.last_remote_seq = received_header.seq_nr - seq(1);
         }
         if received_header.timestamp_us != 0 {
             self.reply_micro = current_timestamp_us() - received_header.timestamp_us;
@@ -295,8 +288,9 @@ impl ConnectionState {
     }
 
     pub fn generate_header(&mut self, type_ver: TypeVer) -> Header {
+        let seq_nr = self.next_local_seq;
         if type_ver != TypeVer::State {
-            self.last_local_seq.increment();
+            self.next_local_seq.increment();
         }
         Header {
             type_ver,
@@ -309,7 +303,7 @@ impl ConnectionState {
             timestamp_us: current_timestamp_us(),
             timestamp_diff_us: self.reply_micro,
             wnd_size: self.local_wnd,
-            seq_nr: self.last_local_seq,
+            seq_nr,
             ack_nr: self.last_remote_seq,
         }
     }
@@ -471,5 +465,149 @@ mod tests {
     #[test]
     fn test_current_timestamp() {
         assert_ne!(current_timestamp_us(), 0);
+    }
+
+    #[test]
+    fn test_outbound_handshake_sequence() {
+        // Test the outbound handshake sequence as done in Connection::outbound()
+        let conn_id_recv = 0x1234;
+        let mut state = ConnectionState::new_outbound(conn_id_recv);
+
+        // Verify initial state
+        assert_eq!(state.conn_id_recv, conn_id_recv);
+        assert_eq!(state.conn_id_send, conn_id_recv.wrapping_add(1));
+        assert_eq!(state.next_local_seq, Seq::ZERO);
+        assert_eq!(state.last_remote_seq, Seq::ZERO);
+        assert_eq!(state.local_wnd, ConnectionState::MAX_LOCAL_WINDOW);
+        assert_eq!(state.remote_wnd, 0);
+
+        // Step 1: Generate SYN header (as done in Connection::outbound)
+        let syn_header = state.generate_header(TypeVer::Syn);
+
+        // Verify SYN header properties
+        assert_eq!(syn_header.type_ver(), TypeVer::Syn);
+        assert_eq!(syn_header.connection_id, conn_id_recv); // SYN uses conn_id_recv
+        assert_eq!(syn_header.seq_nr(), Seq::ZERO); // First packet starts at 0
+        assert_eq!(syn_header.ack_nr(), Seq::ZERO); // No remote seq received yet
+        assert_eq!(syn_header.wnd_size, ConnectionState::MAX_LOCAL_WINDOW);
+
+        // After generating SYN, next_local_seq should be incremented
+        assert_eq!(state.next_local_seq, Seq::ONE);
+
+        // Step 2: Simulate receiving STATE response from remote
+        let remote_seq = Seq::from(42);
+        let remote_window = 2048;
+        let state_response = Header {
+            type_ver: TypeVer::State,
+            extension: 0,
+            connection_id: state.conn_id_recv,
+            timestamp_us: 100,
+            timestamp_diff_us: 0,
+            wnd_size: remote_window,
+            seq_nr: remote_seq,
+            ack_nr: Seq::ZERO, // Acknowledging our SYN
+        };
+
+        // Step 3: Process the STATE response (as done in Connection::outbound)
+        FAKE_CURRENT_TIMESTAMP_US.set(Some(200));
+        state.process_header(&state_response);
+
+        // Verify state after processing STATE response
+        assert_eq!(state.last_remote_seq, remote_seq - Seq::ONE); // Initial STATE sets to seq_nr - 1
+        assert_eq!(state.remote_wnd, remote_window);
+        assert_eq!(state.reply_micro, 100); // 200 - 100
+
+        // The connection should now be ready for data exchange
+        // Verify we can generate a DATA header
+        let data_header = state.generate_header(TypeVer::Data);
+        assert_eq!(data_header.type_ver(), TypeVer::Data);
+        assert_eq!(data_header.connection_id, state.conn_id_send); // DATA uses conn_id_send
+        assert_eq!(data_header.seq_nr(), Seq::ONE); // Next seq after SYN
+        assert_eq!(data_header.ack_nr(), remote_seq - Seq::ONE); // Ack the remote's effective seq
+        assert_eq!(state.next_local_seq, Seq::from(2)); // Should increment after DATA
+    }
+
+    #[test]
+    fn test_inbound_handshake_sequence() {
+        // Test the inbound handshake sequence as done in Connection::inbound()
+
+        // Step 1: Simulate the received SYN packet (already parsed before creating connection)
+        let remote_conn_id = 0x5678;
+        let remote_seq = Seq::from(100);
+        let remote_window = 1536;
+        let syn_header = Header {
+            type_ver: TypeVer::Syn,
+            extension: 0,
+            connection_id: remote_conn_id,
+            timestamp_us: 50,
+            timestamp_diff_us: 0,
+            wnd_size: remote_window,
+            seq_nr: remote_seq,
+            ack_nr: Seq::ZERO,
+        };
+
+        // Step 2: Create inbound connection state (as done in Connection::inbound)
+        let mut state = ConnectionState::new_inbound(&syn_header);
+
+        // Verify initial inbound state
+        assert_eq!(state.conn_id_recv, remote_conn_id.wrapping_add(1));
+        assert_eq!(state.conn_id_send, remote_conn_id);
+        assert_eq!(state.last_remote_seq, remote_seq); // Set from SYN
+        assert_eq!(state.remote_wnd, remote_window); // Set from SYN
+        assert_eq!(state.local_wnd, ConnectionState::MAX_LOCAL_WINDOW);
+        // next_local_seq is random, so we can't test exact value
+        let initial_local_seq = state.next_local_seq;
+
+        // Step 3: Generate STATE response (as done in Connection::inbound)
+        let state_header = state.generate_header(TypeVer::State);
+
+        // Verify STATE header properties
+        assert_eq!(state_header.type_ver(), TypeVer::State);
+        assert_eq!(state_header.connection_id, state.conn_id_send); // STATE uses conn_id_send
+        assert_eq!(state_header.seq_nr(), initial_local_seq); // STATE doesn't increment seq
+        assert_eq!(state_header.ack_nr(), remote_seq); // Ack the received SYN
+        assert_eq!(state_header.wnd_size, ConnectionState::MAX_LOCAL_WINDOW);
+
+        // STATE packets don't increment next_local_seq
+        assert_eq!(state.next_local_seq, initial_local_seq);
+
+        // Step 4: Simulate receiving DATA response from remote
+        let data_seq = remote_seq + Seq::ONE; // Remote increments after SYN
+        let data_header = Header {
+            type_ver: TypeVer::Data,
+            extension: 0,
+            connection_id: state.conn_id_recv,
+            timestamp_us: 150,
+            timestamp_diff_us: 0,
+            wnd_size: remote_window,
+            seq_nr: data_seq,
+            ack_nr: initial_local_seq - Seq::ONE, // Acknowledge something less than our next seq
+        };
+
+        // Step 5: Validate the incoming DATA header
+        let validation_result = state.validate_header(&data_header);
+        assert!(
+            validation_result.is_ok(),
+            "DATA header validation should pass: {:?}",
+            validation_result.unwrap_err()
+        );
+
+        // Step 6: Process the DATA header (as done in Connection::inbound)
+        FAKE_CURRENT_TIMESTAMP_US.set(Some(250));
+        state.process_header(&data_header);
+
+        // Verify state after processing DATA
+        assert_eq!(state.last_remote_seq, data_seq); // Updated to DATA seq
+        assert_eq!(state.remote_wnd, remote_window);
+        assert_eq!(state.reply_micro, 100); // 250 - 150
+
+        // The connection should now be ready for continued data exchange
+        // Verify we can generate another DATA header
+        let next_data_header = state.generate_header(TypeVer::Data);
+        assert_eq!(next_data_header.type_ver(), TypeVer::Data);
+        assert_eq!(next_data_header.connection_id, state.conn_id_send);
+        assert_eq!(next_data_header.seq_nr(), initial_local_seq); // First DATA uses initial seq
+        assert_eq!(next_data_header.ack_nr(), data_seq); // Ack the received DATA
+        assert_eq!(state.next_local_seq, initial_local_seq + Seq::ONE); // Incremented after DATA
     }
 }

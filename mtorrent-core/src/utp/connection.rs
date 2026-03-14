@@ -65,6 +65,10 @@ impl EgressProcessor {
                         mem::replace(&mut send_buffer, init_send_buf(retransmitter.packet_size()));
                     let header = with!(|state| state.generate_header(TypeVer::Data));
                     let packet = finalize_send_buf(buf, &header);
+
+                    if log_enabled!(log::Level::Trace) {
+                        log::trace!("TX-{peer_addr}: {header:?}");
+                    }
                     self.sender.send(packet.clone()).await?;
                     retransmitter.add_new_packet(packet, header.seq_nr());
                     // clear pending ack notification if any
@@ -113,6 +117,9 @@ impl EgressProcessor {
                     let header = with!(|state| state.generate_header(TypeVer::State));
                     let mut buf = BytesMut::with_capacity(Header::MIN_SIZE);
                     header.encode_to(&mut buf)?;
+                    if log_enabled!(log::Level::Trace) {
+                        log::trace!("TX-{peer_addr}: {header:?}");
+                    }
                     self.sender.send(buf.freeze()).await?;
                 }
             }
@@ -139,6 +146,10 @@ impl IngressProcessor {
         while let Some(mut packet) = self.receiver.next().await {
             let header = Header::decode_from(&mut packet)?;
             skip_extensions(&mut packet, &header)?;
+
+            if log_enabled!(log::Level::Trace) {
+                log::trace!("RX-{peer_addr}: {header:?}\n{:?}", &self.state);
+            }
 
             match with!(|state| state.validate_header(&header)) {
                 Ok(()) => {
