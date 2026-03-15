@@ -1,6 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
-use mtorrent_utils::{benc, debug_stopwatch};
+use mtorrent_utils::{benc, debug_stopwatch, set_so_rcvbuf};
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -11,13 +11,6 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-
-/// Actor that reads and writes UDP packets, and encodes/decodes DHT messages.
-pub struct IoDriver {
-    socket: UdpSocket,
-    ingress_sender: mpsc::Sender<(Message, SocketAddr)>,
-    egress_receiver: mpsc::Receiver<(Message, SocketAddr)>,
-}
 
 pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
 pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
@@ -36,8 +29,16 @@ pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelRece
     (MessageChannelSender(egress_sender), MessageChannelReceiver(ingress_receiver), actor)
 }
 
+/// Actor that reads and writes UDP packets, and encodes/decodes DHT messages.
+pub struct IoDriver {
+    socket: UdpSocket,
+    ingress_sender: mpsc::Sender<(Message, SocketAddr)>,
+    egress_receiver: mpsc::Receiver<(Message, SocketAddr)>,
+}
+
 impl IoDriver {
     pub async fn run(self) {
+        set_so_rcvbuf!(&self.socket, RX_BUFFER_SIZE);
         let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
             socket: &self.socket,

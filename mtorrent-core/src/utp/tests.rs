@@ -65,7 +65,7 @@ async fn test_exchange_data_between_2_peers() {
     task::yield_now().await; // let IoDriver finish sending packets
 }
 
-#[cfg_attr(target_family = "windows", ignore)]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 #[tokio::test(flavor = "local")]
 async fn test_outbound_connection_timeout() {
     let _ = simple_logger::SimpleLogger::new()
