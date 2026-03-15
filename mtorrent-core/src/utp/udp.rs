@@ -2,8 +2,8 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use log::log_enabled;
-use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::loop_select::loop_select;
+use mtorrent_utils::{info_stopwatch, set_so_rcvbuf, set_so_sndbuf};
 use std::collections::hash_map::{Entry, HashMap};
 use std::io;
 use std::mem::MaybeUninit;
@@ -58,6 +58,8 @@ impl UdpDemux {
         socket: UdpSocket,
         new_source_reporter: local_bounded::Sender<(SocketAddr, Bytes)>,
     ) -> Self {
+        set_so_sndbuf!(&socket, MAX_UDP_PACKET_SIZE);
+        set_so_rcvbuf!(&socket, MAX_UDP_PACKET_SIZE);
         Self {
             commands: command_receiver,
             socket,
@@ -516,7 +518,7 @@ mod tests {
         assert_eq!(reported_msg, msg);
     }
 
-    #[cfg_attr(target_family = "windows", ignore)]
+    #[cfg_attr(not(target_os = "linux"), ignore)]
     #[tokio::test(flavor = "local")]
     async fn test_unreachable_connection_is_deleted() {
         let peer_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 0u16).into();
@@ -576,6 +578,8 @@ mod tests {
 
     #[tokio::test(flavor = "local")]
     async fn test_send_and_receive_big_packets() {
+        _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Debug).init();
+
         let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
         let peer_addr = peer_socket.local_addr().unwrap();
 
@@ -587,7 +591,14 @@ mod tests {
         let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
-        let long_msg = Bytes::from(vec![rand::random::<u8>(); 32 * 1024]);
+        // By default OSX won't allow a larger datagram size than 9216 bytes, see https://github.com/BanTheRewind/Cinder-Asio/issues/9#issuecomment-67540675
+        let packet_size = if cfg!(target_os = "macos") {
+            9216
+        } else {
+            32 * 1024
+        };
+
+        let long_msg = Bytes::from(vec![rand::random::<u8>(); packet_size]);
         peer_socket.send_to(&long_msg, driver_addr).await.unwrap();
 
         let (reported_addr, reported_msg) = unknown_rx.next().await.unwrap();
@@ -599,13 +610,13 @@ mod tests {
         cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
 
         conn.egress.send(long_msg.clone()).await.unwrap();
-        let mut buf = vec![0u8; 32 * 1024];
+        let mut buf = vec![0u8; packet_size];
         let (len, addr) = peer_socket.recv_from(&mut buf).await.unwrap();
         assert_eq!(addr, driver_addr);
         assert_eq!(len, long_msg.len());
         assert_eq!(&buf[..len], &long_msg[..]);
 
-        let long_msg = Bytes::from(vec![rand::random::<u8>(); 32 * 1024]);
+        let long_msg = Bytes::from(vec![rand::random::<u8>(); packet_size]);
         peer_socket.send_to(&long_msg, driver_addr).await.unwrap();
 
         let received_msg = conn.ingress.next().await.unwrap();

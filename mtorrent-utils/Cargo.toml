@@ -23,8 +23,9 @@ bytes = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 igd-next = { version = "0.16.1", features = ["aio_tokio"] }
+socket2 = { workspace = true }
 
-[target.'cfg(target_family = "windows")'.dependencies]
+[target.'cfg(windows)'.dependencies]
 ipconfig = "0.3.2"
 
 [dev-dependencies]

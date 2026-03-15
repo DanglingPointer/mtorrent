@@ -45,7 +45,7 @@ impl Stream for Retransmitter {
 }
 
 impl Retransmitter {
-    const MAX_PACKET_SIZE: usize = 1024 * 8;
+    const MAX_PACKET_SIZE: usize = 1024 * 9; // macOS default UDP limit
     const MIN_PACKET_SIZE: usize = 1024;
     const INITIAL_RTO: Duration = sec!(1);
 

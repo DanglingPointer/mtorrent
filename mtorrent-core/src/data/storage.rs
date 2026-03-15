@@ -392,7 +392,7 @@ pub(super) trait RandomAccessReadWrite {
     }
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 impl RandomAccessReadWrite for fs::File {
     fn read_at_offset(&self, dest: &mut [u8], offset: u64) -> io::Result<usize> {
         use std::os::unix::prelude::*;
@@ -412,7 +412,7 @@ impl RandomAccessReadWrite for fs::File {
     }
 }
 
-#[cfg(target_family = "windows")]
+#[cfg(windows)]
 impl RandomAccessReadWrite for fs::File {
     fn read_at_offset(&self, dest: &mut [u8], offset: u64) -> io::Result<usize> {
         use std::os::windows::prelude::*;

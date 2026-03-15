@@ -1,10 +1,11 @@
 use bytes::Buf;
+use socket2::SockRef;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{Ipv4Addr, SocketAddrV4, SocketAddrV6};
 use std::{io, ops};
 
 /// Get local (non-loopback) IPv4.
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "linux")]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
     let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
@@ -16,7 +17,7 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
 }
 
 /// Get local (non-loopback) IPv4.
-#[cfg(target_family = "windows")]
+#[cfg(windows)]
 pub fn get_local_addr() -> io::Result<Ipv4Addr> {
     // naively uses first connected adapter
     ipconfig::get_adapters()
@@ -29,6 +30,41 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
             _ => None,
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn get_local_addr() -> io::Result<Ipv4Addr> {
+    Ok(Ipv4Addr::UNSPECIFIED)
+}
+
+#[doc(hidden)]
+pub fn set_so_sndbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
+    if let Err(e) = socket.into().set_send_buffer_size(value) {
+        log::warn!(target: module, "Failed to set socket send buffer size: {e}");
+    }
+}
+
+#[doc(hidden)]
+pub fn set_so_rcvbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
+    if let Err(e) = socket.into().set_recv_buffer_size(value) {
+        log::warn!(target: module, "Failed to set socket receive buffer size: {e}");
+    }
+}
+
+/// Set SO_SNDBUF on a socket.
+#[macro_export]
+macro_rules! set_so_sndbuf {
+    ($sock:expr, $size:expr) => {{
+        $crate::ip::set_so_sndbuf_internal($sock, $size, std::module_path!());
+    }};
+}
+
+/// Set SO_RCVBUF on a socket.
+#[macro_export]
+macro_rules! set_so_rcvbuf {
+    ($sock:expr, $size:expr) => {{
+        $crate::ip::set_so_rcvbuf_internal($sock, $size, std::module_path!());
+    }};
 }
 
 const DYNAMIC_PORT_RANGE: ops::Range<u32> = 49152..65536;
