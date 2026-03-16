@@ -360,7 +360,7 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         permit.release_slot();
-        // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
+        // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
         _ = reconnect_reporter
             .send(OutboundConnect {
@@ -407,7 +407,7 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         permit.release_slot();
-        // wait 1 sec for ConnectionIoDriver to stop and the remote to receive our RST
+        // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
 
         _ = reconnect_reporter

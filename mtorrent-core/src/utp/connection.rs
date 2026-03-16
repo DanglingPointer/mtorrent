@@ -1,4 +1,6 @@
-use super::protocol::{ConnectionState, Header, TypeVer, ValidationError, skip_extensions};
+use super::protocol::{
+    ConnectionState, Header, TypeVer, ValidationError, dbg_header_extensions, skip_extensions,
+};
 use super::retransmitter::Retransmitter;
 use super::seq::Seq;
 use bytes::buf::Limit;
@@ -65,12 +67,11 @@ impl EgressProcessor {
                         mem::replace(&mut send_buffer, init_send_buf(retransmitter.packet_size()));
                     let header = with!(|state| state.generate_header(TypeVer::Data));
                     let packet = finalize_send_buf(buf, &header);
-
+                    self.sender.send(packet.clone()).await?;
                     if log_enabled!(log::Level::Trace) {
                         log::trace!("TX-{peer_addr}: {header:?}");
                     }
-                    self.sender.send(packet.clone()).await?;
-                    retransmitter.add_new_packet(packet, header.seq_nr());
+                    retransmitter.add_new_packet(packet, header.seq_nr);
                     // clear pending ack notification if any
                     self.ack_received_notifier.wait_and_get().now_or_never();
                 }
@@ -92,6 +93,9 @@ impl EgressProcessor {
                 }
                 Some(packet) = retransmitter.next() => {
                     self.sender.send(packet).await?;
+                    if log_enabled!(log::Level::Trace) {
+                        log::trace!("TX-{peer_addr}: <retransmit>");
+                    }
                     // max packet size might've changed, update send_buffer
                     resize_send_buf(&mut send_buffer, retransmitter.packet_size());
                     with!(|state| state.shrink_local_window());
@@ -117,10 +121,10 @@ impl EgressProcessor {
                     let header = with!(|state| state.generate_header(TypeVer::State));
                     let mut buf = BytesMut::with_capacity(Header::MIN_SIZE);
                     header.encode_to(&mut buf)?;
+                    self.sender.send(buf.freeze()).await?;
                     if log_enabled!(log::Level::Trace) {
                         log::trace!("TX-{peer_addr}: {header:?}");
                     }
-                    self.sender.send(buf.freeze()).await?;
                 }
             }
         }
@@ -148,16 +152,20 @@ impl IngressProcessor {
             skip_extensions(&mut packet, &header)?;
 
             if log_enabled!(log::Level::Trace) {
-                log::trace!("RX-{peer_addr}: {header:?}\n{:?}", &self.state);
+                log::trace!(
+                    "RX-{peer_addr}: {:?} payload_size={}",
+                    dbg_header_extensions(&header, &packet),
+                    packet.len()
+                );
             }
 
             match with!(|state| state.validate_header(&header)) {
                 Ok(()) => {
-                    if last_received_ack.is_none_or(|last| header.ack_nr() > last) {
-                        last_received_ack = Some(header.ack_nr());
-                        self.ack_received_reporter.set_and_notify(header.ack_nr());
+                    if last_received_ack.is_none_or(|last| header.ack_nr > last) {
+                        last_received_ack = Some(header.ack_nr);
+                        self.ack_received_reporter.set_and_notify(header.ack_nr);
                     }
-                    match header.type_ver() {
+                    match header.type_ver {
                         TypeVer::State => {
                             with!(|state| state.process_header(&header));
                         }
@@ -193,12 +201,12 @@ impl IngressProcessor {
                         if log_enabled!(log::Level::Debug) {
                             log::debug!(
                                 "Received duplicate {:?} packet from {peer_addr}, seq_nr={}, ack_nr={}",
-                                header.type_ver(),
-                                header.seq_nr(),
-                                header.ack_nr()
+                                header.type_ver,
+                                header.seq_nr,
+                                header.ack_nr
                             );
                         }
-                        if header.type_ver() == TypeVer::Data {
+                        if header.type_ver == TypeVer::Data {
                             self.ack_required_reporter.signal_one();
                         }
                     }
@@ -274,7 +282,7 @@ impl Connection {
 
         // parse STATE
         let header = Header::decode_from(&mut packet)?;
-        match header.type_ver() {
+        match header.type_ver {
             TypeVer::State => {
                 state.process_header(&header);
             }
@@ -330,7 +338,7 @@ impl Connection {
         // parse DATA
         let header = Header::decode_from(&mut packet)?;
         skip_extensions(&mut packet, &header)?;
-        match header.type_ver() {
+        match header.type_ver {
             TypeVer::Data => {
                 write_and_flush(&mut pipe, &mut packet).await?;
                 state.process_header(&header);
@@ -363,11 +371,12 @@ impl Connection {
         })
     }
 
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, mut canceller: local_condvar::Receiver) -> io::Result<()> {
         let result = select! {
             biased;
             r = self.egress.run(&self.peer_addr) => r,
             r = self.ingress.run(&self.peer_addr) => r,
+            _ = canceller.wait_for_one() => Err(io::ErrorKind::Interrupted.into()), // send Reset if cancelled upstream
         };
 
         let final_packet_type = match result {

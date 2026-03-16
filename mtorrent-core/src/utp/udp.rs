@@ -38,10 +38,8 @@ fn is_transient_error(e: &io::ErrorKind) -> bool {
     )
 }
 
-/// [`UdpDemux`] keeps track of all active connections and their associated peer addresses,
-/// handles sending and receiving UDP packets, and dispatches them to the appropriate connections
-/// based on the source address. Packets from unknown sources are reported to the application via a
-/// separate channel.
+/// [`UdpDemux`] is an actor that handles the network I/O. It routes incoming and outgoing packets
+/// between uTP connections and a UDP socket.
 pub struct UdpDemux {
     commands: mpsc::Receiver<Command>,
     socket: UdpSocket,

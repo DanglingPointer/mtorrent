@@ -467,12 +467,12 @@ async fn listening_utp_peer<P: Peer>(
     let verify_remote_addr = !extensions_enabled;
 
     let socket = UdpSocket::bind(listening_addr).await.unwrap();
-    let (connection_spawner, mut connect_reporter, udp) = utp::init(socket);
+    let (endpoint, mut listener, udp) = utp::init(socket);
     let driver_handle = task::spawn_local(udp.run());
 
     macro_rules! accept_and_run {
         () => {{
-            let (remote_addr, data) = time::timeout(sec!(10), connect_reporter.next())
+            let (remote_addr, data) = time::timeout(sec!(10), listener.next())
                 .await
                 .unwrap_or_else(|e| panic!("uTP peer {index} got stuck listening ({e})"))
                 .unwrap();
@@ -483,11 +483,10 @@ async fn listening_utp_peer<P: Peer>(
             if verify_remote_addr {
                 assert_eq!(remote_addr, expected_remote_addr);
             }
-            let mut stream =
-                time::timeout(sec!(10), connection_spawner.inbound_connection(remote_addr, data))
-                    .await
-                    .unwrap_or_else(|e| panic!("uTP peer {index} got stuck accepting ({e})"))
-                    .unwrap();
+            let mut stream = time::timeout(sec!(10), endpoint.accept_from(remote_addr, data))
+                .await
+                .unwrap_or_else(|e| panic!("uTP peer {index} got stuck accepting ({e})"))
+                .unwrap();
             let mut ia = Vec::new();
             let crypto = pe::inbound_handshake(&mut stream, &info_hash, &mut ia).await.unwrap();
             assert!(crypto.is_some());
@@ -520,7 +519,7 @@ async fn listening_utp_peer<P: Peer>(
         extensions_enabled = false;
         accept_and_run!();
     }
-    drop(connection_spawner);
+    drop(endpoint);
     if let Err(e) = time::timeout(sec!(1), driver_handle).await {
         panic!("uTP peer {index} failed to shutdown uTP driver: {e}");
     }
@@ -588,13 +587,12 @@ async fn connecting_utp_peer<P: Peer>(
     let start_time = time::Instant::now();
 
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
-    let (connection_spawner, _, udp) = utp::init(socket);
+    let (endpoint, _, udp) = utp::init(socket);
     let driver_handle = task::spawn_local(udp.run());
 
     let mut stream = loop {
         let deadline = time::Instant::now() + sec!(2);
-        let connect_result =
-            time::timeout_at(deadline, connection_spawner.outbound_connection(remote_ip)).await;
+        let connect_result = time::timeout_at(deadline, endpoint.connect_to(remote_ip)).await;
         if let Ok(Ok(result)) = connect_result {
             break result;
         }
@@ -631,7 +629,7 @@ async fn connecting_utp_peer<P: Peer>(
     )
     .await;
 
-    drop(connection_spawner);
+    drop(endpoint);
     if let Err(e) = time::timeout(sec!(1), driver_handle).await {
         panic!("uTP peer {index} failed to shutdown uTP driver: {e}");
     }

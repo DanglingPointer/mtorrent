@@ -27,7 +27,9 @@ impl Decryptor {
     }
 }
 
-/// A pair of RC4 encryptor and decryptor for a peer connection.
+/// A pair of RC4 encryptor and decryptor returned by
+/// [`outbound_handshake`](super::outbound_handshake) and
+/// [`inbound_handshake`](super::inbound_handshake).
 #[derive(Debug)]
 pub struct Crypto {
     pub encryptor: Encryptor,

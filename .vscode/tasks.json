@@ -37,6 +37,7 @@
 				"run",
 				"--all-targets",
 				"--all-features",
+				"--no-fail-fast",
 				"--failure-output=final",
 			],
 			"problemMatcher": [

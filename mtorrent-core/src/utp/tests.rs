@@ -1,4 +1,7 @@
+use super::protocol::{Header, TypeVer};
+use super::seq::seq;
 use super::*;
+use futures_util::StreamExt;
 use std::net::Ipv4Addr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
@@ -24,7 +27,7 @@ async fn test_exchange_data_between_2_peers() {
     task::spawn_local(driver.run());
 
     let outbound_fut = async move {
-        let mut pipe = spawner1.outbound_connection(addr2).await.unwrap();
+        let mut pipe = spawner1.connect_to(addr2).await.unwrap();
 
         pipe.write_all(b"hello from peer 1").await.unwrap();
 
@@ -44,7 +47,7 @@ async fn test_exchange_data_between_2_peers() {
     let inbound_fut = async move {
         let (remote_addr, data) = reporter2.next().await.unwrap();
         assert_eq!(remote_addr, addr1);
-        let mut pipe = spawner2.inbound_connection(remote_addr, data).await.unwrap();
+        let mut pipe = spawner2.accept_from(remote_addr, data).await.unwrap();
 
         pipe.write_all(b"hello from peer 2").await.unwrap();
 
@@ -79,7 +82,7 @@ async fn test_outbound_connection_timeout() {
     task::spawn_local(driver.run());
 
     // connect to unreachable address
-    let Err(error) = spawner.outbound_connection((Ipv4Addr::LOCALHOST, 0u16).into()).await else {
+    let Err(error) = spawner.connect_to((Ipv4Addr::LOCALHOST, 0u16).into()).await else {
         panic!("expected connection to timeout");
     };
     assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
@@ -103,22 +106,21 @@ async fn test_outbound_syn_doesnt_change_across_reconnects() {
 
     // start connecting
     let spawner_copy = spawner.clone();
-    let connect_handle =
-        task::spawn_local(async move { spawner_copy.outbound_connection(peer_addr).await });
+    let connect_handle = task::spawn_local(async move { spawner_copy.connect_to(peer_addr).await });
 
     // receive SYN
     let mut buf = [0u8; 1024];
     let (len, addr) = peer_socket.recv_from(&mut buf).await.unwrap();
     assert_eq!(addr, local_addr);
     let syn_hdr = Header::decode_from(&mut &buf[..len]).unwrap();
-    assert_eq!(syn_hdr.type_ver(), TypeVer::Syn);
+    assert_eq!(syn_hdr.type_ver, TypeVer::Syn);
 
     // cancel and reconnect
     connect_handle.abort();
     task::yield_now().await;
     let spawner_copy = spawner.clone();
     let _connect_handle =
-        task::spawn_local(async move { spawner_copy.outbound_connection(peer_addr).await });
+        task::spawn_local(async move { spawner_copy.connect_to(peer_addr).await });
 
     // receive new SYN
     let mut buf = [0u8; 1024];
@@ -132,7 +134,7 @@ async fn test_outbound_syn_doesnt_change_across_reconnects() {
 async fn test_pipe_data_from_one_peer_to_another() {
     // let _ = simple_logger::SimpleLogger::new()
     //     .with_level(log::LevelFilter::Off)
-    //     .with_module_level("mtorrent_core::utp", log::LevelFilter::Debug)
+    //     .with_module_level("mtorrent_core::utp::connection", log::LevelFilter::Trace)
     //     .init();
 
     let socket1 = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
@@ -151,18 +153,21 @@ async fn test_pipe_data_from_one_peer_to_another() {
     const CHUNK_COUNT: usize = 64 * 1024;
 
     let writer_fut = async {
-        let mut pipe = spawner1.outbound_connection(addr2).await.unwrap();
+        let mut pipe = spawner1.connect_to(addr2).await.unwrap();
 
         for _ in 0..CHUNK_COUNT {
             let data = [b'm'; CHUNK_SIZE];
             pipe.write_all(&data).await.unwrap();
         }
+
+        // don't drop the pipe, let the reader read all data first
+        pipe
     };
 
     let reader_fut = async move {
         let (remote_addr, data) = reporter2.next().await.unwrap();
         assert_eq!(remote_addr, addr1);
-        let mut pipe = spawner2.inbound_connection(remote_addr, data).await.unwrap();
+        let mut pipe = spawner2.accept_from(remote_addr, data).await.unwrap();
 
         let mut total_bytes = 0;
         let mut buf = [0u8; CHUNK_SIZE];
@@ -173,6 +178,94 @@ async fn test_pipe_data_from_one_peer_to_another() {
         }
     };
 
-    join!(writer_fut, reader_fut);
+    let (_writer_pipe, ()) = join!(writer_fut, reader_fut);
     task::yield_now().await;
+}
+
+#[tokio::test(flavor = "local")]
+async fn test_reconnect_after_local_disconnect() {
+    let _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Trace).init();
+
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
+    let local_addr = socket.local_addr().unwrap();
+
+    let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
+    let peer_addr = peer_socket.local_addr().unwrap();
+
+    let (spawner, _reporter1, demux) = init(socket);
+    task::spawn_local(demux.run());
+
+    let inbound = async move {
+        // receive SYN
+        let mut send_buf = [0u8; Header::MIN_SIZE];
+        let mut recv_buf = [0u8; 1024 * 32];
+
+        let (len, addr) = peer_socket.recv_from(&mut recv_buf).await.unwrap();
+        assert_eq!(addr, local_addr);
+        let syn_hdr = Header::decode_from(&mut &recv_buf[..len]).unwrap();
+        assert_eq!(syn_hdr.type_ver, TypeVer::Syn);
+
+        // send STATE
+        let state_hdr = Header {
+            type_ver: TypeVer::State,
+            extension: 0,
+            connection_id: syn_hdr.connection_id,
+            timestamp_us: 42,
+            timestamp_diff_us: 0,
+            wnd_size: 0,
+            seq_nr: seq(0),
+            ack_nr: seq(0),
+        };
+        state_hdr.encode_to(&mut &mut send_buf[..]).unwrap();
+        peer_socket.send_to(&send_buf, local_addr).await.unwrap();
+
+        // receive 1 DATA packet
+        let (len, addr) = peer_socket.recv_from(&mut recv_buf).await.unwrap();
+        assert_eq!(addr, local_addr);
+        assert_eq!(len, 9216); // Retransmitter::MAX_PACKET_SIZE
+        let data_hdr = Header::decode_from(&mut &recv_buf[..len]).unwrap();
+        assert_eq!(data_hdr.type_ver, TypeVer::Data);
+
+        // receive RESET
+        let (len, addr) = peer_socket.recv_from(&mut recv_buf).await.unwrap();
+        assert_eq!(addr, local_addr);
+        let fin_hdr = Header::decode_from(&mut &recv_buf[..len]).unwrap();
+        assert_eq!(fin_hdr.type_ver, TypeVer::Reset);
+
+        // receive new SYN
+        let (len, addr) = peer_socket.recv_from(&mut recv_buf).await.unwrap();
+        assert_eq!(addr, local_addr);
+        let syn_hdr = Header::decode_from(&mut &recv_buf[..len]).unwrap();
+        assert_eq!(syn_hdr.type_ver, TypeVer::Syn);
+
+        // send new STATE
+        let state_hdr = Header {
+            type_ver: TypeVer::State,
+            extension: 0,
+            connection_id: syn_hdr.connection_id,
+            timestamp_us: 42,
+            timestamp_diff_us: 0,
+            wnd_size: 0,
+            seq_nr: seq(0),
+            ack_nr: seq(0),
+        };
+        state_hdr.encode_to(&mut &mut send_buf[..]).unwrap();
+        peer_socket.send_to(&send_buf, local_addr).await.unwrap();
+    };
+
+    let outbound = async move {
+        // connect
+        let mut pipe = spawner.connect_to(peer_addr).await.unwrap();
+
+        // write data bigger than window
+        let data = [b'x'; 16 * 1024];
+        pipe.write_all(&data).await.unwrap();
+
+        // drop connection and reconnect
+        drop(pipe);
+        task::yield_now().await;
+        let _pipe = spawner.connect_to(peer_addr).await.unwrap();
+    };
+
+    join!(inbound, outbound);
 }

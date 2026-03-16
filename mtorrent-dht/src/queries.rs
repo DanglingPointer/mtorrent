@@ -93,8 +93,8 @@ impl OutboundQueries {
 /// Server for receiving incoming queries from different nodes.
 pub struct InboundQueries(pub(super) local_unbounded::Receiver<IncomingQuery>);
 
-/// Actor that routes queries between [`crate::Processor`] and [`crate::IoDriver`],
-/// performs retries and matches requests and responses.
+/// Actor that routes queries between [`Processor`](crate::Processor) and
+/// [`IoDriver`](crate::IoDriver), performs retries and matches requests and responses.
 pub struct QueryRouter {
     queries: QueryManager,
     outgoing_queries_source: local_unbounded::Receiver<OutgoingQuery>,

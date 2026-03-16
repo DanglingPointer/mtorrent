@@ -17,30 +17,18 @@ pub enum TypeVer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    type_ver: TypeVer,
-    extension: u8,
-    connection_id: u16,
-    timestamp_us: u32,
-    timestamp_diff_us: u32,
-    wnd_size: u32,
-    seq_nr: Seq,
-    ack_nr: Seq,
+    pub(super) type_ver: TypeVer,
+    pub(super) extension: u8,
+    pub(super) connection_id: u16,
+    pub(super) timestamp_us: u32,
+    pub(super) timestamp_diff_us: u32,
+    pub(super) wnd_size: u32,
+    pub(super) seq_nr: Seq,
+    pub(super) ack_nr: Seq,
 }
 
 impl Header {
     pub const MIN_SIZE: usize = 20;
-
-    pub fn type_ver(&self) -> TypeVer {
-        self.type_ver
-    }
-
-    pub fn seq_nr(&self) -> Seq {
-        self.seq_nr
-    }
-
-    pub fn ack_nr(&self) -> Seq {
-        self.ack_nr
-    }
 
     /// # Errors
     /// Returns error if `dst` buffer is not big enough.
@@ -162,7 +150,7 @@ pub fn skip_extensions(buffer: &mut impl Buf, header: &Header) -> io::Result<()>
     Ok(())
 }
 
-pub fn dbg_hdr_and_ext(header: &Header, payload: &[u8]) -> impl fmt::Debug {
+pub fn dbg_header_extensions(header: &Header, payload: &[u8]) -> impl fmt::Debug {
     struct Dump<'h, 'b> {
         header: &'h Header,
         payload: &'b [u8],
@@ -252,7 +240,7 @@ impl ConnectionState {
             return Err(ValidationError::Invalid("unexpected connection ID"));
         }
 
-        if let TypeVer::Syn = received_header.type_ver() {
+        if let TypeVer::Syn = received_header.type_ver {
             return Err(ValidationError::Duplicate);
         }
 
@@ -485,10 +473,10 @@ mod tests {
         let syn_header = state.generate_header(TypeVer::Syn);
 
         // Verify SYN header properties
-        assert_eq!(syn_header.type_ver(), TypeVer::Syn);
+        assert_eq!(syn_header.type_ver, TypeVer::Syn);
         assert_eq!(syn_header.connection_id, conn_id_recv); // SYN uses conn_id_recv
-        assert_eq!(syn_header.seq_nr(), Seq::ZERO); // First packet starts at 0
-        assert_eq!(syn_header.ack_nr(), Seq::ZERO); // No remote seq received yet
+        assert_eq!(syn_header.seq_nr, Seq::ZERO); // First packet starts at 0
+        assert_eq!(syn_header.ack_nr, Seq::ZERO); // No remote seq received yet
         assert_eq!(syn_header.wnd_size, ConnectionState::MAX_LOCAL_WINDOW);
 
         // After generating SYN, next_local_seq should be incremented
@@ -520,10 +508,10 @@ mod tests {
         // The connection should now be ready for data exchange
         // Verify we can generate a DATA header
         let data_header = state.generate_header(TypeVer::Data);
-        assert_eq!(data_header.type_ver(), TypeVer::Data);
+        assert_eq!(data_header.type_ver, TypeVer::Data);
         assert_eq!(data_header.connection_id, state.conn_id_send); // DATA uses conn_id_send
-        assert_eq!(data_header.seq_nr(), Seq::ONE); // Next seq after SYN
-        assert_eq!(data_header.ack_nr(), remote_seq - Seq::ONE); // Ack the remote's effective seq
+        assert_eq!(data_header.seq_nr, Seq::ONE); // Next seq after SYN
+        assert_eq!(data_header.ack_nr, remote_seq - Seq::ONE); // Ack the remote's effective seq
         assert_eq!(state.next_local_seq, Seq::from(2)); // Should increment after DATA
     }
 
@@ -562,10 +550,10 @@ mod tests {
         let state_header = state.generate_header(TypeVer::State);
 
         // Verify STATE header properties
-        assert_eq!(state_header.type_ver(), TypeVer::State);
+        assert_eq!(state_header.type_ver, TypeVer::State);
         assert_eq!(state_header.connection_id, state.conn_id_send); // STATE uses conn_id_send
-        assert_eq!(state_header.seq_nr(), initial_local_seq); // STATE doesn't increment seq
-        assert_eq!(state_header.ack_nr(), remote_seq); // Ack the received SYN
+        assert_eq!(state_header.seq_nr, initial_local_seq); // STATE doesn't increment seq
+        assert_eq!(state_header.ack_nr, remote_seq); // Ack the received SYN
         assert_eq!(state_header.wnd_size, ConnectionState::MAX_LOCAL_WINDOW);
 
         // STATE packets don't increment next_local_seq
@@ -604,10 +592,10 @@ mod tests {
         // The connection should now be ready for continued data exchange
         // Verify we can generate another DATA header
         let next_data_header = state.generate_header(TypeVer::Data);
-        assert_eq!(next_data_header.type_ver(), TypeVer::Data);
+        assert_eq!(next_data_header.type_ver, TypeVer::Data);
         assert_eq!(next_data_header.connection_id, state.conn_id_send);
-        assert_eq!(next_data_header.seq_nr(), initial_local_seq); // First DATA uses initial seq
-        assert_eq!(next_data_header.ack_nr(), data_seq); // Ack the received DATA
+        assert_eq!(next_data_header.seq_nr, initial_local_seq); // First DATA uses initial seq
+        assert_eq!(next_data_header.ack_nr, data_seq); // Ack the received DATA
         assert_eq!(state.next_local_seq, initial_local_seq + Seq::ONE); // Incremented after DATA
     }
 }
