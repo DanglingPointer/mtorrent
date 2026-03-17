@@ -47,7 +47,7 @@ fn get_outbound_pwp_mode() -> PwpMode {
     {
         mode
     } else {
-        PwpMode::TcpOnly
+        PwpMode::Any
     }
 }
 

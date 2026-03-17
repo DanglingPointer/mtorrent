@@ -45,8 +45,8 @@ impl Stream for Retransmitter {
 }
 
 impl Retransmitter {
-    const MAX_PACKET_SIZE: usize = 1024 * 9; // macOS default UDP limit
-    const MIN_PACKET_SIZE: usize = 1024;
+    const MAX_PACKET_SIZE: usize = 9 * 1024; // macOS default UDP limit
+    const MIN_PACKET_SIZE: usize = 1472; // ethernet MTU
     const INITIAL_RTO: Duration = sec!(1);
 
     pub fn new() -> Self {
@@ -56,7 +56,7 @@ impl Retransmitter {
             rtt: None,
             timeout: Self::INITIAL_RTO,
             duplicate_ack_count: 0,
-            packet_size: Self::MAX_PACKET_SIZE,
+            packet_size: Self::MIN_PACKET_SIZE,
         }
     }
 

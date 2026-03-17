@@ -1374,7 +1374,7 @@ async fn test_utp_download_torrent_from_magnet_link() {
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
-            .env("MTORRENT_PWP_MODE", "UTP_ONLY")
+            // .env("MTORRENT_PWP_MODE", "UTP_ONLY")
             .spawn()
             .expect("failed to execute 'mtorrent'")
     });

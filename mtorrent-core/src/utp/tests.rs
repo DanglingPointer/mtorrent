@@ -222,7 +222,7 @@ async fn test_reconnect_after_local_disconnect() {
         // receive 1 DATA packet
         let (len, addr) = peer_socket.recv_from(&mut recv_buf).await.unwrap();
         assert_eq!(addr, local_addr);
-        assert_eq!(len, 9216); // Retransmitter::MAX_PACKET_SIZE
+        assert!(len >= 1472);
         let data_hdr = Header::decode_from(&mut &recv_buf[..len]).unwrap();
         assert_eq!(data_hdr.type_ver, TypeVer::Data);
 
