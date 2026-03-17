@@ -15,6 +15,13 @@ use std::{io, mem};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{select, time};
 
+#[derive(Default, Debug)]
+struct EgressStats {
+    retransmit_count: u64,
+    data_count: u64,
+    ack_count: u64,
+}
+
 struct EgressProcessor {
     state: LocalShared<ConnectionState>,
 
@@ -46,7 +53,7 @@ fn resize_send_buf(buf: &mut Limit<BytesMut>, new_packet_size: usize) {
 }
 
 impl EgressProcessor {
-    async fn run(&mut self, peer_addr: &SocketAddr) -> io::Result<()> {
+    async fn run(&mut self, peer_addr: &SocketAddr, stats: &mut EgressStats) -> io::Result<()> {
         define_with!(self.state);
 
         let mut retransmitter = Retransmitter::new();
@@ -68,6 +75,7 @@ impl EgressProcessor {
                     let header = with!(|state| state.generate_header(TypeVer::Data));
                     let packet = finalize_send_buf(buf, &header);
                     self.sender.send(packet.clone()).await?;
+                    stats.data_count += 1;
                     if log_enabled!(log::Level::Trace) {
                         log::trace!("TX-{peer_addr}: {header:?}");
                     }
@@ -93,6 +101,7 @@ impl EgressProcessor {
                 }
                 Some(packet) = retransmitter.next() => {
                     self.sender.send(packet).await?;
+                    stats.retransmit_count += 1;
                     if log_enabled!(log::Level::Trace) {
                         log::trace!("TX-{peer_addr}: <retransmit>");
                     }
@@ -122,6 +131,7 @@ impl EgressProcessor {
                     let mut buf = BytesMut::with_capacity(Header::MIN_SIZE);
                     header.encode_to(&mut buf)?;
                     self.sender.send(buf.freeze()).await?;
+                    stats.ack_count += 1;
                     if log_enabled!(log::Level::Trace) {
                         log::trace!("TX-{peer_addr}: {header:?}");
                     }
@@ -129,6 +139,13 @@ impl EgressProcessor {
             }
         }
     }
+}
+
+#[derive(Default, Debug)]
+struct IngressStats {
+    in_order_count: u64,
+    duplicate_count: u64,
+    seq_jump_count: u64,
 }
 
 struct IngressProcessor {
@@ -142,7 +159,7 @@ struct IngressProcessor {
 }
 
 impl IngressProcessor {
-    async fn run(&mut self, peer_addr: &SocketAddr) -> io::Result<()> {
+    async fn run(&mut self, peer_addr: &SocketAddr, stats: &mut IngressStats) -> io::Result<()> {
         define_with!(self.state);
 
         let mut last_received_ack = None;
@@ -161,6 +178,7 @@ impl IngressProcessor {
 
             match with!(|state| state.validate_header(&header)) {
                 Ok(()) => {
+                    stats.in_order_count += 1;
                     if last_received_ack.is_none_or(|last| header.ack_nr > last) {
                         last_received_ack = Some(header.ack_nr);
                         self.ack_received_reporter.set_and_notify(header.ack_nr);
@@ -198,8 +216,9 @@ impl IngressProcessor {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, e));
                     }
                     ValidationError::Duplicate => {
-                        if log_enabled!(log::Level::Debug) {
-                            log::debug!(
+                        stats.duplicate_count += 1;
+                        if log_enabled!(log::Level::Trace) {
+                            log::trace!(
                                 "Received duplicate {:?} packet from {peer_addr}, seq_nr={}, ack_nr={}",
                                 header.type_ver,
                                 header.seq_nr,
@@ -211,8 +230,9 @@ impl IngressProcessor {
                         }
                     }
                     e @ ValidationError::OutOfOrder { .. } => {
-                        if log_enabled!(log::Level::Debug) {
-                            log::debug!("Received out-of-order packet from {peer_addr}: {e}");
+                        stats.seq_jump_count += 1;
+                        if log_enabled!(log::Level::Trace) {
+                            log::trace!("Received out-of-order packet from {peer_addr}: {e}");
                         }
                     }
                 },
@@ -372,12 +392,17 @@ impl Connection {
     }
 
     pub async fn run(mut self, mut canceller: local_condvar::Receiver) -> io::Result<()> {
+        let mut out_stats = EgressStats::default();
+        let mut in_stats = IngressStats::default();
+
         let result = select! {
             biased;
-            r = self.egress.run(&self.peer_addr) => r,
-            r = self.ingress.run(&self.peer_addr) => r,
+            r = self.egress.run(&self.peer_addr, &mut out_stats) => r,
+            r = self.ingress.run(&self.peer_addr, &mut in_stats) => r,
             _ = canceller.wait_for_one() => Err(io::ErrorKind::Interrupted.into()), // send Reset if cancelled upstream
         };
+
+        log::debug!("Connection stats for {}: {out_stats:?} {in_stats:?}", self.peer_addr);
 
         let final_packet_type = match result {
             Ok(()) => TypeVer::Fin,

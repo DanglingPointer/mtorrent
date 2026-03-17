@@ -103,7 +103,7 @@ impl<'s> Future for Ingress<'s> {
             };
             let message = match parse_msg(buffer.filled()) {
                 Err(e) => {
-                    log::debug!("Failed to parse message from {src_addr}: {e}");
+                    log::trace!("Failed to parse message from {src_addr}: {e}");
                     continue;
                 }
                 Ok(msg) => msg,
