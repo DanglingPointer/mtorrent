@@ -46,10 +46,9 @@ async fn start_upnp(
     desired_external_port: Option<u16>,
     proto: upnp::PortMappingProtocol,
 ) -> SocketAddr {
-    let Ok(port_opener) =
-        upnp::PortOpener::new(internal_addr, upnp::PortMappingProtocol::TCP, desired_external_port)
-            .await
-            .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
+    let Ok(port_opener) = upnp::PortOpener::new(internal_addr, proto, desired_external_port)
+        .await
+        .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
     else {
         return internal_addr;
     };
