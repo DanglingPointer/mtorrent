@@ -22,6 +22,13 @@ struct EgressStats {
     ack_count: u64,
 }
 
+#[derive(Default, Debug)]
+struct IngressStats {
+    in_order_count: u64,
+    duplicate_count: u64,
+    seq_jump_count: u64,
+}
+
 struct EgressProcessor {
     state: LocalShared<ConnectionState>,
 
@@ -139,13 +146,6 @@ impl EgressProcessor {
             }
         }
     }
-}
-
-#[derive(Default, Debug)]
-struct IngressStats {
-    in_order_count: u64,
-    duplicate_count: u64,
-    seq_jump_count: u64,
 }
 
 struct IngressProcessor {

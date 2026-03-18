@@ -20,14 +20,14 @@ async fn test_exchange_data_between_2_peers() {
     let socket2 = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
     let addr2 = socket2.local_addr().unwrap();
 
-    let (spawner1, _reporter1, driver) = init(socket1);
+    let (spawner1, _reporter1, driver) = new_endpoint(socket1);
     task::spawn_local(driver.run());
 
-    let (spawner2, mut reporter2, driver) = init(socket2);
+    let (spawner2, mut reporter2, driver) = new_endpoint(socket2);
     task::spawn_local(driver.run());
 
     let outbound_fut = async move {
-        let mut pipe = spawner1.connect_to(addr2).await.unwrap();
+        let mut pipe = spawner1.add_outbound_connection(addr2).await.unwrap();
 
         pipe.write_all(b"hello from peer 1").await.unwrap();
 
@@ -47,7 +47,7 @@ async fn test_exchange_data_between_2_peers() {
     let inbound_fut = async move {
         let (remote_addr, data) = reporter2.next().await.unwrap();
         assert_eq!(remote_addr, addr1);
-        let mut pipe = spawner2.accept_from(remote_addr, data).await.unwrap();
+        let mut pipe = spawner2.add_inbound_connection(remote_addr, data).await.unwrap();
 
         pipe.write_all(b"hello from peer 2").await.unwrap();
 
@@ -78,11 +78,12 @@ async fn test_outbound_connection_timeout() {
 
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
 
-    let (spawner, _, driver) = init(socket);
+    let (spawner, _, driver) = new_endpoint(socket);
     task::spawn_local(driver.run());
 
     // connect to unreachable address
-    let Err(error) = spawner.connect_to((Ipv4Addr::LOCALHOST, 0u16).into()).await else {
+    let Err(error) = spawner.add_outbound_connection((Ipv4Addr::LOCALHOST, 0u16).into()).await
+    else {
         panic!("expected connection to timeout");
     };
     assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
@@ -101,12 +102,13 @@ async fn test_outbound_syn_doesnt_change_across_reconnects() {
     let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
     let peer_addr = peer_socket.local_addr().unwrap();
 
-    let (spawner, _reporter1, demux) = init(socket);
+    let (spawner, _reporter1, demux) = new_endpoint(socket);
     task::spawn_local(demux.run());
 
     // start connecting
     let spawner_copy = spawner.clone();
-    let connect_handle = task::spawn_local(async move { spawner_copy.connect_to(peer_addr).await });
+    let connect_handle =
+        task::spawn_local(async move { spawner_copy.add_outbound_connection(peer_addr).await });
 
     // receive SYN
     let mut buf = [0u8; 1024];
@@ -120,7 +122,7 @@ async fn test_outbound_syn_doesnt_change_across_reconnects() {
     task::yield_now().await;
     let spawner_copy = spawner.clone();
     let _connect_handle =
-        task::spawn_local(async move { spawner_copy.connect_to(peer_addr).await });
+        task::spawn_local(async move { spawner_copy.add_outbound_connection(peer_addr).await });
 
     // receive new SYN
     let mut buf = [0u8; 1024];
@@ -143,17 +145,17 @@ async fn test_pipe_data_from_one_peer_to_another() {
     let socket2 = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
     let addr2 = socket2.local_addr().unwrap();
 
-    let (spawner1, _reporter1, driver1) = init(socket1);
+    let (spawner1, _reporter1, driver1) = new_endpoint(socket1);
     task::spawn_local(driver1.run());
 
-    let (spawner2, mut reporter2, driver2) = init(socket2);
+    let (spawner2, mut reporter2, driver2) = new_endpoint(socket2);
     task::spawn_local(driver2.run());
 
     const CHUNK_SIZE: usize = 8 * 1024;
     const CHUNK_COUNT: usize = 64 * 1024;
 
     let writer_fut = async {
-        let mut pipe = spawner1.connect_to(addr2).await.unwrap();
+        let mut pipe = spawner1.add_outbound_connection(addr2).await.unwrap();
 
         for _ in 0..CHUNK_COUNT {
             let data = [b'm'; CHUNK_SIZE];
@@ -167,7 +169,7 @@ async fn test_pipe_data_from_one_peer_to_another() {
     let reader_fut = async move {
         let (remote_addr, data) = reporter2.next().await.unwrap();
         assert_eq!(remote_addr, addr1);
-        let mut pipe = spawner2.accept_from(remote_addr, data).await.unwrap();
+        let mut pipe = spawner2.add_inbound_connection(remote_addr, data).await.unwrap();
 
         let mut total_bytes = 0;
         let mut buf = [0u8; CHUNK_SIZE];
@@ -192,7 +194,7 @@ async fn test_reconnect_after_local_disconnect() {
     let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
     let peer_addr = peer_socket.local_addr().unwrap();
 
-    let (spawner, _reporter1, demux) = init(socket);
+    let (spawner, _reporter1, demux) = new_endpoint(socket);
     task::spawn_local(demux.run());
 
     let inbound = async move {
@@ -255,7 +257,7 @@ async fn test_reconnect_after_local_disconnect() {
 
     let outbound = async move {
         // connect
-        let mut pipe = spawner.connect_to(peer_addr).await.unwrap();
+        let mut pipe = spawner.add_outbound_connection(peer_addr).await.unwrap();
 
         // write data bigger than window
         let data = [b'x'; 16 * 1024];
@@ -264,7 +266,7 @@ async fn test_reconnect_after_local_disconnect() {
         // drop connection and reconnect
         drop(pipe);
         task::yield_now().await;
-        let _pipe = spawner.connect_to(peer_addr).await.unwrap();
+        let _pipe = spawner.add_outbound_connection(peer_addr).await.unwrap();
     };
 
     join!(inbound, outbound);

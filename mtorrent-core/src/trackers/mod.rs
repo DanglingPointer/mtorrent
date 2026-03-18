@@ -60,14 +60,15 @@ pub struct ScrapeResponseEntry {
     pub downloaded: usize,
 }
 
-/// Parsed scrape response.
+/// Parsed scrape response. The keys of the inner map are the info hashes that were requested in the
+/// scrape request.
 #[derive(Debug)]
 pub struct ScrapeResponse(pub HashMap<[u8; 20], ScrapeResponseEntry>);
 
-struct Request<Request, Response> {
+struct Request<RequestData, ResponseData> {
     url: TrackerUrl,
-    data: Request,
-    responder: oneshot::Sender<io::Result<Response>>,
+    data: RequestData,
+    responder: oneshot::Sender<io::Result<ResponseData>>,
 }
 
 enum Command {

@@ -20,7 +20,7 @@ pub fn new_async_storage(
 
 /// Actor that performs filesystem operations, like reading and writing
 /// chunks of data, as well as calculating their hash. All operations are done
-/// sequentially (in the same order as they were scheduled).
+/// sequentially and in the same order as they were scheduled.
 pub struct StorageServer(GenericStorageServer<fs::File>);
 
 impl StorageServer {
@@ -96,6 +96,7 @@ impl StorageClient {
 }
 
 #[cfg(feature = "mocks")]
+#[doc(hidden)]
 pub fn new_mock_storage(total_size: usize) -> StorageClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     tokio::task::spawn(async move {

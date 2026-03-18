@@ -2,6 +2,7 @@ use core::fmt;
 use rand::RngExt;
 use std::ops::Deref;
 
+/// Immutable wrapper around a 20-byte peer ID.
 #[derive(Debug, Clone, Copy)]
 pub struct PeerId([u8; 20]); // immutable wrapper
 

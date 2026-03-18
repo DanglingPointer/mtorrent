@@ -16,7 +16,7 @@ pub fn launch_utp(pwp_runtime: &runtime::Handle, local_addr: SocketAddr) -> UtpH
         match UdpSocket::bind(local_addr).await {
             Ok(socket) => {
                 task::spawn_local(async move {
-                    let (endpoint, connect_reporter, udp_demux) = utp::init(socket);
+                    let (endpoint, connect_reporter, udp_demux) = utp::new_endpoint(socket);
                     join!(udp_demux.run(), bridge_task(endpoint, cmd_receiver, connect_reporter));
                 });
             }
@@ -104,13 +104,13 @@ impl UtpHandle {
 }
 
 async fn bridge_task(
-    endpoint: utp::Endpoint,
+    endpoint: utp::EndpointHandle,
     mut cmd_receiver: mpsc::Receiver<Command>,
     mut listener: utp::InboundListener,
 ) {
     struct Bridge {
         reporter: Option<PeerReporter>,
-        endpoint: utp::Endpoint,
+        endpoint: utp::EndpointHandle,
     }
 
     impl Bridge {
@@ -130,13 +130,14 @@ async fn bridge_task(
             match cmd {
                 Command::Restart { reporter } => {
                     self.reporter = Some(reporter);
-                    self.endpoint.reset_all().await;
+                    self.endpoint.reset_connections().await;
                 }
                 Command::OutboundConnect { args, resp } => {
                     let endpoint = self.endpoint.clone();
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
-                            let mut stream = endpoint.connect_to(args.peer_addr).await?;
+                            let mut stream =
+                                endpoint.add_outbound_connection(args.peer_addr).await?;
                             let crypto = if args.protocol_encryption_enabled {
                                 pe::outbound_handshake(&mut stream, &args.info_hash, &[0u8; 0][..])
                                     .await?
@@ -162,7 +163,8 @@ async fn bridge_task(
                     let endpoint = self.endpoint.clone();
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
-                            let stream = endpoint.accept_from(args.peer_addr, args.data).await?;
+                            let stream =
+                                endpoint.add_inbound_connection(args.peer_addr, args.data).await?;
                             match pe::detect_encryption(stream).await? {
                                 pe::MaybeEncrypted::Plain(stream) => {
                                     pwp::channels_for_inbound_connection(

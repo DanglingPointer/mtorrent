@@ -38,9 +38,9 @@ fn is_transient_error(e: &io::ErrorKind) -> bool {
     )
 }
 
-/// [`UdpDemux`] is an actor that handles the network I/O. It routes incoming and outgoing packets
-/// between uTP connections and a UDP socket.
-pub struct UdpDemux {
+/// Actor that handles network I/O. Routes incoming and outgoing packets
+/// between the UDP socket and the upstream layer (connection).
+pub struct IoDriver {
     commands: mpsc::Receiver<Command>,
     socket: UdpSocket,
     connections: HashMap<SocketAddr, ConnectionHandle>,
@@ -50,7 +50,7 @@ pub struct UdpDemux {
     reset_in_progress: bool,
 }
 
-impl UdpDemux {
+impl IoDriver {
     pub(super) fn new(
         command_receiver: mpsc::Receiver<Command>,
         socket: UdpSocket,
@@ -286,7 +286,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(1);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
@@ -345,7 +345,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(1);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
@@ -380,7 +380,7 @@ mod tests {
 
         let (_cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, mut unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let msg = Bytes::from("Hello from unknown source!");
@@ -398,7 +398,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, mut unknown_rx) = local_bounded::channel(1);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
@@ -463,7 +463,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(1);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         cmd_tx.send(Command::ResetConnections).await.unwrap();
@@ -496,7 +496,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, mut unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (conn, handle) = new_connection();
@@ -525,7 +525,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn, handle) = new_connection();
@@ -550,7 +550,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         let driver_handle = task::spawn_local(driver.run());
 
         {
@@ -586,7 +586,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, mut unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         // By default OSX won't allow a larger datagram size than 9216 bytes, see https://github.com/BanTheRewind/Cinder-Asio/issues/9#issuecomment-67540675
@@ -632,7 +632,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(1);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         let driver_handle = task::spawn_local(driver.run());
 
         // add a connection
@@ -679,7 +679,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn, handle) = new_connection();
@@ -717,7 +717,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let peer_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 12345u16).into();
@@ -745,7 +745,7 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(1);
         let (unknown_tx, _unknown_rx) = local_bounded::channel(10);
-        let driver = UdpDemux::new(cmd_rx, driver_socket, unknown_tx);
+        let driver = IoDriver::new(cmd_rx, driver_socket, unknown_tx);
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();

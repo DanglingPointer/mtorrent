@@ -6,6 +6,7 @@ use std::num::ParseIntError;
 use std::{fmt, io, str};
 use thiserror::Error;
 
+/// Bencoded element.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
 pub enum Element {
     Integer(i64),
@@ -96,6 +97,7 @@ impl fmt::Display for Element {
     }
 }
 
+/// Errors that can occur during parsing of bencoded data.
 #[derive(Debug, Error, Display)]
 pub enum ParseError {
     EmptySource,
@@ -130,6 +132,7 @@ impl From<ParseError> for io::Error {
     }
 }
 
+/// Utility function for converting a bencoded dictionary to a more user-friendly representation.
 pub fn convert_dictionary(src: BTreeMap<Element, Element>) -> BTreeMap<String, Element> {
     fn to_string_key((key, value): (Element, Element)) -> Option<(String, Element)> {
         if let Element::ByteString(data) = key

@@ -17,11 +17,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task;
 
-/// Opaque data for an inbound connection attempt.
+/// Opaque data for an inbound connection attempt, returned by [`InboundListener`] and consumed by
+/// [`EndpointHandle::add_inbound_connection`].
 #[derive(Debug, Clone)]
 pub struct InboundConnectData(Header);
 
-/// Stream of inbound connection attempts (i.e. received SYN packets that don't belong to an
+/// Stream of incoming connection attempts (i.e. received SYN packets that don't belong to an
 /// existing connection).
 pub struct InboundListener(local_bounded::Receiver<(SocketAddr, Bytes)>);
 
@@ -58,12 +59,12 @@ impl Stream for InboundListener {
 
 /// Handle for creating new uTP connections.
 #[derive(Clone)]
-pub struct Endpoint {
+pub struct EndpointHandle {
     cmds: mpsc::Sender<udp::Command>,
     hasher_state: Rc<RandomState>,
 }
 
-impl Endpoint {
+impl EndpointHandle {
     const PIPE_CAPACITY: usize = crate::pwp::MAX_BLOCK_SIZE;
     const INGRESS_QUEUE: usize = 64;
 
@@ -74,12 +75,12 @@ impl Endpoint {
         }
     }
 
-    /// Establish a new outbound connection to `remote_addr`. Returns after a successful uTP
-    /// handshake.
+    /// Establish a new outbound connection to `remote_addr`. Waits for the uTP handshake to
+    /// complete and returns a [`DataStream`] for the new connection.
     /// # Error
-    /// If [`UdpDemux`](super::UdpDemux) has been shut down or if uTP handshake failed or if the
+    /// If [`IoDriver`](super::IoDriver) has been shut down or if uTP handshake failed or if the
     /// connection already exists.
-    pub async fn connect_to(&self, remote_addr: SocketAddr) -> io::Result<DataStream> {
+    pub async fn add_outbound_connection(&self, remote_addr: SocketAddr) -> io::Result<DataStream> {
         let (left, right) = local_pipe::duplex_pipe(Self::PIPE_CAPACITY);
         let (egress_sender, egress_receiver) = local_bounded::channel(1);
         let (ingress_sender, ingress_receiver) = local_bounded::channel(Self::INGRESS_QUEUE);
@@ -117,12 +118,12 @@ impl Endpoint {
         })
     }
 
-    /// Establish a new inbound connection from `remote_addr`. Returns after a successful uTP
-    /// handshake.
+    /// Accept a new inbound connection from `remote_addr`. Waits for the uTP handshake to
+    /// complete and returns a [`DataStream`] for the new connection.
     /// # Error
-    /// If [`UdpDemux`](super::UdpDemux) has been shut down or if uTP handshake failed or if the
+    /// If [`IoDriver`](super::IoDriver) has been shut down or if uTP handshake failed or if the
     /// connection already exists.
-    pub async fn accept_from(
+    pub async fn add_inbound_connection(
         &self,
         remote_addr: SocketAddr,
         data: InboundConnectData,
@@ -160,13 +161,13 @@ impl Endpoint {
     }
 
     /// Close all connections by sending RESET packets.
-    pub async fn reset_all(&self) {
+    pub async fn reset_connections(&self) {
         let _ = self.cmds.send(udp::Command::ResetConnections).await;
     }
 }
 
-/// Readable and writable channel returned by [`Endpoint`] after a successful connection. Dropping
-/// the stream will close the underlying uTP connection by sending a RESET packet.
+/// Readable and writable channel returned by [`EndpointHandle`] after a successful connection.
+/// Dropping the stream will close the underlying uTP connection by sending a RESET packet.
 #[derive(Debug)]
 pub struct DataStream {
     pipe: local_pipe::DuplexEnd,

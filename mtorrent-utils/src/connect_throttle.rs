@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 /// Connection slot for a given remote address. No other connections to the same remote address
-/// will be allowed until [`ConnectPermit`] goes out of scope. Each permit takes up one capacity
+/// will be allowed unless [`ConnectPermit`] goes out of scope. Each permit uses one capacity
 /// slot.
 pub struct ConnectPermit {
     addr: SocketAddr,
@@ -32,7 +32,8 @@ impl Drop for ConnectPermit {
     }
 }
 
-/// Utility for limiting the number of simultaneous connections and avoiding duplicates.
+/// Utility for limiting the number of concurrent connections and for preventing duplicate
+/// connection attempts to the same peer.
 pub struct ConnectThrottle {
     connected_peers: Rc<sealed::Set<SocketAddr>>,
     known_peers: BoundedFifoSet<SocketAddr>,
@@ -41,7 +42,8 @@ pub struct ConnectThrottle {
 
 impl ConnectThrottle {
     /// Create new throttle that allows up to `max_connections` concurrent permits, and keeps track
-    /// of `remembered_peers` last addresses that have been issued a permit.
+    /// of `remembered_peers` last addresses that have been issued a permit (regardless of whether
+    /// the permit is still alive or not).
     pub fn new(max_connections: usize, remembered_peers: usize) -> Self {
         Self {
             connected_peers: Rc::new(sealed::Set::with_capacity(max_connections)),
@@ -50,9 +52,9 @@ impl ConnectThrottle {
         }
     }
 
-    /// Wait for a slot for an outbound connection or return immediately if the maximum capacity
-    /// hasn't been reached yet. Returns [`None`] if already connected to `remote_addr`, or was
-    /// connected until recently (with the exception of reconnects), otherwise returns a permit
+    /// Wait for a slot for an outbound connection or return immediately if the capacity hasn't been
+    /// exhausted yet. Returns [`None`] if either already connected to `remote_addr`, or was
+    /// connected until recently (with the exception of reconnects). Otherwise returns a permit
     /// for the given remote address.
     pub async fn permit_for_outbound(
         &mut self,

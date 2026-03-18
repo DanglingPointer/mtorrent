@@ -1,5 +1,5 @@
 mod connection;
-mod endpoint;
+mod handle;
 mod protocol;
 mod retransmitter;
 mod seq;
@@ -12,17 +12,19 @@ use local_async_utils::prelude::*;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
-pub use endpoint::{DataStream, Endpoint, InboundConnectData, InboundListener};
-pub use udp::UdpDemux;
+pub use handle::{DataStream, EndpointHandle, InboundConnectData, InboundListener};
+pub use udp::IoDriver;
 
-/// Initialize the uTP subsystem.
-pub fn init(socket: UdpSocket) -> (Endpoint, InboundListener, UdpDemux) {
+/// Creates a new uTP endpoint using the given UDP socket, returning an [`EndpointHandle`] for
+/// creating connections, an [`InboundListener`] for accepting incoming connection attempts, and an
+/// [`IoDriver`] that must be run to drive the endpoint's I/O.
+pub fn new_endpoint(socket: UdpSocket) -> (EndpointHandle, InboundListener, IoDriver) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(1);
     let (connect_sender, connect_receiver) = local_bounded::channel(64);
 
     (
-        Endpoint::new(cmd_sender),
+        EndpointHandle::new(cmd_sender),
         InboundListener::new(connect_receiver),
-        UdpDemux::new(cmd_receiver, socket, connect_sender),
+        IoDriver::new(cmd_receiver, socket, connect_sender),
     )
 }
