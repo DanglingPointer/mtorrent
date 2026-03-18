@@ -136,7 +136,7 @@ async fn process_pex(inner: &mut Data, pex: Box<PeerExchangeData>) {
 
     if !pex.added.is_empty() {
         let new_peers: Vec<_> =
-            with_ctx!(|ctx| pex.added.difference(&ctx.reachable_peers).cloned().collect());
+            with_ctx!(|ctx| pex.added.difference(&ctx.discovered_peers).cloned().collect());
         for peer_addr in new_peers {
             inner.peer_reporter.report_discovered(peer_addr, pwp::PeerOrigin::Pex).await;
         }

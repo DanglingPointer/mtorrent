@@ -80,7 +80,7 @@ pub struct PreliminaryCtx {
     pub(super) magnet: input::MagnetLink,
     pub(super) metainfo: Vec<u8>,
     pub(super) metainfo_pieces: pwp::Bitfield,
-    pub(super) reachable_peers: HashSet<SocketAddr>,
+    pub(super) discovered_peers: HashSet<SocketAddr>,
     pub(super) peer_states: pwp::PeerStates,
     pub(super) const_data: ConstData,
 }
@@ -96,7 +96,7 @@ impl PreliminaryCtx {
             magnet,
             metainfo: Vec::new(),
             metainfo_pieces: pwp::Bitfield::new(),
-            reachable_peers: Default::default(),
+            discovered_peers: Default::default(),
             peer_states: Default::default(),
             const_data: ConstData {
                 local_peer_id,
@@ -178,7 +178,7 @@ pub async fn periodic_metadata_check<L: StateListener>(
 
     with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
 
-    Ok(with_ctx!(|ctx| mem::take(&mut ctx.reachable_peers)))
+    Ok(with_ctx!(|ctx| mem::take(&mut ctx.discovered_peers)))
 }
 
 pub async fn periodic_state_dump<L: StateListener>(

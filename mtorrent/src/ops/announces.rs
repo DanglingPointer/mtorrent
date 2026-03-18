@@ -178,14 +178,27 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
     }
 
     fn preprocess_response(&mut self, response: &mut AnnounceResponse) {
-        self.with(|ctx| response.peers.retain(|peer_ip| !ctx.reachable_peers.contains(peer_ip)));
+        self.with(|ctx| {
+            // filter out already discovered peers
+            response.peers.retain(|peer_ip| !ctx.discovered_peers.contains(peer_ip));
+
+            // Save all the returned peers now because when the metadata download finishes the
+            // addresses in the PeerReporter queue will be lost, and it might take time to re-fetch
+            // them from trackers
+            // (if the preliminary stage was very short, the trackers might rate-limit us when we
+            // announce again immediately after the transition to main stage)
+            ctx.discovered_peers.extend(&response.peers);
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mtorrent_core::input::MagnetLink;
+    use mtorrent_utils::peer_id::PeerId;
     use std::collections::HashSet;
+    use std::net::SocketAddr;
     use std::{fs, iter};
 
     #[test]
@@ -297,5 +310,65 @@ mod tests {
         }
 
         fs::remove_dir_all(config_dir).unwrap();
+    }
+
+    #[test]
+    fn test_preliminary_preprocess_response_filters_and_saves_peers() {
+        let magnet = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
+            .parse::<MagnetLink>()
+            .unwrap();
+        let peer_id = PeerId::from(&[0u8; 20]);
+        let listener_addr: SocketAddr = "127.0.0.1:6881".parse().unwrap();
+        let mut handle = ctx::PreliminaryCtx::new(magnet, peer_id, listener_addr, 6881);
+
+        let peer1: SocketAddr = "1.2.3.4:1000".parse().unwrap();
+        let peer2: SocketAddr = "5.6.7.8:2000".parse().unwrap();
+        let peer3: SocketAddr = "9.10.11.12:3000".parse().unwrap();
+
+        // First response: all peers are new, none should be filtered out
+        {
+            let mut response = AnnounceResponse {
+                interval: sec!(60),
+                peers: vec![peer1, peer2],
+            };
+            handle.preprocess_response(&mut response);
+            assert_eq!(response.peers, vec![peer1, peer2]);
+            // Verify peers were saved to discovered_peers
+            handle.with(|ctx| {
+                assert!(ctx.discovered_peers.contains(&peer1));
+                assert!(ctx.discovered_peers.contains(&peer2));
+                assert_eq!(ctx.discovered_peers.len(), 2);
+            });
+        }
+
+        // Second response: peer1 is already known, peer3 is new
+        {
+            let mut response = AnnounceResponse {
+                interval: sec!(60),
+                peers: vec![peer1, peer3],
+            };
+            handle.preprocess_response(&mut response);
+            // peer1 should be filtered out
+            assert_eq!(response.peers, vec![peer3]);
+            // peer3 should now also be saved
+            handle.with(|ctx| {
+                assert!(ctx.discovered_peers.contains(&peer3));
+                assert_eq!(ctx.discovered_peers.len(), 3);
+            });
+        }
+
+        // Third response: all peers already known
+        {
+            let mut response = AnnounceResponse {
+                interval: sec!(60),
+                peers: vec![peer1, peer2, peer3],
+            };
+            handle.preprocess_response(&mut response);
+            assert!(response.peers.is_empty());
+        }
+
+        // verify discovered_peers
+        let discovered_peers = handle.with(|ctx| ctx.discovered_peers.clone());
+        assert_eq!(discovered_peers, [peer1, peer2, peer3].into_iter().collect());
     }
 }

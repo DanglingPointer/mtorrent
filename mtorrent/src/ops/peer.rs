@@ -347,7 +347,7 @@ async fn run_metadata_download(
     mut ctx_handle: PreliminaryHandle,
     peer_reporter: PeerReporter,
 ) -> io::Result<()> {
-    ctx_handle.with(|ctx| ctx.reachable_peers.insert(*download_chans.0.remote_ip()));
+    ctx_handle.with(|ctx| ctx.discovered_peers.insert(*download_chans.0.remote_ip()));
 
     async fn handle_download(download_chans: pwp::DownloadChannels) -> io::Result<()> {
         let pwp::DownloadChannels(tx, mut rx) = download_chans;

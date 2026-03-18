@@ -782,11 +782,21 @@ async fn start_tracker<'a>(
     })
     .await;
 
+    // respond 200 to the first request
     let mock = server
         .mock("GET", "/announce")
         .match_query(mockito::Matcher::Regex(format!(".*info_hash={info_hash}.*")))
+        .expect(1)
         .with_status(200)
         .with_body(response)
+        .create_async()
+        .await;
+
+    // rate-limit subsequent requests
+    let _fallback = server
+        .mock("GET", "/announce")
+        .match_query(mockito::Matcher::Regex(format!(".*info_hash={info_hash}.*")))
+        .with_status(429)
         .create_async()
         .await;
 
@@ -1290,20 +1300,23 @@ async fn test_download_torrent_from_magnet_link() {
     let data_dir = "tests/assets/screenshots";
     fs::create_dir_all(output_dir).unwrap();
     let port = 17000;
+    let tracker_port = 10_000;
 
     let peer_ips = (50100u16..50110u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
-    let magnet_link = {
-        let mut tmp = "magnet:?xt=urn:btih:faa73597e79968e1946fcb223e274aa5bb7d2eda&dn=screenshots"
-            .to_string();
-        for peer_addr in &peer_ips {
-            tmp.push_str("&x.pe=");
-            tmp.push_str(&peer_addr.to_string());
-        }
-        tmp
-    };
+    let (server, tracker_mock) = start_tracker(
+        tracker_port,
+        peer_ips.iter(),
+        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+    )
+    .await;
+
+    let magnet_link = format!(
+        "magnet:?xt=urn:btih:faa73597e79968e1946fcb223e274aa5bb7d2eda&dn=screenshots&tr={}/announce",
+        server.url()
+    );
 
     let mtorrent = task::spawn(async move {
         time::sleep(sec!(2)).await; // wait for listening peers to launch
@@ -1336,6 +1349,8 @@ async fn test_download_torrent_from_magnet_link() {
 
     let mtorrent_ecode = mtorrent.await.unwrap().wait().expect("failed to wait on 'mtorrent'");
     assert!(mtorrent_ecode.success());
+
+    tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
     fs::remove_dir_all(output_dir).unwrap();
