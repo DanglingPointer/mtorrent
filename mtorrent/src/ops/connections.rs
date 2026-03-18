@@ -42,14 +42,19 @@ pub struct PeerReporter {
 
 impl PeerReporter {
     pub async fn report_discovered(&self, addr: SocketAddr, origin: PeerOrigin) -> bool {
-        self.discovered_reporter
-            .send(OutboundConnect {
-                addr,
-                origin,
-                attempt: 0,
-            })
-            .await
-            .is_ok()
+        if addr.ip().is_unspecified() || matches!(addr.port(), 0..1024) {
+            // invalid address, ignore it
+            !self.discovered_reporter.is_closed()
+        } else {
+            self.discovered_reporter
+                .send(OutboundConnect {
+                    addr,
+                    origin,
+                    attempt: 0,
+                })
+                .await
+                .is_ok()
+        }
     }
 
     pub async fn report_accepted(&self, addr: SocketAddr, stream: TcpStream) -> bool {
@@ -448,8 +453,8 @@ mod tests {
     use tokio::runtime::UnhandledPanic;
     use tokio::time::{sleep, sleep_until};
 
-    fn addr(port: u16) -> SocketAddr {
-        (Ipv4Addr::LOCALHOST, port).into()
+    fn addr(i: u16) -> SocketAddr {
+        (Ipv4Addr::LOCALHOST, 1024 + i).into()
     }
 
     /// ```no_run
@@ -1097,6 +1102,28 @@ mod tests {
             task::yield_now().await;
             assert!(run_task.is_finished());
             assert_eq!(Arc::strong_count(&token), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "local")]
+    async fn test_peer_reporter_filters_out_invalid_peer_addrs() {
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().once().return_const(100usize);
+
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
+
+        let invalid_ip_addrs = [SocketAddr::from(([0, 0, 0, 0], 6881))];
+        let invalid_port_addrs = (0..1024).map(|port| SocketAddr::from(([1, 2, 3, 4], port)));
+
+        for peer_addr in invalid_ip_addrs {
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            task::yield_now().await;
+        }
+
+        for peer_addr in invalid_port_addrs {
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+            task::yield_now().await;
         }
     }
 }

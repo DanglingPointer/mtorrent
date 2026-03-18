@@ -244,10 +244,10 @@ async fn do_http_announce(
     let interval_sec = response
         .interval()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no interval in response"))?;
-    let mut peers = response
+    let peers = response
         .peers()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no peers in response"))?;
-    peers.retain(|peer_ip| !peer_ip.ip().is_unspecified());
+
     Ok(AnnounceResponse {
         interval: sec!(interval_sec as u64),
         peers,
@@ -328,8 +328,7 @@ async fn do_udp_announce(
         num_want: Some(data.num_want as i32),
         port: data.listener_port,
     };
-    let mut response = client.do_announce_request(request).await?;
-    response.ips.retain(|peer_ip| !peer_ip.ip().is_unspecified());
+    let response = client.do_announce_request(request).await?;
 
     Ok(AnnounceResponse {
         interval: sec!(response.interval as u64),
