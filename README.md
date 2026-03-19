@@ -24,7 +24,7 @@ This repo contains reusable library crates and a CLI executable. For GUI version
 - [x] [PEX](https://www.bittorrent.org/beps/bep_0011.html)
 - [x] [Magnet URIs](http://www.bittorrent.org/beps/bep_0009.html)
 - [x] [IPv6 Tracker Extension](https://www.bittorrent.org/beps/bep_0007.html)
-- [x] [DHT](https://www.bittorrent.org/beps/bep_0005.html) ([Kademlia](https://www.scs.stanford.edu/~dm/home/papers/kpos.pdf))
+- [x] [DHT](https://www.bittorrent.org/beps/bep_0005.html) ([Kademlia](https://homes.cs.aau.dk/~bnielsen/DSE04/papers/kademlia.pdf))
 - [x] [Protocol Encryption](https://css.csail.mit.edu/6.858/2018/projects/bgu-kelvinlu.pdf)
 - [x] [uTP](https://github.com/bittorrent/libutp)
 - [ ] [IPv6 DHT](https://www.bittorrent.org/beps/bep_0032.html)

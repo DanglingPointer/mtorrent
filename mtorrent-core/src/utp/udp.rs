@@ -71,8 +71,8 @@ impl IoDriver {
 
     /// Run the I/O (de-)multiplexing.
     pub async fn run(mut self) {
-        log::info!("uTP Demux started");
-        let _sw = info_stopwatch!("uTP Demux");
+        log::info!("uTP IoDriver started");
+        let _sw = info_stopwatch!("uTP IoDriver");
         loop_select(&mut self, [Self::poll_commands, Self::poll_egress, Self::poll_ingress]).await;
     }
 
@@ -90,7 +90,7 @@ impl IoDriver {
         macro_rules! trigger_reset {
             ($reason:expr) => {{
                 if !self.reset_in_progress {
-                    log::info!("uTP Demux {} initiated", $reason);
+                    log::info!("uTP IoDriver {} initiated", $reason);
                     self.pending_tx.clear();
                     for connection in self.connections.values_mut() {
                         // fake an empty inbound packet which will fail parsing and trigger an

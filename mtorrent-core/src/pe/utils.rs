@@ -12,7 +12,8 @@ pub enum MaybeEncrypted<T> {
 }
 
 /// Determine if the stream is likely encrypted or not by checking if the first bytes match the
-/// BitTorrent protocol string.
+/// BitTorrent protocol string. The stream is returned with the first bytes "put back" so that the
+/// caller can read them regardless of encryption status.
 pub async fn detect_encryption<S: AsyncRead + Unpin>(
     mut stream: S,
 ) -> io::Result<MaybeEncrypted<PrefixedStream<io::Cursor<[u8; PROTOCOL_STRING.len()]>, S>>> {
@@ -312,7 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_stream_unencrypted() {
+    async fn test_detect_encryption() {
         let unencrypted_stream = io::Cursor::new(PROTOCOL_STRING);
         match detect_encryption(unencrypted_stream).await.unwrap() {
             MaybeEncrypted::Plain(mut stream) => {

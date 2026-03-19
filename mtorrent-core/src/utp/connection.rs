@@ -198,6 +198,7 @@ impl IngressProcessor {
                             self.ack_required_reporter.signal_one();
                         }
                         TypeVer::Fin => {
+                            log::debug!("Ingress processor for {peer_addr} exiting: received FIN");
                             return Ok(());
                         }
                         TypeVer::Reset => {
@@ -226,6 +227,7 @@ impl IngressProcessor {
                             );
                         }
                         if header.type_ver == TypeVer::Data {
+                            // our ack might've been lost, retransmit it
                             self.ack_required_reporter.signal_one();
                         }
                     }

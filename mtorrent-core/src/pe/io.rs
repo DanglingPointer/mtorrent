@@ -214,8 +214,9 @@ impl<W: AsyncWrite> AsyncWrite for EncryptingWriter<W> {
 }
 
 pin_project! {
-    /// A wrapper around an [`AsyncRead`](https://docs.rs/tokio/latest/tokio/io/trait.AsyncRead.html) that first returns the bytes from an initial buffer, and then
-    /// delegates to the wrapped stream.
+    /// A wrapper around an [`AsyncRead`](https://docs.rs/tokio/latest/tokio/io/trait.AsyncRead.html) that first returns the bytes from an initial buffer `T`, and then
+    /// delegates to the wrapped stream `S`. Similar to [`Chain`](https://docs.rs/tokio/latest/tokio/io/struct.Chain.html), but also implements `AsyncWrite` and `SplitStream`
+    /// if `S` does.
     pub struct PrefixedStream<T: Buf, S> {
         prefix: T,
         #[pin]
@@ -284,7 +285,7 @@ impl<T: Buf, S: AsyncWrite> AsyncWrite for PrefixedStream<T, S> {
 
 impl<T: Buf, S: SplitStream> SplitStream for PrefixedStream<T, S> {
     type Ingress<'i>
-        = Chain<io::Cursor<&'i [u8]>, <S as SplitStream>::Ingress<'i>>
+        = Chain<&'i [u8], <S as SplitStream>::Ingress<'i>>
     where
         Self: 'i;
 
@@ -295,7 +296,7 @@ impl<T: Buf, S: SplitStream> SplitStream for PrefixedStream<T, S> {
 
     fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
         let (ingress, egress) = self.stream.split();
-        let ingress = AsyncReadExt::chain(io::Cursor::new(self.prefix.chunk()), ingress);
+        let ingress = AsyncReadExt::chain(self.prefix.chunk(), ingress);
         (ingress, egress)
     }
 }
