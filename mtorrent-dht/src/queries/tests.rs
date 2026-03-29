@@ -170,10 +170,8 @@ fn test_outgoing_get_peers_success() {
                     GetPeersResponse {
                         id: U160::from([3u8; 20]),
                         token: Some(vec![4u8; 2]),
-                        data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(
-                            Ipv4Addr::LOCALHOST,
-                            1234,
-                        )]),
+                        peers: vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)],
+                        nodes: Vec::new(),
                     }
                     .into(),
                 ),
@@ -186,12 +184,8 @@ fn test_outgoing_get_peers_success() {
     let get_peers_response = get_peers_result.unwrap();
     assert_eq!(get_peers_response.id, U160::from([3u8; 20]));
     assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
-    assert!(
-        matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
-            Ipv4Addr::LOCALHOST,
-            1234,
-        )])
-    );
+    assert_eq!(get_peers_response.peers, vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)]);
+    assert_eq!(get_peers_response.nodes, Vec::new());
 }
 
 #[test]
@@ -891,7 +885,8 @@ fn test_incoming_get_peers_success() {
         .respond(GetPeersResponse {
             id: U160::from([3u8; 20]),
             token: Some(vec![4u8; 2]),
-            data: GetPeersResponseData::Peers(vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)]),
+            peers: vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)],
+            nodes: Vec::new(),
         })
         .unwrap();
     assert_pending!(runner_fut.poll());
@@ -904,12 +899,8 @@ fn test_incoming_get_peers_success() {
     };
     assert_eq!(get_peers_response.id, U160::from([3u8; 20]));
     assert_eq!(get_peers_response.token, Some(vec![4u8; 2]));
-    assert!(
-        matches!(get_peers_response.data, GetPeersResponseData::Peers(peers) if peers == vec![SocketAddrV4::new(
-            Ipv4Addr::LOCALHOST,
-            1234,
-        )])
-    );
+    assert_eq!(get_peers_response.peers, vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234)]);
+    assert_eq!(get_peers_response.nodes, Vec::new());
 }
 
 #[test]

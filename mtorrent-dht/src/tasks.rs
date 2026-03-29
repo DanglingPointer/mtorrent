@@ -19,14 +19,15 @@ const PING_INTERVAL: Duration = min!(1);
 const PING_JITTER: Duration = sec!(5);
 const GET_PEERS_INTERVAL: Duration = sec!(30);
 
-macro_rules! is_valid_addr {
+macro_rules! is_port_valid {
     ($addr:expr) => {
-        !$addr.ip().is_unspecified() && $addr.port() >= 1024
+        $addr.port() >= 1024
     };
 }
 
 fn validate_discovered_node(discovered: &Node, source: &Node, ctx: &Ctx) -> bool {
-    is_valid_addr!(discovered.addr)
+    !discovered.addr.ip().is_unspecified()
+        && is_port_valid!(discovered.addr)
         && discovered.addr != source.addr
         && discovered.id != source.id
         && discovered.id != ctx.local_id
@@ -129,20 +130,6 @@ async fn query_node_for_peers(
     node_reporter: mpsc::Sender<Node>,
     peer_reporter: mpsc::Sender<SocketAddr>,
 ) -> Result<()> {
-    macro_rules! announce_peer {
-        ($token:expr) => {
-            ctx.client.announce_peer(
-                node.addr,
-                AnnouncePeerArgs {
-                    id: ctx.local_id,
-                    info_hash: target,
-                    port: Some(local_peer_port),
-                    token: $token,
-                },
-            )
-        };
-    }
-
     while !node_reporter.is_closed() && !peer_reporter.is_closed() {
         let get_peers_response = ctx
             .client
@@ -155,66 +142,68 @@ async fn query_node_for_peers(
             )
             .await?;
 
-        match get_peers_response.data {
-            GetPeersResponseData::Nodes(id_addr_pairs) => {
-                log::trace!("search produced {} nodes", id_addr_pairs.len());
+        if get_peers_response.nodes.is_empty() && get_peers_response.peers.is_empty() {
+            // node is useless
+            return Ok(());
+        }
 
-                for (id, addr) in id_addr_pairs {
-                    let discovered = Node {
+        log::trace!(
+            "search produced {} nodes and {} peers",
+            get_peers_response.nodes.len(),
+            get_peers_response.peers.len()
+        );
+        let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
+
+        // report discovered nodes if any
+        for (id, addr) in get_peers_response.nodes {
+            let discovered = Node {
+                id,
+                addr: SocketAddr::V4(addr),
+            };
+            if validate_discovered_node(&discovered, &node, &ctx) {
+                node_reporter
+                    .send(Node {
                         id,
                         addr: SocketAddr::V4(addr),
-                    };
-                    if validate_discovered_node(&discovered, &node, &ctx) {
-                        node_reporter
-                            .send(Node {
-                                id,
-                                addr: SocketAddr::V4(addr),
-                            })
-                            .await?;
-                    }
-                }
-                if let Some(token) = get_peers_response.token {
-                    announce_peer!(token).await?;
-                }
-                break;
-            }
-            GetPeersResponseData::Peers(socket_addr_v4s) => {
-                log::trace!("search produced {} peer(s)", socket_addr_v4s.len());
-                let repeat_at = Instant::now() + GET_PEERS_INTERVAL;
-
-                for peer_addr in socket_addr_v4s {
-                    if is_valid_addr!(peer_addr) {
-                        peer_reporter.send(SocketAddr::V4(peer_addr)).await?;
-                    }
-                }
-                if let Some(token) = get_peers_response.token {
-                    announce_peer!(token).await?;
-                }
-
-                let find_nodes_response = ctx
-                    .client
-                    .find_node(
-                        node.addr,
-                        FindNodeArgs {
-                            id: ctx.local_id,
-                            target,
-                        },
-                    )
+                    })
                     .await?;
-                for (node_id, node_addr) in find_nodes_response.nodes {
-                    let discovered = Node {
-                        id: node_id,
-                        addr: SocketAddr::V4(node_addr),
-                    };
-                    if validate_discovered_node(&discovered, &node, &ctx) {
-                        node_reporter.send(discovered).await?;
-                    }
-                }
-
-                time::sleep_until(repeat_at).await;
             }
         }
+
+        if get_peers_response.peers.is_empty() {
+            // prune this branch
+            break;
+        }
+
+        // report discovered peers
+        for mut peer_addr in get_peers_response.peers.into_iter().map(SocketAddr::V4) {
+            if peer_addr.ip().is_unspecified() || peer_addr.ip().is_loopback() {
+                peer_addr.set_ip(node.addr.ip());
+            }
+            if is_port_valid!(peer_addr) {
+                peer_reporter.send(peer_addr).await?;
+            }
+        }
+
+        // announce if possible
+        if let Some(token) = get_peers_response.token {
+            ctx.client
+                .announce_peer(
+                    node.addr,
+                    AnnouncePeerArgs {
+                        id: ctx.local_id,
+                        info_hash: target,
+                        port: Some(local_peer_port),
+                        token,
+                    },
+                )
+                .await?;
+        }
+
+        time::sleep_until(repeat_at).await;
     }
+
+    // try insert this node in the routing table
     ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
     Ok(())
 }

@@ -487,13 +487,8 @@ impl TryFrom<ResponseMsg> for FindNodeResponse {
 pub(super) struct GetPeersResponse {
     pub(super) id: U160,
     pub(super) token: Option<Vec<u8>>,
-    pub(super) data: GetPeersResponseData,
-}
-
-#[derive(Debug)]
-pub(super) enum GetPeersResponseData {
-    Nodes(Vec<(U160, SocketAddrV4)>),
-    Peers(Vec<SocketAddrV4>),
+    pub(super) nodes: Vec<(U160, SocketAddrV4)>,
+    pub(super) peers: Vec<SocketAddrV4>,
 }
 
 impl From<GetPeersResponse> for ResponseMsg {
@@ -505,22 +500,27 @@ impl From<GetPeersResponse> for ResponseMsg {
             port.copy_from_slice(&ip.port().to_be_bytes());
             benc::Element::ByteString(buffer)
         }
-        let mut data: BTreeMap<String, benc::Element> = [
-            ("id".into(), response.id.into()),
-            match response.data {
-                GetPeersResponseData::Nodes(nodes) => {
-                    ("nodes".into(), benc::Element::ByteString(serialize_nodes(nodes.into_iter())))
-                }
-                GetPeersResponseData::Peers(peers) => (
-                    "values".into(),
-                    benc::Element::List(peers.into_iter().map(serialize_ipv4).collect()),
-                ),
-            },
-        ]
-        .into();
+
+        let mut data: BTreeMap<String, benc::Element> = [("id".into(), response.id.into())].into();
+
+        if !response.peers.is_empty() {
+            data.insert(
+                "values".into(),
+                benc::Element::List(response.peers.into_iter().map(serialize_ipv4).collect()),
+            );
+        }
+
+        if !response.nodes.is_empty() {
+            data.insert(
+                "nodes".into(),
+                benc::Element::ByteString(serialize_nodes(response.nodes.into_iter())),
+            );
+        }
+
         if let Some(token) = response.token {
             data.insert("token".into(), benc::Element::ByteString(token));
         }
+
         Self { data }
     }
 }
@@ -537,28 +537,33 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
             _ => None,
         });
 
-        let data = if let Some(nodes) = msg.data.remove("nodes") {
-            GetPeersResponseData::Nodes(match nodes {
-                benc::Element::ByteString(bytes) => deserialize_nodes(&bytes).collect(),
-                _ => return Err(Error::ParseError("nodes not a byte string".into())),
-            })
-        } else if let Some(peers) = msg.data.remove("values") {
-            GetPeersResponseData::Peers(match peers {
-                benc::Element::List(peers) => peers
-                    .iter()
-                    .filter_map(|peer| match peer {
-                        benc::Element::ByteString(bytes) => Some(bytes.as_slice()),
-                        _ => None,
-                    })
-                    .flat_map(ip::SocketAddrV4BytesIter)
-                    .collect::<Vec<_>>(),
-                _ => return Err(Error::ParseError("peers not a list".into())),
-            })
-        } else {
-            return Err(Error::ParseError("no nodes or values".into()));
+        // we parse both 'nodes' AND 'values' because of https://www.libtorrent.org/dht_extensions.html
+
+        let nodes = match msg.data.remove("nodes") {
+            Some(benc::Element::ByteString(bytes)) => deserialize_nodes(&bytes).collect(),
+            Some(_) => return Err(Error::ParseError("nodes not a byte string".into())),
+            None => Vec::new(),
         };
 
-        Ok(Self { id, token, data })
+        let values = match msg.data.remove("values") {
+            Some(benc::Element::List(peers)) => peers
+                .iter()
+                .filter_map(|peer| match peer {
+                    benc::Element::ByteString(bytes) => Some(bytes.as_slice()),
+                    _ => None,
+                })
+                .flat_map(ip::SocketAddrV4BytesIter)
+                .collect::<Vec<_>>(),
+            Some(_) => return Err(Error::ParseError("values not a list".into())),
+            None => Vec::new(),
+        };
+
+        Ok(Self {
+            id,
+            token,
+            nodes,
+            peers: values,
+        })
     }
 }
 
@@ -828,6 +833,7 @@ mod tests {
 
     #[test]
     fn test_encode_get_peers_response() {
+        // only peers
         let msg = Message {
             transaction_id: Vec::from(b"aa"),
             version: None,
@@ -835,13 +841,12 @@ mod tests {
                 GetPeersResponse {
                     id: U160::from(*b"abcdefghij0123456789"),
                     token: Some(Vec::from(b"aoeusnth")),
-                    data: GetPeersResponseData::Peers(
-                        [
-                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
-                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
-                        ]
-                        .into(),
-                    ),
+                    peers: [
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
+                    ]
+                    .into(),
+                    nodes: Vec::new(),
                 }
                 .into(),
             ),
@@ -852,6 +857,7 @@ mod tests {
             b"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:\x7F\x00\x00\x01\x1A\x0A6:\x7F\x00\x00\x01\x1E\x61ee1:t2:aa1:y1:re"
         );
 
+        // only nodes
         let msg = Message {
             transaction_id: Vec::from(b"aa"),
             version: None,
@@ -859,19 +865,18 @@ mod tests {
                 GetPeersResponse {
                     id: U160::from(*b"abcdefghij0123456789"),
                     token: None,
-                    data: GetPeersResponseData::Nodes(
-                        [
-                            (
-                                U160::from(*b"abcdefghij0123456789"),
-                                SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
-                            ),
-                            (
-                                U160::from(*b"mnopqrstuvwxyz123456"),
-                                SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
-                            ),
-                        ]
-                        .into(),
-                    ),
+                    nodes: [
+                        (
+                            U160::from(*b"abcdefghij0123456789"),
+                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                        ),
+                        (
+                            U160::from(*b"mnopqrstuvwxyz123456"),
+                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
+                        ),
+                    ]
+                    .into(),
+                    peers: Vec::new(),
                 }
                 .into(),
             ),
@@ -880,6 +885,40 @@ mod tests {
         assert_eq!(
             bencoded.encode(),
             b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x61e1:t2:aa1:y1:re"
+        );
+
+        // both nodes and peers
+        let msg = Message {
+            transaction_id: Vec::from(b"aa"),
+            version: None,
+            data: MessageData::Response(
+                GetPeersResponse {
+                    id: U160::from(*b"abcdefghij0123456789"),
+                    token: None,
+                    nodes: [
+                        (
+                            U160::from(*b"abcdefghij0123456789"),
+                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                        ),
+                        (
+                            U160::from(*b"mnopqrstuvwxyz123456"),
+                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
+                        ),
+                    ]
+                    .into(),
+                    peers: [
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777),
+                    ]
+                    .into(),
+                }
+                .into(),
+            ),
+        };
+        let bencoded = benc::Element::from(msg);
+        assert_eq!(
+            bencoded.encode(),
+            b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x616:valuesl6:\x7F\x00\x00\x01\x1A\x0A6:\x7F\x00\x00\x01\x1E\x61ee1:t2:aa1:y1:re"
         );
     }
 
@@ -893,17 +932,14 @@ mod tests {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
             assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
             assert_eq!(get_peers_response.token, Some(Vec::from(b"aoeusnth")));
-            if let GetPeersResponseData::Peers(peers) = get_peers_response.data {
-                assert_eq!(
-                    peers,
-                    vec![
-                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
-                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
-                    ]
-                );
-            } else {
-                panic!("unexpected data type");
-            }
+            assert_eq!(
+                get_peers_response.peers,
+                vec![
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                ]
+            );
+            assert_eq!(get_peers_response.nodes, Vec::new());
         } else {
             panic!("unexpected message type");
         }
@@ -916,17 +952,14 @@ mod tests {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
             assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
             assert_eq!(get_peers_response.token, Some(Vec::from(b"aoeusnth")));
-            if let GetPeersResponseData::Peers(peers) = get_peers_response.data {
-                assert_eq!(
-                    peers,
-                    vec![
-                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
-                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
-                    ]
-                );
-            } else {
-                panic!("unexpected data type");
-            }
+            assert_eq!(
+                get_peers_response.peers,
+                vec![
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                ]
+            );
+            assert_eq!(get_peers_response.nodes, Vec::new());
         } else {
             panic!("unexpected message type");
         }
@@ -939,23 +972,52 @@ mod tests {
             let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
             assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
             assert_eq!(get_peers_response.token, None);
-            if let GetPeersResponseData::Nodes(nodes) = get_peers_response.data {
-                assert_eq!(
-                    nodes,
-                    vec![
-                        (
-                            U160::from(*b"abcdefghij0123456789"),
-                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)
-                        ),
-                        (
-                            U160::from(*b"mnopqrstuvwxyz123456"),
-                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
-                        ),
-                    ]
-                );
-            } else {
-                panic!("unexpected data type");
-            }
+            assert_eq!(
+                get_peers_response.nodes,
+                vec![
+                    (
+                        U160::from(*b"abcdefghij0123456789"),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)
+                    ),
+                    (
+                        U160::from(*b"mnopqrstuvwxyz123456"),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                    ),
+                ]
+            );
+            assert_eq!(get_peers_response.peers, Vec::new());
+        } else {
+            panic!("unexpected message type");
+        }
+
+        let bencoded = benc::Element::from_bytes(b"d1:rd2:id20:abcdefghij01234567895:nodes52:abcdefghij0123456789\x7F\x00\x00\x01\x1A\x0Amnopqrstuvwxyz123456\x7F\x00\x00\x01\x1E\x616:valuesl6:\x7F\x00\x00\x01\x1A\x0A6:\x7F\x00\x00\x01\x1E\x61ee1:t2:aa1:y1:re").unwrap();
+        let msg = Message::try_from(bencoded).unwrap();
+        assert_eq!(msg.transaction_id, Vec::from(b"aa"));
+        assert_eq!(msg.version, None);
+        if let MessageData::Response(msg) = msg.data {
+            let get_peers_response = GetPeersResponse::try_from(msg).unwrap();
+            assert_eq!(get_peers_response.id, U160::from(*b"abcdefghij0123456789"));
+            assert_eq!(get_peers_response.token, None);
+            assert_eq!(
+                get_peers_response.nodes,
+                vec![
+                    (
+                        U160::from(*b"abcdefghij0123456789"),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)
+                    ),
+                    (
+                        U160::from(*b"mnopqrstuvwxyz123456"),
+                        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                    ),
+                ]
+            );
+            assert_eq!(
+                get_peers_response.peers,
+                vec![
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666),
+                    SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7777)
+                ]
+            );
         } else {
             panic!("unexpected message type");
         }

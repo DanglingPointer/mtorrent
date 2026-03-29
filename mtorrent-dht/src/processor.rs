@@ -13,7 +13,7 @@ use local_async_utils::prelude::*;
 use mtorrent_utils::{info_stopwatch, warn_stopwatch};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::ops::ControlFlow::{self, *};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -213,30 +213,29 @@ impl Processor {
             }
             IncomingQuery::GetPeers(get_peers) => {
                 let token = self.token_mgr.generate_token_for(get_peers.source_addr());
+
                 let peer_addrs: Vec<_> = self
                     .peers
                     .get_ipv4_peers(get_peers.args().info_hash)
-                    .take(128) // apprx to fit MTU
+                    .take(64) // apprx to fit MTU
                     .cloned()
                     .collect();
-                let response_data = if !peer_addrs.is_empty() {
-                    GetPeersResponseData::Peers(peer_addrs)
-                } else {
-                    GetPeersResponseData::Nodes(
-                        self.node_table
-                            .get_closest_nodes(&get_peers.args().info_hash, 8)
-                            .filter_map(|node| match node.addr {
-                                SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
-                                SocketAddr::V6(_) => None,
-                            })
-                            .take(8)
-                            .collect(),
-                    )
-                };
+
+                let nodes = self
+                    .node_table
+                    .get_closest_nodes(&get_peers.args().info_hash, 8)
+                    .filter_map(|node| match node.addr {
+                        SocketAddr::V4(socket_addr_v4) => Some((node.id, socket_addr_v4)),
+                        SocketAddr::V6(_) => None,
+                    })
+                    .take(8)
+                    .collect();
+
                 get_peers.respond(GetPeersResponse {
                     id: self.task_ctx.local_id,
                     token: Some(token),
-                    data: response_data,
+                    peers: peer_addrs,
+                    nodes,
                 })
             }
             IncomingQuery::AnnouncePeer(announce_peer) => {
@@ -340,6 +339,8 @@ impl Processor {
                         log::warn!("Search can't proceed - no initial nodes");
                     }
                 }
+                self.peers
+                    .add_record(info_hash.into(), (Ipv4Addr::UNSPECIFIED, local_peer_port).into());
                 Continue(())
             }
             Command::Shutdown => Break(()),
