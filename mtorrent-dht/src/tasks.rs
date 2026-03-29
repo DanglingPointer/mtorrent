@@ -249,6 +249,12 @@ pub async fn run_search(
             _ = data.cmd_result_sender.closed() => {
                 // this search has been terminated. Stop all subtasks and try insert nodes in the routing table
                 canceller.cancel();
+                log::info!(
+                    "Search for peers with target {} queried {} nodes and discovered {} peers",
+                    data.target,
+                    queried_nodes.len(),
+                    discovered_peers.len()
+                );
                 for node in queried_nodes {
                     data.ctx.event_reporter.send(NodeEvent::Discovered(node)).await?;
                 }

@@ -1,26 +1,29 @@
-mod manager;
+mod handler;
+mod incoming;
 
 #[cfg(test)]
 mod tests;
 
 use super::error::Error;
 use super::msgs::*;
-use super::u160::U160;
 use super::udp;
-use derive_more::derive::From;
 use futures_util::StreamExt;
+use handler::Handler;
 use local_async_utils::prelude::*;
-use manager::{OutgoingQuery, QueryManager};
 use mtorrent_utils::{debug_stopwatch, trace_stopwatch};
 use std::fmt::Debug;
-use std::future::pending;
-use std::marker::PhantomData;
-use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::select;
 use tokio::sync::{Semaphore, mpsc};
-use tokio::time::{Instant, sleep_until};
+
+pub(super) use incoming::*;
+
+struct OutgoingQuery {
+    query: QueryMsg,
+    destination_addr: SocketAddr,
+    response_sink: local_oneshot::Sender<Result<ResponseMsg, Error>>,
+}
 
 /// Client for sending outgoing queries to different nodes.
 #[derive(Clone)]
@@ -96,7 +99,7 @@ pub struct InboundQueries(pub(super) local_unbounded::Receiver<IncomingQuery>);
 /// Actor that routes queries between [`Processor`](crate::Processor) and
 /// [`IoDriver`](crate::IoDriver), performs retries and matches requests and responses.
 pub struct QueryRouter {
-    queries: QueryManager,
+    handler: Handler,
     outgoing_queries_source: local_unbounded::Receiver<OutgoingQuery>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
 }
@@ -105,49 +108,27 @@ impl QueryRouter {
     pub async fn run(mut self) {
         let _sw = debug_stopwatch!("Queries runner");
         loop {
-            let next_timeout = self.queries.next_timeout();
             select! {
                 biased;
                 outgoing = self.outgoing_queries_source.next() => {
                     let Some(query) = outgoing else { break };
-                    if let Err(e) = self.queries.handle_one_outgoing(query).await {
+                    if let Err(e) = self.handler.handle_outgoing(query).await {
                         log::warn!("Error while handling outbound query: {e}");
                         break;
                     }
                 }
                 incoming = self.incoming_msgs_source.recv() => {
                     let Some(msg) = incoming else { break };
-                    if let Err(e) = self.queries.handle_one_incoming(msg).await {
+                    if let Err(e) = self.handler.handle_incoming(msg).await {
                         log::warn!("Error while handling inbound query: {e}");
                         break;
                     }
                 }
-                _ = Self::sleep_until(next_timeout), if next_timeout.is_some() => {
-                    if let Err(e) = self.queries.handle_timeouts().await {
-                        log::warn!("Error while handling timeouts: {e}");
-                        break;
-                    }
-                }
+                true = self.handler.handle_next_timeout() => {}
             }
         }
     }
-
-    async fn sleep_until(deadline: Option<Instant>) {
-        #[cfg(not(test))]
-        match deadline {
-            Some(deadline) => sleep_until(deadline).await,
-            _ => pending::<()>().await,
-        }
-
-        #[cfg(test)]
-        match deadline {
-            Some(deadline) if tests::SLEEP_ENABLED.get() => sleep_until(deadline).await,
-            _ => pending::<()>().await,
-        }
-    }
 }
-
-// ------------------------------------------------------------------------------------------------
 
 /// Create the layer that facilitates inbound and outbound transactions (queries).
 pub fn setup_queries(
@@ -160,7 +141,7 @@ pub fn setup_queries(
     let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
     let runner = QueryRouter {
-        queries: QueryManager::new(outgoing_msgs_sink, incoming_queries_sink),
+        handler: Handler::new(outgoing_msgs_sink, incoming_queries_sink),
         outgoing_queries_source,
         incoming_msgs_source,
     };
@@ -172,145 +153,4 @@ pub fn setup_queries(
         client.query_slots.close();
     }
     (client, InboundQueries(incoming_queries_source), runner)
-}
-
-// ------------------------------------------------------------------------------------------------
-
-#[cfg_attr(test, derive(Debug))]
-#[derive(From)]
-pub(super) enum IncomingQuery {
-    Ping(IncomingPingQuery),
-    FindNode(IncomingFindNodeQuery),
-    GetPeers(IncomingGetPeersQuery),
-    AnnouncePeer(IncomingAnnouncePeerQuery),
-}
-
-#[cfg_attr(test, derive(Debug))]
-pub(super) struct IncomingGenericQuery<Q, R> {
-    transaction_id: Vec<u8>,
-    query: Q,
-    response_sink: Option<mpsc::OwnedPermit<(Message, SocketAddr)>>,
-    source_addr: SocketAddr,
-    _stopwatch: Stopwatch,
-    _response_type: PhantomData<R>,
-}
-
-pub(super) type IncomingPingQuery = IncomingGenericQuery<PingArgs, PingResponse>;
-pub(super) type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResponse>;
-pub(super) type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
-pub(super) type IncomingAnnouncePeerQuery =
-    IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
-
-impl IncomingQuery {
-    fn new(
-        incoming: QueryMsg,
-        tid: Vec<u8>,
-        sink: mpsc::OwnedPermit<(Message, SocketAddr)>,
-        remote_addr: SocketAddr,
-    ) -> IncomingQuery {
-        macro_rules! construct {
-            ($query_args:expr, $name:literal) => {{
-                log::trace!("[{}] => {:?}", remote_addr, $query_args);
-                IncomingQuery::from(IncomingGenericQuery {
-                    transaction_id: tid,
-                    query: $query_args,
-                    response_sink: Some(sink),
-                    source_addr: remote_addr,
-                    _stopwatch: trace_stopwatch!("{} query from {}", $name, remote_addr),
-                    _response_type: PhantomData,
-                })
-            }};
-        }
-        match incoming {
-            QueryMsg::Ping(args) => construct!(args, "Ping"),
-            QueryMsg::FindNode(args) => construct!(args, "FindNode"),
-            QueryMsg::GetPeers(args) => construct!(args, "GetPeers"),
-            QueryMsg::AnnouncePeer(args) => construct!(args, "AnnouncePeer"),
-        }
-    }
-
-    pub(super) fn node_id(&self) -> &U160 {
-        match self {
-            IncomingQuery::Ping(q) => &q.args().id,
-            IncomingQuery::FindNode(q) => &q.args().id,
-            IncomingQuery::GetPeers(q) => &q.args().id,
-            IncomingQuery::AnnouncePeer(q) => &q.args().id,
-        }
-    }
-
-    pub(super) fn source_addr(&self) -> &SocketAddr {
-        match self {
-            IncomingQuery::Ping(q) => q.source_addr(),
-            IncomingQuery::FindNode(q) => q.source_addr(),
-            IncomingQuery::GetPeers(q) => q.source_addr(),
-            IncomingQuery::AnnouncePeer(q) => q.source_addr(),
-        }
-    }
-}
-
-impl<Q, R> IncomingGenericQuery<Q, R> {
-    pub(super) fn args(&self) -> &Q {
-        &self.query
-    }
-
-    pub(super) fn source_addr(&self) -> &SocketAddr {
-        &self.source_addr
-    }
-
-    pub(super) fn respond(mut self, response: R) -> Result<(), Error>
-    where
-        R: Into<ResponseMsg> + Debug,
-    {
-        log::trace!("[{}] <= {:?}", self.source_addr, response);
-        let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
-            Message {
-                transaction_id: mem::take(&mut self.transaction_id),
-                version: None,
-                data: MessageData::Response(response.into()),
-            },
-            self.source_addr,
-        ));
-        if sender.is_closed() {
-            Err(Error::ChannelClosed)
-        } else {
-            Ok(())
-        }
-    }
-
-    pub(super) fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
-        log::debug!("[{}] <= {:?}", self.source_addr, error);
-        let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
-            Message {
-                transaction_id: mem::take(&mut self.transaction_id),
-                version: None,
-                data: MessageData::Error(error),
-            },
-            self.source_addr,
-        ));
-        if sender.is_closed() {
-            Err(Error::ChannelClosed)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<Q, R> Drop for IncomingGenericQuery<Q, R> {
-    fn drop(&mut self) {
-        if let Some(sink) = self.response_sink.take() {
-            let error_msg = ErrorMsg {
-                error_code: ErrorCode::Server,
-                error_msg: "Unable to handle query".to_string(),
-            };
-            log::warn!("[{}] <= {:?}", self.source_addr, error_msg);
-            sink.send((
-                Message {
-                    transaction_id: mem::take(&mut self.transaction_id),
-                    version: None,
-                    data: MessageData::Error(error_msg),
-                },
-                self.source_addr,
-            ));
-        }
-    }
 }

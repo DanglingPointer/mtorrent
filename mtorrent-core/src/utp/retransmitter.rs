@@ -146,12 +146,15 @@ impl Retransmitter {
     fn update_timer(&mut self) {
         if let Some(oldest_send_time) = self.send_queue.front().map(|in_flight| in_flight.sent_at) {
             let next_timeout = oldest_send_time + self.timeout;
-            if let Some(timer) = self.timer.as_mut().as_pin_mut()
-                && timer.deadline() > next_timeout
-            {
-                timer.reset(next_timeout);
-            } else {
-                self.timer.set(Some(sleep_until(next_timeout)));
+            match self.timer.as_mut().as_pin_mut() {
+                Some(timer) => {
+                    if timer.deadline() != next_timeout {
+                        timer.reset(next_timeout);
+                    }
+                }
+                None => {
+                    self.timer.set(Some(sleep_until(next_timeout)));
+                }
             }
         } else if self.timer.is_some() {
             self.timer.set(None);

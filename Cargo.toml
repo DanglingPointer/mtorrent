@@ -38,7 +38,7 @@ tokio = { version = "1.50", features = [
     "sync",
     "macros",
 ] }
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["time"] }
 derive_more = { version = "2.1", features = [
     "from",
     "display",
