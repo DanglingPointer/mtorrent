@@ -98,7 +98,7 @@ impl<const BUCKET_SIZE: usize> RoutingTable<BUCKET_SIZE> {
         &self.local_id
     }
 
-    /// Insert a new node if it's ID doesn't collide with any existing node,
+    /// Insert a new node if its ID doesn't collide with any existing node,
     /// and the corresponding bucket is not full.
     pub fn insert_node(&mut self, id: &U160, addr: &SocketAddr) -> bool {
         let distance = *id ^ self.local_id;

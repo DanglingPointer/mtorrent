@@ -58,8 +58,7 @@ impl IoDriver {
     }
 }
 
-// Testing shows that we sometimes receive messages around 32 KiB in size.
-const RX_BUFFER_SIZE: usize = 32 * 1024;
+const RX_BUFFER_SIZE: usize = 64 * 1024;
 
 struct Ingress<'s> {
     socket: &'s UdpSocket,
@@ -78,6 +77,13 @@ impl<'s> Future for Ingress<'s> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         fn parse_msg(buffer: &[u8]) -> Result<Message, DhtError> {
+            // https://github.com/the8472/mldht/blob/master/docs/sanitizing-algorithms.rst
+            if buffer.len() < 15 {
+                return Err(DhtError::ParseError("too short".into()));
+            }
+            if buffer[0] != b'd' {
+                return Err(DhtError::ParseError("not a dictionary".into()));
+            }
             let (bencode, len) = benc::Element::from_bytes_with_len(buffer)?;
             if len < buffer.len() {
                 log::debug!("Ignored trailing bytes in an incoming UDP packet");

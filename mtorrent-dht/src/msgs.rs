@@ -123,9 +123,14 @@ impl TryFrom<benc::Element> for Message {
                     QUERY_GET_PEERS => QueryMsg::GetPeers(query_args.try_into()?),
                     QUERY_ANNOUNCE_PEER => QueryMsg::AnnouncePeer(query_args.try_into()?),
                     query_type => {
-                        return Err(Error::ParseError(
-                            format!("unknown query type: {query_type}").into(),
-                        ));
+                        if let Ok(args) = FindNodeArgs::try_from(query_args) {
+                            // https://www.libtorrent.org/dht_extensions.html
+                            QueryMsg::FindNode(args)
+                        } else {
+                            return Err(Error::ParseError(
+                                format!("unknown query type: {query_type}").into(),
+                            ));
+                        }
                     }
                 };
 

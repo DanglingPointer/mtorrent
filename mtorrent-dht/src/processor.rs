@@ -250,7 +250,9 @@ impl Processor {
                 } else {
                     // construct peer address
                     let mut peer_addr = *announce_peer.source_addr();
-                    if let Some(port) = announce_peer.args().port {
+                    if let Some(port) = announce_peer.args().port
+                        && port >= 1024
+                    {
                         peer_addr.set_port(port);
                     }
                     // add to peer table
