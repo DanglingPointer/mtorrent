@@ -158,6 +158,22 @@ impl<'a, T, P: Policy> IntoIterator for &'a FifoSet<T, P> {
     }
 }
 
+impl<T: Eq + Hash + Clone> Extend<T> for FifoSet<T, Unbounded> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.insert(item);
+        }
+    }
+}
+
+impl<T: Eq + Hash + Clone> Extend<T> for FifoSet<T, Bounded> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.insert_or_replace(item);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

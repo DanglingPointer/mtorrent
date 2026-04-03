@@ -4,9 +4,9 @@ use super::queries::OutboundQueries;
 use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
+use mtorrent_utils::fifo_set::BoundedFifoSet;
 use mtorrent_utils::info_stopwatch;
 use rand::RngExt;
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -171,7 +171,7 @@ async fn query_node_for_peers(
         }
 
         if get_peers_response.peers.is_empty() {
-            // prune this branch
+            // no need to repeat the query later
             break;
         }
 
@@ -229,8 +229,11 @@ pub async fn run_search(
     let (peer_sender, mut peer_receiver) = mpsc::channel(1);
     let (node_sender, mut node_receiver) = mpsc::channel(1);
 
-    let mut discovered_peers = HashSet::new();
-    let mut queried_nodes: HashSet<Node> = initial_nodes.collect();
+    // using BoundedFifoSet to store discovered nodes and peers to avoid OOM in case of
+    // a malicious node spamming us with junk data
+    let mut discovered_peers = BoundedFifoSet::new(1024);
+    let mut queried_nodes = BoundedFifoSet::new(128 * 1024);
+    queried_nodes.extend(initial_nodes);
 
     for node in &queried_nodes {
         task::spawn_local(canceller.clone().run_until_cancelled_owned(query_node_for_peers(
@@ -265,14 +268,14 @@ pub async fn run_search(
                 break;
             }
             Some(peer_addr) = peer_receiver.recv() => {
-                if discovered_peers.insert(peer_addr) {
+                if discovered_peers.insert_or_replace(peer_addr) {
                     log::debug!("Discovered new peer {peer_addr} for target {}", data.target);
                     data.peer_sender.send((peer_addr, data.target))?; // fails only if DHT is shutting down
                     _ = data.cmd_result_sender.send(peer_addr).await;
                 }
             }
             Some(node) = node_receiver.recv() => {
-                if queried_nodes.insert(node.clone()) {
+                if queried_nodes.insert_or_replace(node.clone()) {
                     task::spawn_local(canceller.clone().run_until_cancelled_owned(
                         query_node_for_peers(
                             node,
