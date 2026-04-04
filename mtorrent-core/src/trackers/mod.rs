@@ -4,6 +4,7 @@ mod url;
 
 use futures_util::TryFutureExt;
 use local_async_utils::sec;
+use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -77,10 +78,24 @@ enum Command {
     AbortAll,
 }
 
+/// Configuration for the tracker manager.
+#[derive(Debug, Clone, Default)]
+pub struct Config {
+    /// Optional network interface to bind to for tracker communication (both HTTP and UDP), e.g.
+    /// "eth0" on Linux or "Wi-Fi" on Windows.
+    pub bind_interface: Option<String>,
+}
+
 /// Set up the [`Client`]-[`Manager`] pair.
-pub fn init() -> (Client, Manager) {
+pub fn init(config: Config) -> (Client, Manager) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(128);
-    (Client { cmd_sender }, Manager { cmd_receiver })
+    (
+        Client { cmd_sender },
+        Manager {
+            cmd_receiver,
+            config,
+        },
+    )
 }
 
 /// Handle for sending announces and scrapes to HTTP and UDP trackers.
@@ -155,6 +170,7 @@ impl From<AnnounceEvent> for udp::AnnounceEvent {
 /// Actor that sends announces and scrapes to HTTP and UDP trackers.
 pub struct Manager {
     cmd_receiver: mpsc::Receiver<Command>,
+    config: Config,
 }
 
 impl Manager {
@@ -167,7 +183,7 @@ impl Manager {
             }};
         }
 
-        let http_client = http::TrackerClient::new()
+        let http_client = http::TrackerClient::new(self.config.bind_interface.as_deref())
             .inspect_err(|e| log::error!("Failed to create HTTP tracker client: {e}"))
             .ok();
 
@@ -188,8 +204,10 @@ impl Manager {
                         }
                     }
                     TrackerUrl::Udp(addr) => {
+                        let interface = self.config.bind_interface.clone();
                         spawn_child_task!(async move {
-                            let result = do_udp_announce(&addr, request.data).await;
+                            let result =
+                                do_udp_announce(&addr, request.data, interface.as_deref()).await;
                             _ = request.responder.send(result).inspect_err(|_| {
                                 log::warn!("Failed to send back udp announce result")
                             });
@@ -211,8 +229,10 @@ impl Manager {
                         }
                     }
                     TrackerUrl::Udp(addr) => {
+                        let interface = self.config.bind_interface.clone();
                         spawn_child_task!(async move {
-                            let result = do_udp_scrape(&addr, request.data).await;
+                            let result =
+                                do_udp_scrape(&addr, request.data, interface.as_deref()).await;
                             _ = request.responder.send(result).inspect_err(|_| {
                                 log::warn!("Failed to send back udp scrape result")
                             });
@@ -295,12 +315,19 @@ async fn do_http_scrape(
     ))
 }
 
-async fn new_udp_client(tracker_addr_str: &str) -> io::Result<udp::TrackerConnection> {
+async fn new_udp_client(
+    tracker_addr_str: &str,
+    interface: Option<&str>,
+) -> io::Result<udp::TrackerConnection> {
     async fn bind_and_connect_socket(
         bind_addr: &SocketAddr,
         remote_addr: &SocketAddr,
+        interface: Option<&str>,
     ) -> io::Result<UdpSocket> {
         let socket = UdpSocket::bind(bind_addr).await?;
+        if let Some(iface) = interface {
+            bind_to_interface(&socket, iface)?;
+        }
         socket.connect(&remote_addr).await?;
         Ok(socket)
     }
@@ -311,7 +338,7 @@ async fn new_udp_client(tracker_addr_str: &str) -> io::Result<udp::TrackerConnec
             SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
         };
         let local_addr = SocketAddr::new(local_ip, 0);
-        if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr)
+        if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr, interface)
             .and_then(udp::TrackerConnection::from_connected_socket)
             .await
         {
@@ -324,8 +351,9 @@ async fn new_udp_client(tracker_addr_str: &str) -> io::Result<udp::TrackerConnec
 async fn do_udp_announce(
     tracker_addr: &str,
     data: AnnounceRequest,
+    interface: Option<&str>,
 ) -> io::Result<AnnounceResponse> {
-    let mut client = new_udp_client(tracker_addr).await?;
+    let mut client = new_udp_client(tracker_addr, interface).await?;
 
     let request = udp::AnnounceRequest {
         info_hash: data.info_hash,
@@ -347,8 +375,12 @@ async fn do_udp_announce(
     })
 }
 
-async fn do_udp_scrape(tracker_addr: &str, data: ScrapeRequest) -> io::Result<ScrapeResponse> {
-    let mut client = new_udp_client(tracker_addr).await?;
+async fn do_udp_scrape(
+    tracker_addr: &str,
+    data: ScrapeRequest,
+    interface: Option<&str>,
+) -> io::Result<ScrapeResponse> {
+    let mut client = new_udp_client(tracker_addr, interface).await?;
 
     let request = udp::ScrapeRequest {
         info_hashes: data.info_hashes.clone(),
@@ -375,6 +407,20 @@ async fn do_udp_scrape(tracker_addr: &str, data: ScrapeRequest) -> io::Result<Sc
 mod tests {
     use super::*;
     use tokio::time;
+
+    fn init_loopback() -> (Client, Manager) {
+        let iface = if cfg!(target_os = "windows") {
+            "Loopback Pseudo-Interface 1"
+        } else if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        };
+        let (client, mgr) = init(Config {
+            bind_interface: Some(iface.to_string()),
+        });
+        (client, mgr)
+    }
 
     fn udp_connect_response(transaction_id: &[u8]) -> [u8; 16] {
         let mut response: [u8; 16] = [
@@ -415,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_announce_success() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
         let mut server = mockito::Server::new_async().await;
 
@@ -457,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_scrape_success() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
         let mut server = mockito::Server::new_async().await;
 
@@ -492,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_announce_failure() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
         let mut server = mockito::Server::new_async().await;
 
@@ -527,7 +573,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_udp_tracker_announce() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
 
         let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -588,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_udp_tracker_scrape() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
 
         let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -643,7 +689,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_scrape_against_real_http_tracker() {
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
 
         let response = client
@@ -670,7 +716,7 @@ mod tests {
             201,
         ];
 
-        let (client, mgr) = init();
+        let (client, mgr) = init_loopback();
         task::spawn(mgr.run());
 
         let response = client
