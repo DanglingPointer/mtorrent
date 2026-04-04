@@ -691,7 +691,7 @@ mod tests {
     fn test_request_rarest_piece_not_already_requested() {
         let metainfo =
             startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
-        let mut handle = MainCtx::new(metainfo, [0u8; 20].into(), 1234, 12345).unwrap();
+        let mut handle = MainCtx::new(metainfo, [0u8; 20].into(), 1234, 12345, None).unwrap();
         define_with_ctx!(handle);
 
         with_ctx!(|ctx| {

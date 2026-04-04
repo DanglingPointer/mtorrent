@@ -28,6 +28,10 @@ struct Cli {
     #[arg(short, long)]
     port: Option<u16>,
 
+    /// Name of network interface to bind all sockets to (e.g. "eth0" or "lo").
+    #[arg(short, long)]
+    interface: Option<String>,
+
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
@@ -139,6 +143,7 @@ fn main() -> io::Result<()> {
                 output_dir,
                 use_upnp: !cli.no_upnp,
                 pwp_port: cli.port,
+                bind_interface: cli.interface,
             },
             app::main::Context {
                 dht_handle: dht_cmds,

@@ -2,13 +2,14 @@ use super::super::PeerReporter;
 use bytes::BytesMut;
 use mtorrent_core::{pe, pwp};
 use mtorrent_utils::info_stopwatch;
+use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime;
 
-fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
+fn bound_pwp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<TcpSocket> {
     let socket = match local_addr {
         SocketAddr::V4(_) => TcpSocket::new_v4()?,
         SocketAddr::V6(_) => TcpSocket::new_v6()?,
@@ -25,10 +26,15 @@ fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     // timeout See https://stackoverflow.com/a/71975993
     socket.set_zero_linger()?;
     socket.set_nodelay(true)?;
+
+    if let Some(interface) = interface {
+        bind_to_interface(&socket, interface)?;
+    }
     socket.bind(local_addr)?;
     Ok(socket)
 }
 
+#[expect(clippy::too_many_arguments)]
 pub async fn new_outbound_connection(
     local_peer_id: &PeerId,
     info_hash: &[u8; 20],
@@ -36,6 +42,7 @@ pub async fn new_outbound_connection(
     protocol_encryption_enabled: bool,
     peer_addr: SocketAddr,
     local_port: u16,
+    interface: Option<&str>,
     pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let local_addr = match &peer_addr {
@@ -45,9 +52,11 @@ pub async fn new_outbound_connection(
 
     let local_peer_id = *local_peer_id;
     let info_hash = *info_hash;
+    let interface = interface.map(ToOwned::to_owned);
     pwp_runtime
         .spawn(async move {
-            let socket = bound_pwp_socket(SocketAddr::new(local_addr, local_port))?;
+            let socket =
+                bound_pwp_socket(SocketAddr::new(local_addr, local_port), interface.as_deref())?;
             let mut stream = socket.connect(peer_addr).await?;
             let crypto = if protocol_encryption_enabled {
                 pe::outbound_handshake(&mut stream, &info_hash, &[0u8; 0][..]).await?
@@ -113,11 +122,15 @@ pub async fn new_inbound_connection(
         .await?
 }
 
-pub async fn run_pwp_listener(local_addr: SocketAddr, peer_reporter: PeerReporter) {
+pub async fn run_pwp_listener(
+    local_addr: SocketAddr,
+    interface: Option<String>,
+    peer_reporter: PeerReporter,
+) {
     let _sw = info_stopwatch!("TCP listener on {local_addr}");
 
     let result: io::Result<()> = async {
-        let socket = bound_pwp_socket(local_addr)?;
+        let socket = bound_pwp_socket(local_addr, interface.as_deref())?;
         let listener = socket.listen(1024)?;
         log::info!("TCP listener started on {}", listener.local_addr()?);
         loop {

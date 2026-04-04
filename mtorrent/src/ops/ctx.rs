@@ -54,6 +54,7 @@ pub(super) struct ConstData {
     local_peer_id: PeerId,
     pwp_external_port: u16,
     pwp_internal_port: u16,
+    bind_interface: Option<String>,
     outbound_pwp_mode: PwpMode,
 }
 
@@ -66,6 +67,9 @@ impl ConstData {
     }
     pub(super) fn pwp_internal_port(&self) -> u16 {
         self.pwp_internal_port
+    }
+    pub(super) fn bind_interface(&self) -> Option<&str> {
+        self.bind_interface.as_deref()
     }
     pub(super) fn pwp_outbound_tcp_allowed(&self) -> bool {
         matches!(self.outbound_pwp_mode, PwpMode::Any | PwpMode::TcpOnly)
@@ -90,6 +94,7 @@ impl PreliminaryCtx {
         local_peer_id: PeerId,
         pwp_external_port: u16,
         pwp_internal_port: u16,
+        bind_interface: Option<String>,
     ) -> Handle<Self> {
         Handle::new(Self {
             magnet,
@@ -101,6 +106,7 @@ impl PreliminaryCtx {
                 local_peer_id,
                 pwp_external_port,
                 pwp_internal_port,
+                bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         })
@@ -123,6 +129,7 @@ impl MainCtx {
         local_peer_id: PeerId,
         pwp_external_port: u16,
         pwp_internal_port: u16,
+        bind_interface: Option<String>,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
@@ -148,6 +155,7 @@ impl MainCtx {
                 local_peer_id,
                 pwp_external_port,
                 pwp_internal_port,
+                bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         };

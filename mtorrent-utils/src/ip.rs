@@ -51,6 +51,51 @@ pub fn set_so_rcvbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, 
     }
 }
 
+/// Bind a socket to a specific network interface.
+#[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
+    let socket = socket.into();
+
+    socket.bind_device(Some(interface.as_bytes()))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn bind_to_interface<'s>(_socket: impl Into<SockRef<'s>>, _interface: &str) -> io::Result<()> {
+    Ok(())
+}
+
+/// Bind a socket to a specific network interface.
+#[cfg(any(
+    target_os = "illumos",
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "solaris",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
+pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
+    let socket = socket.into();
+
+    let interface = std::ffi::CString::new(interface)?;
+    let idx = unsafe { libc::if_nametoindex(interface.as_ptr()) };
+    let idx = std::num::NonZeroU32::new(idx).ok_or_else(|| {
+        // If the index is 0, check errno and return an I/O error.
+        io::Error::new(io::ErrorKind::InvalidInput, "error converting interface name to index")
+    })?;
+
+    match socket.domain() {
+        Ok(socket2::Domain::IPV4) => socket.bind_device_by_index_v4(Some(idx))?,
+        Ok(socket2::Domain::IPV6) => socket.bind_device_by_index_v6(Some(idx))?,
+        _ => {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unsupported socket domain"));
+        }
+    }
+
+    Ok(())
+}
+
 /// Set SO_SNDBUF on a socket.
 #[macro_export]
 macro_rules! set_so_sndbuf {
@@ -172,5 +217,22 @@ mod tests {
         };
         assert_eq!(SocketAddrV6BytesIter(&data).len(), addrs.len());
         assert_eq!(SocketAddrV6BytesIter(&data).collect::<Vec<_>>(), addrs);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_network_interfaces() {
+        for i in 0..10 {
+            let mut name_buf = [0u8; 128];
+            let name = unsafe { libc::if_indextoname(i, name_buf.as_mut_ptr() as *mut i8) };
+            if name.is_null() {
+                continue;
+            }
+            let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy();
+            println!("Interface {}: {}", i, name);
+
+            let idx = unsafe { libc::if_nametoindex(name_buf.as_ptr() as *const i8) };
+            assert_eq!(idx, i);
+        }
     }
 }

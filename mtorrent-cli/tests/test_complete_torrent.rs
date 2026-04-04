@@ -882,6 +882,16 @@ const MONOFILE_METAINFO_FILE_WITH_TRACKER: &str = "tests/assets/torrents_with_tr
 const MONOFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/pcap.torrent";
 const MONOFILE_TORRENT_NAME: &str = "pcap";
 
+fn loopback_iface_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Loopback Pseudo-Interface 1"
+    } else if cfg!(target_os = "macos") {
+        "lo0"
+    } else {
+        "lo"
+    }
+}
+
 #[tokio::test]
 async fn test_accept_50_seeders_and_download_multifile_torrent() {
     let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
@@ -898,6 +908,8 @@ async fn test_accept_50_seeders_and_download_multifile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -936,6 +948,8 @@ async fn test_accept_50_utp_seeders_and_download_multifile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -986,6 +1000,8 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
+            .arg("-i")
+            .arg(loopback_iface_name())
             .spawn()
             .expect("failed to execute 'mtorrent'")
     });
@@ -1029,6 +1045,8 @@ async fn test_accept_1_leech_and_upload_multifile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1067,6 +1085,8 @@ async fn test_accept_1_utp_leech_and_upload_multifile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1105,6 +1125,8 @@ async fn test_accept_50_seeders_and_download_monofile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1143,6 +1165,8 @@ async fn test_accept_50_utp_seeders_and_download_monofile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1195,6 +1219,8 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
+            .arg("-i")
+            .arg(loopback_iface_name())
             .spawn()
             .expect("failed to execute 'mtorrent'")
     });
@@ -1238,6 +1264,8 @@ async fn test_accept_1_leech_and_upload_monofile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1274,6 +1302,8 @@ async fn test_accept_1_utp_leech_and_upload_monofile_torrent() {
         .arg("--no-dht")
         .arg("-p")
         .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1332,6 +1362,8 @@ async fn test_download_torrent_from_magnet_link() {
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
+            .arg("-i")
+            .arg(loopback_iface_name())
             .spawn()
             .expect("failed to execute 'mtorrent'")
     });
@@ -1391,6 +1423,8 @@ async fn test_utp_download_torrent_from_magnet_link() {
             .arg("--no-dht")
             .arg("-p")
             .arg(port.to_string())
+            .arg("-i")
+            .arg(loopback_iface_name())
             // .env("MTORRENT_PWP_MODE", "UTP_ONLY")
             .spawn()
             .expect("failed to execute 'mtorrent'")

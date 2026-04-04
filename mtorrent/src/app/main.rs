@@ -24,6 +24,8 @@ pub struct Config {
     pub use_upnp: bool,
     /// Local TCP port used for peer wire protocol sockets (both inbound and outbound).
     pub pwp_port: Option<u16>,
+    /// Network interface to bind all sockets to.
+    pub bind_interface: Option<String>,
 }
 
 /// Context for a single torrent download.
@@ -106,8 +108,11 @@ pub async fn single_torrent(
     };
 
     // start uTP on IPv4 only for now
-    let utp_handle =
-        ops::launch_utp(&ctx.pwp_runtime, (Ipv4Addr::UNSPECIFIED, listener_port).into());
+    let utp_handle = ops::launch_utp(
+        &ctx.pwp_runtime,
+        (Ipv4Addr::UNSPECIFIED, listener_port).into(),
+        cfg.bind_interface.clone(),
+    );
 
     let (tracker_client, trackers_mgr) = trackers::init();
     ctx.pwp_runtime.spawn(trackers_mgr.run());
@@ -125,6 +130,7 @@ pub async fn single_torrent(
             cfg.local_peer_id,
             listener_port,
             external_pwp_port,
+            cfg.bind_interface,
             metainfo_uri.as_ref(),
             cfg.output_dir,
             cfg.config_dir,
@@ -138,6 +144,7 @@ pub async fn single_torrent(
             cfg.local_peer_id,
             listener_port,
             external_pwp_port,
+            cfg.bind_interface.clone(),
             metainfo_uri,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
@@ -150,6 +157,7 @@ pub async fn single_torrent(
             cfg.local_peer_id,
             listener_port,
             external_pwp_port,
+            cfg.bind_interface,
             metainfo_filepath,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
@@ -167,6 +175,7 @@ async fn preliminary_stage(
     local_peer_id: PeerId,
     listener_port: u16,
     pwp_external_port: u16,
+    bind_interface: Option<String>,
     magnet_link: impl AsRef<str>,
     metainfo_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
@@ -187,8 +196,13 @@ async fn preliminary_stage(
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
     let info_hash: [u8; 20] = *magnet_link.info_hash();
 
-    let ctx =
-        ops::PreliminaryCtx::new(magnet_link, local_peer_id, pwp_external_port, listener_port);
+    let ctx = ops::PreliminaryCtx::new(
+        magnet_link,
+        local_peer_id,
+        pwp_external_port,
+        listener_port,
+        bind_interface.clone(),
+    );
 
     let mut tasks = task::JoinSet::new();
 
@@ -220,6 +234,7 @@ async fn preliminary_stage(
     tasks.spawn_on(
         ops::run_pwp_listener(
             SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
+            bind_interface.clone(),
             peer_reporter.clone(),
         ),
         handles.pwp_runtime,
@@ -228,6 +243,7 @@ async fn preliminary_stage(
     tasks.spawn_on(
         ops::run_pwp_listener(
             SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
+            bind_interface,
             peer_reporter.clone(),
         ),
         handles.pwp_runtime,
@@ -256,6 +272,7 @@ async fn main_stage(
     local_peer_id: PeerId,
     listener_port: u16,
     pwp_external_port: u16,
+    bind_interface: Option<String>,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
@@ -281,8 +298,13 @@ async fn main_stage(
 
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
-    let ctx: ops::Handle<_> =
-        ops::MainCtx::new(metainfo, local_peer_id, pwp_external_port, listener_port)?;
+    let ctx: ops::Handle<_> = ops::MainCtx::new(
+        metainfo,
+        local_peer_id,
+        pwp_external_port,
+        listener_port,
+        bind_interface.clone(),
+    )?;
 
     let mut tasks = task::JoinSet::new();
 
@@ -317,6 +339,7 @@ async fn main_stage(
     tasks.spawn_on(
         ops::run_pwp_listener(
             SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
+            bind_interface.clone(),
             peer_reporter.clone(),
         ),
         handles.pwp_runtime,
@@ -325,6 +348,7 @@ async fn main_stage(
     tasks.spawn_on(
         ops::run_pwp_listener(
             SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
+            bind_interface,
             peer_reporter.clone(),
         ),
         handles.pwp_runtime,
