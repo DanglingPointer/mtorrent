@@ -1,6 +1,7 @@
 use super::super::PeerReporter;
 use bytes::BytesMut;
 use mtorrent_core::{pe, pwp};
+use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -113,19 +114,16 @@ pub async fn new_inbound_connection(
         .await?
 }
 
-pub async fn run_listener(
+pub async fn run_pwp_listener(
     local_addr: SocketAddr,
     peer_reporter: PeerReporter,
-    canceller: CancellationToken,
 ) -> io::Result<()> {
-    let task = async move {
-        let socket = bound_pwp_socket(local_addr)?;
-        let listener = socket.listen(1024)?;
-        log::info!("TCP listener started on {}", listener.local_addr()?);
-        loop {
-            let (stream, addr) = listener.accept().await?;
-            peer_reporter.report_accepted(addr, stream).await;
-        }
-    };
-    canceller.run_until_cancelled_owned(task).await.unwrap_or(Ok(()))
+    let _sw = info_stopwatch!("TCP listener on {local_addr}");
+    let socket = bound_pwp_socket(local_addr)?;
+    let listener = socket.listen(1024)?;
+    log::info!("TCP listener started on {}", listener.local_addr()?);
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        peer_reporter.report_accepted(addr, stream).await;
+    }
 }

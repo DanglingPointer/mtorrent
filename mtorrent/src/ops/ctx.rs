@@ -13,7 +13,6 @@ use std::path::Path;
 use std::rc::Rc;
 use std::{cmp, fs, io, mem};
 use tokio::time;
-use tokio_util::sync::DropGuard;
 
 pub type Handle<C> = LocalShared<C>;
 
@@ -160,7 +159,6 @@ pub async fn periodic_metadata_check<L: StateListener>(
     mut ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
-    _canceller: DropGuard,
 ) -> io::Result<impl IntoIterator<Item = SocketAddr> + 'static> {
     define_with_ctx!(ctx_handle);
 
@@ -185,7 +183,6 @@ pub async fn periodic_state_dump<L: StateListener>(
     mut ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
-    _canceller: DropGuard,
 ) {
     define_with_ctx!(ctx_handle);
 

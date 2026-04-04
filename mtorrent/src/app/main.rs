@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task};
-use tokio_util::sync::CancellationToken;
 
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
@@ -174,7 +173,6 @@ async fn preliminary_stage(
     pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
-    let canceller = CancellationToken::new();
 
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
 
@@ -209,13 +207,12 @@ async fn preliminary_stage(
         ))
     });
 
-    pwp_runtime.spawn(
-        ops::run_pwp_listener(listener_addr, peer_reporter.clone(), canceller.clone()).map(
-            |result| match result {
-                Ok(_) => (),
-                Err(e) => log::error!("TCP listener exited: {e}"),
-            },
-        ),
+    tasks.spawn_on(
+        ops::run_pwp_listener(listener_addr, peer_reporter.clone()).map(|result| match result {
+            Ok(_) => (),
+            Err(e) => log::error!("TCP listener exited: {e}"),
+        }),
+        pwp_runtime,
     );
 
     tasks.spawn_local(ops::make_preliminary_announces(
@@ -231,13 +228,7 @@ async fn preliminary_stage(
         }
     });
 
-    let peers = ops::periodic_metadata_check(
-        ctx,
-        metainfo_filepath.clone(),
-        listener,
-        canceller.drop_guard(),
-    )
-    .await?;
+    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), listener).await?;
     tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }
@@ -277,7 +268,6 @@ async fn main_stage(
     handles.pwp_runtime.spawn(trackers_mgr.run());
 
     let mut tasks = task::JoinSet::new();
-    let canceller = CancellationToken::new();
 
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
@@ -309,13 +299,12 @@ async fn main_stage(
         ))
     });
 
-    handles.pwp_runtime.spawn(
-        ops::run_pwp_listener(listener_addr, peer_reporter.clone(), canceller.clone()).map(
-            |result| match result {
-                Ok(_) => (),
-                Err(e) => log::error!("TCP listener exited: {e}"),
-            },
-        ),
+    tasks.spawn_on(
+        ops::run_pwp_listener(listener_addr, peer_reporter.clone()).map(|result| match result {
+            Ok(_) => (),
+            Err(e) => log::error!("TCP listener exited: {e}"),
+        }),
+        &handles.pwp_runtime,
     );
 
     tasks.spawn_local(ops::make_periodic_announces(
@@ -332,7 +321,7 @@ async fn main_stage(
         }
     });
 
-    ops::periodic_state_dump(ctx, content_dir, listener, canceller.drop_guard()).await;
+    ops::periodic_state_dump(ctx, content_dir, listener).await;
     tasks.shutdown().await;
     Ok(())
 }
