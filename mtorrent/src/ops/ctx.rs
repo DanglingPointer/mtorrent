@@ -52,8 +52,8 @@ fn get_outbound_pwp_mode() -> PwpMode {
 
 pub(super) struct ConstData {
     local_peer_id: PeerId,
-    pwp_listener_public_addr: SocketAddr,
-    pwp_local_tcp_port: u16,
+    pwp_external_port: u16,
+    pwp_internal_port: u16,
     outbound_pwp_mode: PwpMode,
 }
 
@@ -61,11 +61,11 @@ impl ConstData {
     pub(super) fn local_peer_id(&self) -> &PeerId {
         &self.local_peer_id
     }
-    pub(super) fn pwp_listener_public_addr(&self) -> &SocketAddr {
-        &self.pwp_listener_public_addr
+    pub(super) fn pwp_external_port(&self) -> u16 {
+        self.pwp_external_port
     }
-    pub(super) fn pwp_local_tcp_port(&self) -> u16 {
-        self.pwp_local_tcp_port
+    pub(super) fn pwp_internal_port(&self) -> u16 {
+        self.pwp_internal_port
     }
     pub(super) fn pwp_outbound_tcp_allowed(&self) -> bool {
         matches!(self.outbound_pwp_mode, PwpMode::Any | PwpMode::TcpOnly)
@@ -88,8 +88,8 @@ impl PreliminaryCtx {
     pub fn new(
         magnet: input::MagnetLink,
         local_peer_id: PeerId,
-        pwp_listener_public_addr: SocketAddr,
-        pwp_local_tcp_port: u16,
+        pwp_external_port: u16,
+        pwp_internal_port: u16,
     ) -> Handle<Self> {
         Handle::new(Self {
             magnet,
@@ -99,8 +99,8 @@ impl PreliminaryCtx {
             peer_states: Default::default(),
             const_data: ConstData {
                 local_peer_id,
-                pwp_listener_public_addr,
-                pwp_local_tcp_port,
+                pwp_external_port,
+                pwp_internal_port,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         })
@@ -121,8 +121,8 @@ impl MainCtx {
     pub fn new(
         metainfo: input::Metainfo,
         local_peer_id: PeerId,
-        pwp_listener_public_addr: SocketAddr,
-        pwp_local_tcp_port: u16,
+        pwp_external_port: u16,
+        pwp_internal_port: u16,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
@@ -146,8 +146,8 @@ impl MainCtx {
             pending_requests: Default::default(),
             const_data: ConstData {
                 local_peer_id,
-                pwp_listener_public_addr,
-                pwp_local_tcp_port,
+                pwp_external_port,
+                pwp_internal_port,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
         };

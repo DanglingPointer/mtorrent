@@ -47,7 +47,7 @@ pub async fn new_peer(
     // send local handshake
     let local_handshake = Box::new(pwp::ExtendedHandshake {
         extensions: enabled_extensions.into_iter().map(|e| (*e, e.local_id())).collect(),
-        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
+        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_external_port())),
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(inner.rx.remote_ip().ip()),
         metadata_size: Some(with_ctx!(|ctx| ctx.metainfo.size())),

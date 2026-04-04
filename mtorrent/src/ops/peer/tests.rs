@@ -134,9 +134,13 @@ async fn run_listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle =
-        ctx::MainCtx::new(metainfo, PeerId::from(&local_id), listener_ip, listener_ip.port())
-            .unwrap();
+    let mut handle = ctx::MainCtx::new(
+        metainfo,
+        PeerId::from(&local_id),
+        listener_ip.port(),
+        listener_ip.port(),
+    )
+    .unwrap();
     handle.with(|ctx| {
         for piece_index in 0..piece_count {
             assert!(ctx.accountant.submit_piece(piece_index));

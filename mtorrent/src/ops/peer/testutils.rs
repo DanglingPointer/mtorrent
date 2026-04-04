@@ -175,7 +175,7 @@ impl PeerBuilder {
         let mut ctx_handle = ctx::MainCtx::new(
             metainfo,
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
-            local_addr,
+            local_addr.port(),
             local_addr.port(),
         )
         .unwrap();
@@ -238,7 +238,7 @@ impl PeerBuilder {
         let ctx_handle = ctx::PreliminaryCtx::new(
             magnet_link,
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
-            local_addr,
+            local_addr.port(),
             local_addr.port(),
         );
 

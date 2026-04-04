@@ -1,13 +1,12 @@
 use crate::ops;
 use crate::utils::{listener, startup};
-use futures_util::FutureExt;
 use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, ip, upnp};
 use std::borrow::Borrow;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::broadcast;
@@ -81,32 +80,31 @@ pub async fn single_torrent(
     }
     let ctx: &Context = ctx.borrow();
 
-    let listener_addr = SocketAddr::new(
-        Ipv4Addr::UNSPECIFIED.into(),
-        cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref())),
-    );
+    let listener_port = cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref()));
 
-    // create port mappings and get public ip to send correct listening port to trackers and peers
-    // later
-    let public_pwp_addr = if cfg.use_upnp {
+    // create port mappings and get external port to send correct listening port to trackers and
+    // peers later
+    let external_pwp_port = if cfg.use_upnp {
         let _g = ctx.pwp_runtime.enter();
-        let internal_addr = SocketAddrV4::new(ip::get_local_addr()?, listener_addr.port()).into();
+        let internal_addr = (ip::get_local_addr()?, listener_port).into();
         let (_public_pwp_addr, public_utp_addr) = join!(
             start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::TCP),
             start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::UDP),
         );
-        public_utp_addr
+        public_utp_addr.port()
     } else {
-        listener_addr
+        listener_port
     };
 
-    let utp_handle = ops::launch_utp(&ctx.pwp_runtime, listener_addr);
+    // start uTP on IPv4 only for now
+    let utp_handle =
+        ops::launch_utp(&ctx.pwp_runtime, (Ipv4Addr::UNSPECIFIED, listener_port).into());
 
     if Path::new(metainfo_uri.as_ref()).is_file() {
         main_stage(
             cfg.local_peer_id,
-            listener_addr,
-            public_pwp_addr,
+            listener_port,
+            external_pwp_port,
             metainfo_uri.as_ref(),
             cfg.output_dir,
             cfg.config_dir,
@@ -119,8 +117,8 @@ pub async fn single_torrent(
     } else {
         let (metainfo_filepath, peers) = preliminary_stage(
             cfg.local_peer_id,
-            listener_addr,
-            public_pwp_addr,
+            listener_port,
+            external_pwp_port,
             metainfo_uri,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
@@ -133,8 +131,8 @@ pub async fn single_torrent(
         log::info!("Metadata downloaded successfully, starting content download");
         main_stage(
             cfg.local_peer_id,
-            listener_addr,
-            public_pwp_addr,
+            listener_port,
+            external_pwp_port,
             metainfo_filepath,
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
@@ -151,8 +149,8 @@ pub async fn single_torrent(
 #[expect(clippy::too_many_arguments)]
 async fn preliminary_stage(
     local_peer_id: PeerId,
-    listener_addr: SocketAddr,
-    public_pwp_ip: SocketAddr,
+    listener_port: u16,
+    pwp_external_port: u16,
     magnet_link: impl AsRef<str>,
     metainfo_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
@@ -172,18 +170,16 @@ async fn preliminary_stage(
     let (tracker_client, trackers_mgr) = trackers::init();
     pwp_runtime.spawn(trackers_mgr.run());
 
-    let mut tasks = task::JoinSet::new();
-
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
-
     let metainfo_filepath = metainfo_dir
         .as_ref()
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
-
     let info_hash: [u8; 20] = *magnet_link.info_hash();
 
     let ctx =
-        ops::PreliminaryCtx::new(magnet_link, local_peer_id, public_pwp_ip, listener_addr.port());
+        ops::PreliminaryCtx::new(magnet_link, local_peer_id, pwp_external_port, listener_port);
+
+    let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
         ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
@@ -203,15 +199,23 @@ async fn preliminary_stage(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
-            public_pwp_ip.port(),
+            pwp_external_port,
         ))
     });
 
     tasks.spawn_on(
-        ops::run_pwp_listener(listener_addr, peer_reporter.clone()).map(|result| match result {
-            Ok(_) => (),
-            Err(e) => log::error!("TCP listener exited: {e}"),
-        }),
+        ops::run_pwp_listener(
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
+            peer_reporter.clone(),
+        ),
+        pwp_runtime,
+    );
+
+    tasks.spawn_on(
+        ops::run_pwp_listener(
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
+            peer_reporter.clone(),
+        ),
         pwp_runtime,
     );
 
@@ -236,8 +240,8 @@ async fn preliminary_stage(
 #[expect(clippy::too_many_arguments)]
 async fn main_stage(
     local_peer_id: PeerId,
-    listener_addr: SocketAddr,
-    public_pwp_ip: SocketAddr,
+    listener_port: u16,
+    pwp_external_port: u16,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
@@ -267,12 +271,12 @@ async fn main_stage(
     let (tracker_client, trackers_mgr) = trackers::init();
     handles.pwp_runtime.spawn(trackers_mgr.run());
 
-    let mut tasks = task::JoinSet::new();
-
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
     let ctx: ops::Handle<_> =
-        ops::MainCtx::new(metainfo, local_peer_id, public_pwp_ip, listener_addr.port())?;
+        ops::MainCtx::new(metainfo, local_peer_id, pwp_external_port, listener_port)?;
+
+    let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
         ops::connect_control(|peer_reporter| ops::MainConnectionData {
@@ -295,15 +299,23 @@ async fn main_stage(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
-            public_pwp_ip.port(),
+            pwp_external_port,
         ))
     });
 
     tasks.spawn_on(
-        ops::run_pwp_listener(listener_addr, peer_reporter.clone()).map(|result| match result {
-            Ok(_) => (),
-            Err(e) => log::error!("TCP listener exited: {e}"),
-        }),
+        ops::run_pwp_listener(
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
+            peer_reporter.clone(),
+        ),
+        &handles.pwp_runtime,
+    );
+
+    tasks.spawn_on(
+        ops::run_pwp_listener(
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
+            peer_reporter.clone(),
+        ),
         &handles.pwp_runtime,
     );
 

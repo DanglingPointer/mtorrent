@@ -159,7 +159,7 @@ pub async fn new_peer(
         ]
         .into_iter()
         .collect(),
-        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_listener_public_addr().port())),
+        listen_port: Some(with_ctx!(|ctx| ctx.const_data.pwp_external_port())),
         client_type: Some(CLIENT_NAME.to_string()),
         yourip: Some(rx.remote_ip().ip()),
         ..Default::default()

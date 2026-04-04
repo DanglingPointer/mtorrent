@@ -142,7 +142,7 @@ impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
             left: ctx.accountant.missing_bytes(),
             uploaded: ctx.peer_states.uploaded_bytes(),
             local_peer_id: *ctx.const_data.local_peer_id(),
-            listener_port: ctx.const_data.pwp_listener_public_addr().port(),
+            listener_port: ctx.const_data.pwp_external_port(),
             event: if ctx.accountant.missing_bytes() == 0 {
                 Some(AnnounceEvent::Completed)
             } else if ctx.accountant.accounted_bytes() == 0 || ctx.peer_states.iter().count() == 0 {
@@ -171,7 +171,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
             left: 0,
             uploaded: 0,
             local_peer_id: *ctx.const_data.local_peer_id(),
-            listener_port: ctx.const_data.pwp_listener_public_addr().port(),
+            listener_port: ctx.const_data.pwp_external_port(),
             event: Some(AnnounceEvent::Started),
             num_want: 100,
         })
@@ -319,7 +319,7 @@ mod tests {
             .unwrap();
         let peer_id = PeerId::from(&[0u8; 20]);
         let listener_addr: SocketAddr = "127.0.0.1:6881".parse().unwrap();
-        let mut handle = ctx::PreliminaryCtx::new(magnet, peer_id, listener_addr, 6881);
+        let mut handle = ctx::PreliminaryCtx::new(magnet, peer_id, listener_addr.port(), 6881);
 
         let peer1: SocketAddr = "1.2.3.4:1000".parse().unwrap();
         let peer2: SocketAddr = "5.6.7.8:2000".parse().unwrap();

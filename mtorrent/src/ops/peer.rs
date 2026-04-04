@@ -230,7 +230,7 @@ impl PeerConnector for MainConnectionData {
         let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
             *ctx.metainfo.info_hash(),
             *ctx.const_data.local_peer_id(),
-            ctx.const_data.pwp_local_tcp_port(),
+            ctx.const_data.pwp_internal_port(),
         ));
         time::timeout_at(
             deadline,
@@ -443,7 +443,7 @@ impl PeerConnector for PreliminaryConnectionData {
         let (info_hash, local_peer_id, local_port) = with_ctx!(|ctx| (
             *ctx.magnet.info_hash(),
             *ctx.const_data.local_peer_id(),
-            ctx.const_data.pwp_local_tcp_port(),
+            ctx.const_data.pwp_internal_port(),
         ));
         let (dl, ul, ext) = time::timeout_at(
             deadline,

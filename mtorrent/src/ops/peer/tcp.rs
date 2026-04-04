@@ -7,7 +7,6 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime;
-use tokio_util::sync::CancellationToken;
 
 fn bound_pwp_socket(local_addr: SocketAddr) -> io::Result<TcpSocket> {
     let socket = match local_addr {
@@ -114,16 +113,21 @@ pub async fn new_inbound_connection(
         .await?
 }
 
-pub async fn run_pwp_listener(
-    local_addr: SocketAddr,
-    peer_reporter: PeerReporter,
-) -> io::Result<()> {
+pub async fn run_pwp_listener(local_addr: SocketAddr, peer_reporter: PeerReporter) {
     let _sw = info_stopwatch!("TCP listener on {local_addr}");
-    let socket = bound_pwp_socket(local_addr)?;
-    let listener = socket.listen(1024)?;
-    log::info!("TCP listener started on {}", listener.local_addr()?);
-    loop {
-        let (stream, addr) = listener.accept().await?;
-        peer_reporter.report_accepted(addr, stream).await;
+
+    let result: io::Result<()> = async {
+        let socket = bound_pwp_socket(local_addr)?;
+        let listener = socket.listen(1024)?;
+        log::info!("TCP listener started on {}", listener.local_addr()?);
+        loop {
+            let (stream, addr) = listener.accept().await?;
+            peer_reporter.report_accepted(addr, stream).await;
+        }
+    }
+    .await;
+
+    if let Err(e) = result {
+        log::error!("TCP listener on {local_addr} exited: {e}");
     }
 }
