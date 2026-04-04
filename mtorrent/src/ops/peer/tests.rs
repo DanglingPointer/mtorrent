@@ -36,6 +36,7 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
             true, // PE
             remote_ip,
             0u16,
+            None, // interface
             &runtime::Handle::current(),
         )
         .await
@@ -139,6 +140,7 @@ async fn run_listening_seeder(
         PeerId::from(&local_id),
         listener_ip.port(),
         listener_ip.port(),
+        None,
     )
     .unwrap();
     handle.with(|ctx| {

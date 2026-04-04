@@ -319,7 +319,8 @@ mod tests {
             .unwrap();
         let peer_id = PeerId::from(&[0u8; 20]);
         let listener_addr: SocketAddr = "127.0.0.1:6881".parse().unwrap();
-        let mut handle = ctx::PreliminaryCtx::new(magnet, peer_id, listener_addr.port(), 6881);
+        let mut handle =
+            ctx::PreliminaryCtx::new(magnet, peer_id, listener_addr.port(), 6881, None);
 
         let peer1: SocketAddr = "1.2.3.4:1000".parse().unwrap();
         let peer2: SocketAddr = "5.6.7.8:2000".parse().unwrap();

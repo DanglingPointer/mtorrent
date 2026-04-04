@@ -2,6 +2,7 @@ use super::super::PeerReporter;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use mtorrent_core::{pe, pwp, utp};
+use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;
@@ -10,20 +11,31 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio::{join, runtime, select, task, time};
 
-pub fn launch_utp(pwp_runtime: &runtime::Handle, local_addr: SocketAddr) -> UtpHandle {
+pub fn launch_utp(
+    pwp_runtime: &runtime::Handle,
+    local_addr: SocketAddr,
+    interface: Option<String>,
+) -> UtpHandle {
     let (cmd_sender, cmd_receiver) = mpsc::channel(1);
     pwp_runtime.spawn(async move {
-        match UdpSocket::bind(local_addr).await {
-            Ok(socket) => {
-                task::spawn_local(async move {
-                    let (endpoint, connect_reporter, udp_demux) = utp::new_endpoint(socket);
-                    join!(udp_demux.run(), bridge_task(endpoint, cmd_receiver, connect_reporter));
-                });
-            }
-            Err(e) => {
-                log::error!("Failed to create uTP socket: {e}");
-            }
+        let Ok(socket) = UdpSocket::bind(local_addr)
+            .await
+            .inspect_err(|e| log::error!("Failed to create uTP socket: {e}"))
+        else {
+            return;
+        };
+
+        if let Some(interface) = interface
+            && let Err(e) = bind_to_interface(&socket, &interface)
+        {
+            log::error!("Failed to bind uTP socket to interface {interface}: {e}");
+            return;
         }
+
+        task::spawn_local(async move {
+            let (endpoint, connect_reporter, udp_demux) = utp::new_endpoint(socket);
+            join!(udp_demux.run(), bridge_task(endpoint, cmd_receiver, connect_reporter));
+        });
     });
     UtpHandle(cmd_sender)
 }
