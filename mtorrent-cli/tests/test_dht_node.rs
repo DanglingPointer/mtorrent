@@ -15,6 +15,16 @@ struct ConfigContent {
     nodes: Vec<String>,
 }
 
+fn loopback_iface_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Loopback Pseudo-Interface 1"
+    } else if cfg!(target_os = "macos") {
+        "lo0"
+    } else {
+        "lo"
+    }
+}
+
 #[test]
 fn test_bootstrap_dht_node() {
     let working_dir = "test_bootstrap_dht_node";
@@ -76,6 +86,7 @@ fn test_two_dht_nodes_discover_and_announce() {
 
     let (node1_worker, node1_cmds) = dht::launch_dht_node_runtime(dht::Config {
         local_port: node1_addr.port(),
+        bind_interface: Some(loopback_iface_name().to_string()),
         max_concurrent_queries: None,
         config_dir: working_dir1.to_owned(),
         use_upnp: false,
@@ -86,6 +97,7 @@ fn test_two_dht_nodes_discover_and_announce() {
 
     let (node2_worker, node2_cmds) = dht::launch_dht_node_runtime(dht::Config {
         local_port: node2_addr.port(),
+        bind_interface: Some(loopback_iface_name().to_string()),
         max_concurrent_queries: None,
         config_dir: working_dir2.to_owned(),
         use_upnp: false,

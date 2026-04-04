@@ -1,4 +1,5 @@
 use mtorrent_dht as dht;
+use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::{info_stopwatch, ip, upnp, worker};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -12,6 +13,8 @@ use tokio::{join, task};
 pub struct Config {
     /// Local UDP port to bind to.
     pub local_port: u16,
+    /// Optional name of network interface to bind the UDP socket to (e.g. "eth0" or "lo").
+    pub bind_interface: Option<String>,
     /// Maximum number of outbound queries in flight.
     /// Uses an internal default if `None`.
     pub max_concurrent_queries: Option<usize>,
@@ -40,6 +43,7 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
         task::spawn_local(dht_main(
             cmd_server,
             cfg.local_port,
+            cfg.bind_interface,
             cfg.config_dir,
             cfg.max_concurrent_queries,
             cfg.use_upnp,
@@ -75,9 +79,11 @@ async fn start_upnp(local_port: u16) -> io::Result<()> {
     Ok(())
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn dht_main(
     cmd_server: dht::CommandSource,
     local_port: u16,
+    bind_interface: Option<String>,
     config_dir: PathBuf,
     max_concurrent_queries: Option<usize>,
     use_upnp: bool,
@@ -90,6 +96,13 @@ async fn dht_main(
         Err(e) => return log::error!("Failed to create a UDP socket for DHT: {e}"),
         Ok(socket) => socket,
     };
+
+    if let Some(interface) = bind_interface
+        && let Err(e) = bind_to_interface(&socket, &interface)
+    {
+        log::error!("Failed to bind DHT UDP socket to interface {interface}: {e}");
+        return;
+    }
 
     if use_upnp && let Err(e) = start_upnp(local_port).await {
         log::error!("UPnP for DHT failed: {e}");

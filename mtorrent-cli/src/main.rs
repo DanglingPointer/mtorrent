@@ -117,6 +117,7 @@ fn main() -> io::Result<()> {
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
         let (dht_worker, dht_cmds) = dht::launch_dht_node_runtime(dht::Config {
             local_port: 6881,
+            bind_interface: cli.interface.clone(),
             max_concurrent_queries: None,
             config_dir: local_data_dir.clone(),
             use_upnp: !cli.no_upnp,

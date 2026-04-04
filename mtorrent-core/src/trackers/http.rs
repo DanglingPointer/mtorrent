@@ -1,6 +1,6 @@
 use local_async_utils::prelude::*;
 use mtorrent_utils::{benc, ip};
-use reqwest::Url;
+use reqwest::{ClientBuilder, Url};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::{fmt, io, str};
@@ -34,13 +34,39 @@ const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PK
 #[derive(Clone)]
 pub struct TrackerClient(reqwest::Client);
 
+#[cfg(windows)]
+fn set_interface(builder: ClientBuilder, _interface: Option<&str>) -> ClientBuilder {
+    builder
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "fuchsia",
+    target_os = "illumos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "solaris",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
+fn set_interface(builder: ClientBuilder, interface: Option<&str>) -> ClientBuilder {
+    if let Some(iface) = interface {
+        builder.interface(iface)
+    } else {
+        builder
+    }
+}
+
 impl TrackerClient {
-    pub fn new() -> Result<Self, Error> {
-        let inner = reqwest::Client::builder()
+    pub fn new(interface: Option<&str>) -> Result<Self, Error> {
+        let builder = reqwest::Client::builder()
             .gzip(true)
             .user_agent(APP_USER_AGENT)
-            .timeout(sec!(30))
-            .build()?;
+            .timeout(sec!(30));
+
+        let inner = set_interface(builder, interface).build()?;
         Ok(TrackerClient(inner))
     }
 
@@ -503,7 +529,7 @@ mod tests {
     #[tokio::test]
     async fn test_https_scrape_and_announce() {
         let tracker_url = "https://torrent.ubuntu.com/announce";
-        let client = TrackerClient::new().unwrap();
+        let client = TrackerClient::new(Default::default()).unwrap();
 
         let request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
         let response = client.scrape(request).await.unwrap_or_else(|e| panic!("Scrape error: {e}"));

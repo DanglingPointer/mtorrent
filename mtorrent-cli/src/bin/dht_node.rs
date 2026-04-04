@@ -42,6 +42,10 @@ struct Args {
     /// Query timeout in seconds
     #[arg(long)]
     timeout: Option<u64>,
+
+    /// Name of network interface to bind all sockets to (e.g. "eth0" or "lo").
+    #[arg(short, long)]
+    interface: Option<String>,
 }
 
 /// Example usage:
@@ -89,6 +93,7 @@ fn main() -> io::Result<()> {
         use_upnp: !args.no_upnp,
         bootstrap_nodes_override: None,
         query_timeout: args.timeout.map(Duration::from_secs),
+        bind_interface: args.interface,
     })?;
 
     for node in extra_nodes {

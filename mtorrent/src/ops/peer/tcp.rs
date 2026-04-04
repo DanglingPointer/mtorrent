@@ -27,10 +27,10 @@ fn bound_pwp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Resu
     socket.set_zero_linger()?;
     socket.set_nodelay(true)?;
 
+    socket.bind(local_addr)?;
     if let Some(interface) = interface {
         bind_to_interface(&socket, interface)?;
     }
-    socket.bind(local_addr)?;
     Ok(socket)
 }
 

@@ -114,7 +114,9 @@ pub async fn single_torrent(
         cfg.bind_interface.clone(),
     );
 
-    let (tracker_client, trackers_mgr) = trackers::init();
+    let (tracker_client, trackers_mgr) = trackers::init(trackers::Config {
+        bind_interface: cfg.bind_interface.clone(),
+    });
     ctx.pwp_runtime.spawn(trackers_mgr.run());
 
     let handles = Handles {
