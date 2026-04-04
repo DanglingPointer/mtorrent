@@ -74,21 +74,22 @@ struct Request<RequestData, ResponseData> {
 enum Command {
     Announce(Request<AnnounceRequest, AnnounceResponse>),
     Scrape(Request<ScrapeRequest, ScrapeResponse>),
+    AbortAll,
 }
 
-/// Set up the [`TrackerClient`]-[`TrackerManager`] pair.
-pub fn init() -> (TrackerClient, TrackerManager) {
+/// Set up the [`Client`]-[`Manager`] pair.
+pub fn init() -> (Client, Manager) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(128);
-    (TrackerClient { cmd_sender }, TrackerManager { cmd_receiver })
+    (Client { cmd_sender }, Manager { cmd_receiver })
 }
 
 /// Handle for sending announces and scrapes to HTTP and UDP trackers.
 #[derive(Clone)]
-pub struct TrackerClient {
+pub struct Client {
     cmd_sender: mpsc::Sender<Command>,
 }
 
-impl TrackerClient {
+impl Client {
     /// Send announce request to a tracker and wait for response.
     pub async fn announce(
         &self,
@@ -121,6 +122,11 @@ impl TrackerClient {
         rx.await.map_err(Self::broken_pipe_error)?
     }
 
+    /// Abort all ongoing announces and scrapes.
+    pub async fn abort_all(&self) -> io::Result<()> {
+        self.cmd_sender.send(Command::AbortAll).await.map_err(Self::broken_pipe_error)
+    }
+
     fn broken_pipe_error<T>(_: T) -> io::Error {
         io::Error::from(io::ErrorKind::BrokenPipe)
     }
@@ -147,13 +153,13 @@ impl From<AnnounceEvent> for udp::AnnounceEvent {
 }
 
 /// Actor that sends announces and scrapes to HTTP and UDP trackers.
-pub struct TrackerManager {
+pub struct Manager {
     cmd_receiver: mpsc::Receiver<Command>,
 }
 
-impl TrackerManager {
+impl Manager {
     pub async fn run(mut self) {
-        let canceller = CancellationToken::new();
+        let mut canceller = CancellationToken::new();
 
         macro_rules! spawn_child_task {
             ($fut:expr) => {{
@@ -213,6 +219,11 @@ impl TrackerManager {
                         });
                     }
                 },
+                Command::AbortAll => {
+                    log::info!("Aborting all operations");
+                    canceller.cancel();
+                    canceller = CancellationToken::new();
+                }
             }
         }
         canceller.cancel();

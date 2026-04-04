@@ -39,6 +39,15 @@ pub struct Context {
     pub storage_runtime: runtime::Handle,
 }
 
+#[derive(Clone)]
+struct Handles<'h> {
+    dht_handle: Option<&'h dht::CommandSink>,
+    pwp_runtime: &'h runtime::Handle,
+    storage_runtime: &'h runtime::Handle,
+    utp_handle: &'h ops::UtpHandle,
+    trackers_handle: &'h trackers::Client,
+}
+
 async fn start_upnp(
     internal_addr: SocketAddr,
     desired_external_port: Option<u16>,
@@ -100,6 +109,17 @@ pub async fn single_torrent(
     let utp_handle =
         ops::launch_utp(&ctx.pwp_runtime, (Ipv4Addr::UNSPECIFIED, listener_port).into());
 
+    let (tracker_client, trackers_mgr) = trackers::init();
+    ctx.pwp_runtime.spawn(trackers_mgr.run());
+
+    let handles = Handles {
+        dht_handle: ctx.dht_handle.as_ref(),
+        pwp_runtime: &ctx.pwp_runtime,
+        storage_runtime: &ctx.storage_runtime,
+        utp_handle: &utp_handle,
+        trackers_handle: &tracker_client,
+    };
+
     if Path::new(metainfo_uri.as_ref()).is_file() {
         main_stage(
             cfg.local_peer_id,
@@ -109,8 +129,7 @@ pub async fn single_torrent(
             cfg.output_dir,
             cfg.config_dir,
             &mut listener,
-            ctx,
-            &utp_handle,
+            handles,
             std::iter::empty(),
         )
         .await?;
@@ -123,9 +142,7 @@ pub async fn single_torrent(
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
             &mut listener,
-            ctx.dht_handle.as_ref(),
-            &ctx.pwp_runtime,
-            &utp_handle,
+            handles.clone(),
         )
         .await?;
         log::info!("Metadata downloaded successfully, starting content download");
@@ -137,8 +154,7 @@ pub async fn single_torrent(
             &cfg.output_dir,
             cfg.config_dir.to_owned(),
             &mut listener,
-            ctx,
-            &utp_handle,
+            handles,
             peers,
         )
         .await?;
@@ -155,9 +171,7 @@ async fn preliminary_stage(
     metainfo_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
-    dht_handle: Option<&dht::CommandSink>,
-    pwp_runtime: &runtime::Handle,
-    utp_handle: &ops::UtpHandle,
+    handles: Handles<'_>,
 ) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
@@ -166,9 +180,6 @@ async fn preliminary_stage(
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
     let _sw =
         info_stopwatch!("Preliminary stage for torrent '{}'", magnet_link.name().unwrap_or("n/a"));
-
-    let (tracker_client, trackers_mgr) = trackers::init();
-    pwp_runtime.spawn(trackers_mgr.run());
 
     let extra_peers: Vec<SocketAddr> = magnet_link.peers().cloned().collect();
     let metainfo_filepath = metainfo_dir
@@ -184,17 +195,20 @@ async fn preliminary_stage(
     let (peer_reporter, connect_throttle) =
         ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
             ctx_handle: ctx.clone(),
-            pwp_worker_handle: pwp_runtime.clone(),
+            pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
-            utp_handle: utp_handle.clone(),
+            utp_handle: handles.utp_handle.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
 
-    if let Err(e) = utp_handle.restart(peer_reporter.clone()).await {
+    if let Err(e) = handles.utp_handle.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
     }
+    if let Err(e) = handles.trackers_handle.abort_all().await {
+        log::error!("Failed to abort tracker announces: {e}");
+    }
 
-    dht_handle.map(|dht_cmds| {
+    handles.dht_handle.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
             dht_cmds.clone(),
@@ -208,7 +222,7 @@ async fn preliminary_stage(
             SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
             peer_reporter.clone(),
         ),
-        pwp_runtime,
+        handles.pwp_runtime,
     );
 
     tasks.spawn_on(
@@ -216,12 +230,12 @@ async fn preliminary_stage(
             SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
             peer_reporter.clone(),
         ),
-        pwp_runtime,
+        handles.pwp_runtime,
     );
 
     tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
-        tracker_client,
+        handles.trackers_handle.clone(),
         peer_reporter.clone(),
         config_dir,
     ));
@@ -246,12 +260,9 @@ async fn main_stage(
     output_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
-    handles: impl Borrow<Context>,
-    utp_handle: &ops::UtpHandle,
+    handles: Handles<'_>,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
 ) -> io::Result<()> {
-    let handles: &Context = handles.borrow();
-
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
     let _sw = info_stopwatch!("Main stage for torrent '{}'", metainfo.name().unwrap_or("n/a"));
@@ -268,9 +279,6 @@ async fn main_stage(
         startup::create_metainfo_storage(&metainfo_filepath)?;
     handles.storage_runtime.spawn(metainfo_storage_server.run());
 
-    let (tracker_client, trackers_mgr) = trackers::init();
-    handles.pwp_runtime.spawn(trackers_mgr.run());
-
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
     let ctx: ops::Handle<_> =
@@ -286,15 +294,18 @@ async fn main_stage(
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
-            utp_handle: utp_handle.clone(),
+            utp_handle: handles.utp_handle.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
 
-    if let Err(e) = utp_handle.restart(peer_reporter.clone()).await {
+    if let Err(e) = handles.utp_handle.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
     }
+    if let Err(e) = handles.trackers_handle.abort_all().await {
+        log::error!("Failed to abort tracker announces: {e}");
+    }
 
-    handles.dht_handle.as_ref().map(|dht_cmds| {
+    handles.dht_handle.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
             dht_cmds.clone(),
@@ -308,7 +319,7 @@ async fn main_stage(
             SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), listener_port),
             peer_reporter.clone(),
         ),
-        &handles.pwp_runtime,
+        handles.pwp_runtime,
     );
 
     tasks.spawn_on(
@@ -316,12 +327,12 @@ async fn main_stage(
             SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), listener_port),
             peer_reporter.clone(),
         ),
-        &handles.pwp_runtime,
+        handles.pwp_runtime,
     );
 
     tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
-        tracker_client,
+        handles.trackers_handle.clone(),
         peer_reporter.clone(),
         config_dir,
     ));

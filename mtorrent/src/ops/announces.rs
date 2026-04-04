@@ -12,7 +12,7 @@ use tokio::time::{self, Instant};
 
 pub async fn make_periodic_announces(
     mut ctx_handle: ctx::Handle<ctx::MainCtx>,
-    tracker_client: TrackerClient,
+    tracker_client: Client,
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
@@ -24,7 +24,7 @@ pub async fn make_periodic_announces(
 
 pub async fn make_preliminary_announces(
     mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
-    trackers_handle: TrackerClient,
+    trackers_handle: Client,
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
 ) {
@@ -66,7 +66,7 @@ fn update_tracker_urls<'a>(
 }
 
 async fn launch_announces(
-    tracker_client: &TrackerClient,
+    tracker_client: &Client,
     peer_reporter: &PeerReporter,
     handler: impl AnnounceHandler + Clone,
     tracker_urls: impl IntoIterator<Item = TrackerUrl>,
@@ -85,7 +85,7 @@ async fn launch_announces(
 }
 
 async fn announce_periodically(
-    tracker_client: &TrackerClient,
+    tracker_client: &Client,
     peer_reporter: &PeerReporter,
     url: TrackerUrl,
     mut handler: impl AnnounceHandler,
