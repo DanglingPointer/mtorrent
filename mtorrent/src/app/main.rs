@@ -61,15 +61,17 @@ struct Params {
 }
 
 async fn start_upnp(
-    internal_addr: SocketAddr,
+    internal_port: u16,
     desired_external_port: Option<u16>,
     proto: upnp::PortMappingProtocol,
-) -> SocketAddr {
-    let Ok(port_opener) = upnp::PortOpener::new(internal_addr, proto, desired_external_port)
-        .await
-        .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
+    interface: Option<&str>,
+) -> u16 {
+    let Ok(port_opener) =
+        upnp::PortOpener::new(proto, internal_port, desired_external_port, interface)
+            .await
+            .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
     else {
-        return internal_addr;
+        return internal_port;
     };
 
     let external_addr = port_opener.external_ip();
@@ -80,7 +82,7 @@ async fn start_upnp(
             log::error!("UPnP: {proto:?} port renewal for PWP failed: {e}");
         }
     });
-    external_addr
+    external_addr.port()
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
@@ -109,12 +111,21 @@ pub async fn single_torrent(
     // peers later
     let external_pwp_port = if cfg.use_upnp {
         let _g = ctx.pwp_runtime.enter();
-        let internal_addr = (net::get_local_addr()?, listener_port).into();
-        let (_public_pwp_addr, public_utp_addr) = join!(
-            start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::TCP),
-            start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::UDP),
+        let (_public_pwp_port, public_utp_port) = join!(
+            start_upnp(
+                listener_port,
+                cfg.pwp_port,
+                upnp::PortMappingProtocol::TCP,
+                cfg.bind_interface.as_deref()
+            ),
+            start_upnp(
+                listener_port,
+                cfg.pwp_port,
+                upnp::PortMappingProtocol::UDP,
+                cfg.bind_interface.as_deref()
+            ),
         );
-        public_utp_addr.port()
+        public_utp_port
     } else {
         listener_port
     };

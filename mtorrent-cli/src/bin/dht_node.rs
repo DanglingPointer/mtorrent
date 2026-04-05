@@ -50,9 +50,9 @@ struct Args {
 
 /// Example usage:
 /// ```bash
-/// ./target/release/dht_node --duration=30
 /// ./target/release/dht_node --nodes '"router.bittorrent.com:6881" "dht.transmissionbt.com:6881"' --duration=72
 /// ./target/release/dht_node --duration=10 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9" -o peers.txt
+/// ./target/release/dht_node --duration=30 -t "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9" -i "wlp0s20f3"
 /// ```
 fn main() -> io::Result<()> {
     #[cfg(debug_assertions)]
@@ -67,6 +67,7 @@ fn main() -> io::Result<()> {
         .with_threads(false)
         .with_level(log::LevelFilter::Info)
         .with_module_level("mtorrent_dht", log::LevelFilter::Debug)
+        .with_module_level("mtorrent_utils", log::LevelFilter::Debug)
         .with_module_level("mtorrent::app::dht", log::LevelFilter::Debug)
         .with_module_level("dht_node", log::LevelFilter::Debug)
         .init()

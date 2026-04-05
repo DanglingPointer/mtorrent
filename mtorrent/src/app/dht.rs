@@ -1,7 +1,7 @@
 use mtorrent_dht as dht;
 use mtorrent_utils::{info_stopwatch, net, upnp, worker};
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -54,14 +54,13 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
     Ok((worker_handle, cmd_sender))
 }
 
-async fn start_upnp(local_port: u16) -> io::Result<()> {
-    let local_addr = net::get_local_addr()?;
-
+async fn start_upnp(local_port: u16, interface: Option<&str>) -> io::Result<()> {
     // try create a port mapping with the same port number
     let port_opener = upnp::PortOpener::new(
-        SocketAddr::new(local_addr.into(), local_port),
         upnp::PortMappingProtocol::UDP,
+        local_port,
         Some(local_port),
+        interface,
     )
     .await
     .map_err(io::Error::other)?;
@@ -101,14 +100,14 @@ async fn dht_main(
         Ok(socket) => socket,
     };
 
-    if let Some(interface) = bind_interface
-        && let Err(e) = net::bind_to_interface(&socket, &interface)
+    if let Some(interface) = &bind_interface
+        && let Err(e) = net::bind_to_interface(&socket, interface)
     {
         log::error!("Failed to bind DHT UDP socket to interface {interface}: {e}");
         return;
     }
 
-    if use_upnp && let Err(e) = start_upnp(local_port).await {
+    if use_upnp && let Err(e) = start_upnp(local_port, bind_interface.as_deref()).await {
         log::error!("UPnP for DHT failed: {e}");
     }
 

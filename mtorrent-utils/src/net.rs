@@ -4,33 +4,28 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::{io, ops};
 
-/// Get local (non-loopback) IPv4.
-#[cfg(target_os = "linux")]
-pub fn get_local_addr() -> io::Result<Ipv4Addr> {
-    let hostname_out = std::process::Command::new("hostname").arg("-I").output()?;
-    let ipv4_string = String::from_utf8_lossy(&hostname_out.stdout)
-        .split_once(' ')
-        .ok_or_else(|| io::Error::other("Unexpected output from 'hostname -I'"))?
-        .0
-        .to_string();
-    ipv4_string.parse::<Ipv4Addr>().map_err(io::Error::other)
+#[cfg(not(windows))]
+pub(crate) fn get_local_addr(mut predicate: impl FnMut(&IpAddr) -> bool) -> Option<IpAddr> {
+    sysinfo::Networks::new_with_refreshed_list()
+        .values()
+        .flat_map(sysinfo::NetworkData::ip_networks)
+        .filter_map(|network| predicate(&network.addr).then_some(network.addr))
+        .next()
 }
 
-/// Get local (non-loopback) IPv4.
 #[cfg(windows)]
-pub fn get_local_addr() -> io::Result<Ipv4Addr> {
-    // naively uses first connected adapter
-    ipconfig::get_adapters()
-        .map_err(io::Error::other)?
+pub(crate) fn get_local_addr(predicate: impl FnMut(&IpAddr) -> bool) -> Option<IpAddr> {
+    // can't use sysinfo on Windows because it doesn't return SW adapters, e.g. loopback
+    let adapters = ipconfig::get_adapters().ok()?;
+    adapters
         .iter()
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)
-        .find_map(|addr| match addr {
-            IpAddr::V4(ipv4) => Some(*ipv4),
-            _ => None,
-        })
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
+        .cloned()
+        .find(predicate)
 }
+
+// ------------------------------------------------------------------------------------------------
 
 #[cfg(windows)]
 fn get_adapter_addrs<'a>(
@@ -104,10 +99,7 @@ pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
     Ipv6Addr::UNSPECIFIED
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
-pub fn get_local_addr() -> io::Result<Ipv4Addr> {
-    Ok(Ipv4Addr::UNSPECIFIED)
-}
+// ------------------------------------------------------------------------------------------------
 
 #[doc(hidden)]
 pub fn set_so_sndbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
@@ -122,6 +114,24 @@ pub fn set_so_rcvbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, 
         log::warn!(target: module, "Failed to set socket receive buffer size: {e}");
     }
 }
+
+/// Set SO_SNDBUF on a socket.
+#[macro_export]
+macro_rules! set_so_sndbuf {
+    ($sock:expr, $size:expr) => {{
+        $crate::net::set_so_sndbuf_internal($sock, $size, std::module_path!());
+    }};
+}
+
+/// Set SO_RCVBUF on a socket.
+#[macro_export]
+macro_rules! set_so_rcvbuf {
+    ($sock:expr, $size:expr) => {{
+        $crate::net::set_so_rcvbuf_internal($sock, $size, std::module_path!());
+    }};
+}
+
+// ------------------------------------------------------------------------------------------------
 
 /// Bind a socket to a specific network interface. Does nothing on Windows.
 #[cfg(target_os = "windows")]
@@ -176,21 +186,7 @@ pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) ->
     Ok(())
 }
 
-/// Set SO_SNDBUF on a socket.
-#[macro_export]
-macro_rules! set_so_sndbuf {
-    ($sock:expr, $size:expr) => {{
-        $crate::net::set_so_sndbuf_internal($sock, $size, std::module_path!());
-    }};
-}
-
-/// Set SO_RCVBUF on a socket.
-#[macro_export]
-macro_rules! set_so_rcvbuf {
-    ($sock:expr, $size:expr) => {{
-        $crate::net::set_so_rcvbuf_internal($sock, $size, std::module_path!());
-    }};
-}
+// ------------------------------------------------------------------------------------------------
 
 const DYNAMIC_PORT_RANGE: ops::Range<u32> = 49152..65536;
 
@@ -331,5 +327,16 @@ mod tests {
 
         let addr = get_bind_addr_v6(Some(iface));
         assert!(addr.is_loopback() || addr.is_unicast_link_local());
+    }
+
+    #[test]
+    fn test_local_addr_predicate() {
+        let addr = get_local_addr(|addr| addr.is_loopback() && addr.is_ipv4());
+        assert_eq!(addr, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+
+        let addr = get_local_addr(|addr| !addr.is_loopback() && !addr.is_unspecified());
+        let addr = addr.expect("failed to find non-loopback address");
+        assert!(!addr.is_loopback());
+        assert!(!addr.is_unspecified());
     }
 }
