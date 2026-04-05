@@ -80,6 +80,7 @@ fn test_two_dht_nodes_discover_and_announce() {
         config_dir: working_dir1.to_owned(),
         use_upnp: false,
         bootstrap_nodes_override: Some(Vec::new()),
+        query_timeout: None,
     })
     .unwrap();
 
@@ -89,6 +90,7 @@ fn test_two_dht_nodes_discover_and_announce() {
         config_dir: working_dir2.to_owned(),
         use_upnp: false,
         bootstrap_nodes_override: Some(Vec::new()),
+        query_timeout: None,
     })
     .unwrap();
 

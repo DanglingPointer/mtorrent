@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio_util::time::{DelayQueue, delay_queue};
 
 pub struct Handler {
+    timeout: Duration,
     next_tid: u32,
     outstanding_queries: DelayQueue<(OutgoingQuery, u32)>,
     tid_to_key: HashMap<u32, delay_queue::Key>,
@@ -19,13 +20,15 @@ pub struct Handler {
 }
 
 impl Handler {
-    pub(super) const TIMEOUT: Duration = sec!(2);
+    pub(super) const DEFAULT_TIMEOUT: Duration = sec!(2);
 
     pub fn new(
         outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
         incoming_queries_sink: local_unbounded::Sender<IncomingQuery>,
+        timeout: Option<Duration>,
     ) -> Self {
         Self {
+            timeout: timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
             next_tid: 1,
             outstanding_queries: Default::default(),
             tid_to_key: Default::default(),
@@ -45,7 +48,7 @@ impl Handler {
         };
         match self.outgoing_msgs_sink.send((msg, query.destination_addr)).await {
             Ok(_) => {
-                let queue_key = self.outstanding_queries.insert((query, tid), Self::TIMEOUT);
+                let queue_key = self.outstanding_queries.insert((query, tid), self.timeout);
                 self.tid_to_key.insert(tid, queue_key);
                 Ok(())
             }

@@ -3,6 +3,7 @@ use mtorrent_utils::{info_stopwatch, ip, upnp, worker};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::{join, task};
 
@@ -20,6 +21,8 @@ pub struct Config {
     pub use_upnp: bool,
     /// Override default bootstrap nodes.
     pub bootstrap_nodes_override: Option<Vec<String>>,
+    /// Timeout for outbound queries. Uses an internal default if `None`.
+    pub query_timeout: Option<Duration>,
 }
 
 /// Spawn a thread with a Tokio runtime running the DHT system, and return handle to it.
@@ -41,6 +44,7 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
             cfg.max_concurrent_queries,
             cfg.use_upnp,
             cfg.bootstrap_nodes_override,
+            cfg.query_timeout,
         ));
     });
 
@@ -78,6 +82,7 @@ async fn dht_main(
     max_concurrent_queries: Option<usize>,
     use_upnp: bool,
     bootstrap_nodes: Option<Vec<String>>,
+    query_timeout: Option<Duration>,
 ) {
     let _sw = info_stopwatch!("DHT");
 
@@ -92,8 +97,12 @@ async fn dht_main(
 
     let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
 
-    let (client, server, queries_runner) =
-        dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
+    let (client, server, queries_runner) = dht::setup_queries(
+        outgoing_msgs_sink,
+        incoming_msgs_source,
+        max_concurrent_queries,
+        query_timeout,
+    );
 
     let mut processor = dht::Processor::new(config_dir, client);
 

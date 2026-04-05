@@ -117,6 +117,7 @@ fn main() -> io::Result<()> {
             config_dir: local_data_dir.clone(),
             use_upnp: !cli.no_upnp,
             bootstrap_nodes_override: None,
+            query_timeout: None,
         })?;
         (Some(dht_worker), Some(dht_cmds))
     } else {

@@ -38,6 +38,10 @@ struct Args {
     /// Disable UPnP
     #[arg(long)]
     no_upnp: bool,
+
+    /// Query timeout in seconds
+    #[arg(long)]
+    timeout: Option<u64>,
 }
 
 /// Example usage:
@@ -84,6 +88,7 @@ fn main() -> io::Result<()> {
         config_dir,
         use_upnp: !args.no_upnp,
         bootstrap_nodes_override: None,
+        query_timeout: args.timeout.map(Duration::from_secs),
     })?;
 
     for node in extra_nodes {

@@ -20,6 +20,7 @@ fn setup_routing(
         udp::MessageChannelSender(outgoing_msgs_sink),
         udp::MessageChannelReceiver(incoming_msgs_source),
         None,
+        None,
     )
 }
 
@@ -355,7 +356,7 @@ async fn test_outgoing_query_timeout() {
     assert_eq!(outgoing_ping.transaction_id, tid(1));
     assert!(matches!(outgoing_ping.data, MessageData::Query(QueryMsg::Ping(_))));
 
-    sleep(Handler::TIMEOUT).await;
+    sleep(Handler::DEFAULT_TIMEOUT).await;
     assert_pending!(ping_fut.poll());
 
     yield_now().await;
@@ -410,7 +411,7 @@ async fn test_outgoing_concurrent_timeouts() {
     assert!(matches!(outgoing_get_peers.data, MessageData::Query(QueryMsg::GetPeers(_))));
 
     // ping times out
-    sleep(Handler::TIMEOUT - millisec!(500)).await;
+    sleep(Handler::DEFAULT_TIMEOUT - millisec!(500)).await;
     assert_pending!(ping_fut.poll());
     yield_now().await;
     assert!(outgoing_msgs_source.try_recv().is_err());
@@ -469,7 +470,7 @@ async fn test_outgoing_simultaneous_timeouts() {
     assert!(matches!(outgoing_get_peers.data, MessageData::Query(QueryMsg::GetPeers(_))));
 
     // everything times out 1500ms later
-    sleep(Handler::TIMEOUT).await;
+    sleep(Handler::DEFAULT_TIMEOUT).await;
     assert_pending!(ping_fut.poll());
     assert_pending!(get_peers_fut.poll());
 
@@ -552,7 +553,7 @@ async fn test_outgoing_interleaved_timeout_and_timer_cleanup() {
     assert_eq!(ping_response.id, U160::from([69u8; 20]));
 
     // get_peers times out
-    sleep(Handler::TIMEOUT - millisec!(500)).await;
+    sleep(Handler::DEFAULT_TIMEOUT - millisec!(500)).await;
     assert_pending!(get_peers_fut.poll());
     yield_now().await;
     assert!(outgoing_msgs_source.try_recv().is_err());
@@ -620,6 +621,7 @@ async fn test_outgoing_queries_limit_is_respected() {
         udp::MessageChannelSender(outgoing_msgs_sink),
         udp::MessageChannelReceiver(incoming_msgs_source),
         Some(1),
+        None,
     );
     let mut runner_fut = spawn(runner.run());
 

@@ -14,6 +14,7 @@ use mtorrent_utils::{debug_stopwatch, trace_stopwatch};
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::time::Duration;
 use tokio::select;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -135,13 +136,14 @@ pub fn setup_queries(
     udp::MessageChannelSender(outgoing_msgs_sink): udp::MessageChannelSender,
     udp::MessageChannelReceiver(incoming_msgs_source): udp::MessageChannelReceiver,
     max_concurrent_queries: Option<usize>,
+    query_timeout: Option<Duration>,
 ) -> (OutboundQueries, InboundQueries, QueryRouter) {
     let (outgoing_queries_sink, outgoing_queries_source) = local_unbounded::channel();
     let (incoming_queries_sink, incoming_queries_source) = local_unbounded::channel();
     let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
     let runner = QueryRouter {
-        handler: Handler::new(outgoing_msgs_sink, incoming_queries_sink),
+        handler: Handler::new(outgoing_msgs_sink, incoming_queries_sink, query_timeout),
         outgoing_queries_source,
         incoming_msgs_source,
     };
