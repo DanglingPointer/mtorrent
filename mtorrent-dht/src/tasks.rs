@@ -37,6 +37,7 @@ fn validate_discovered_node(discovered: &Node, source: &Node, ctx: &Ctx) -> bool
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, Clone)]
 pub enum NodeEvent {
     Discovered(Node),
     Connected(Node),

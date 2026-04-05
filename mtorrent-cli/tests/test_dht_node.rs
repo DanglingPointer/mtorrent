@@ -1,4 +1,4 @@
-use local_async_utils::sec;
+use local_async_utils::{millisec, sec};
 use mtorrent::app::dht;
 use mtorrent_dht::Command;
 use serde::Deserialize;
@@ -106,10 +106,13 @@ fn test_two_dht_nodes_discover_and_announce() {
     })
     .unwrap();
 
-    node1_cmds.blocking_send(Command::AddNode { addr: node2_addr }).unwrap();
+    // wait for both nodes to start up and bind to their ports
+    std::thread::sleep(sec!(1));
 
+    node1_cmds.blocking_send(Command::AddNode { addr: node2_addr }).unwrap();
     node2_cmds.blocking_send(Command::AddNode { addr: node1_addr }).unwrap();
 
+    // wait for the nodes to discover each other
     std::thread::sleep(sec!(2));
 
     let (result_sender, mut result_receiver1) = mpsc::channel(10);
@@ -147,7 +150,7 @@ fn test_two_dht_nodes_discover_and_announce() {
         if start_time.elapsed() > sec!(5) {
             panic!("Timeout waiting for nodes to discover each other");
         }
-        std::thread::sleep(sec!(1));
+        std::thread::sleep(millisec!(100));
     }
 
     assert!(discovered_by_node1.contains(&node2_addr), "Node 1 did not discover Node 2");

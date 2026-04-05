@@ -147,6 +147,7 @@ impl Processor {
     }
 
     fn handle_node_event(&mut self, event: NodeEvent) {
+        log::trace!("Handling node event: {event:?}");
         match event {
             NodeEvent::Discovered(node) => {
                 if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
