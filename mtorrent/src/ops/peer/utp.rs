@@ -2,7 +2,7 @@ use super::super::PeerReporter;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use mtorrent_core::{pe, pwp, utp};
-use mtorrent_utils::ip::bind_to_interface;
+use mtorrent_utils::net::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;

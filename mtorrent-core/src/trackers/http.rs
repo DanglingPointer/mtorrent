@@ -1,5 +1,5 @@
 use local_async_utils::prelude::*;
-use mtorrent_utils::{benc, ip};
+use mtorrent_utils::{benc, net};
 use reqwest::{ClientBuilder, Url};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
@@ -355,7 +355,7 @@ impl AnnounceResponseContent {
                 let mut all_peers = Vec::new();
                 match peers {
                     Some(benc::Element::ByteString(data)) => {
-                        all_peers.extend(ip::SocketAddrV4BytesIter(data).map(SocketAddr::V4));
+                        all_peers.extend(net::SocketAddrV4BytesIter(data).map(SocketAddr::V4));
                     }
                     Some(benc::Element::List(list)) => {
                         all_peers.extend(dictionary_peers(list));
@@ -363,7 +363,7 @@ impl AnnounceResponseContent {
                     _ => (),
                 }
                 if let Some(benc::Element::ByteString(data)) = ipv6_peers {
-                    all_peers.extend(ip::SocketAddrV6BytesIter(data).map(SocketAddr::V6))
+                    all_peers.extend(net::SocketAddrV6BytesIter(data).map(SocketAddr::V6))
                 }
                 Some(all_peers)
             }

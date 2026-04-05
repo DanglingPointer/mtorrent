@@ -1,5 +1,5 @@
 use mtorrent_dht as dht;
-use mtorrent_utils::{info_stopwatch, ip, upnp, worker};
+use mtorrent_utils::{info_stopwatch, net, upnp, worker};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
 }
 
 async fn start_upnp(local_port: u16) -> io::Result<()> {
-    let local_addr = ip::get_local_addr()?;
+    let local_addr = net::get_local_addr()?;
 
     // try create a port mapping with the same port number
     let port_opener = upnp::PortOpener::new(
@@ -92,7 +92,7 @@ async fn dht_main(
     let _sw = info_stopwatch!("DHT");
 
     let socket = match UdpSocket::bind(SocketAddrV4::new(
-        ip::get_bind_addr_v4(bind_interface.as_deref()),
+        net::get_bind_addr_v4(bind_interface.as_deref()),
         local_port,
     ))
     .await
@@ -102,7 +102,7 @@ async fn dht_main(
     };
 
     if let Some(interface) = bind_interface
-        && let Err(e) = ip::bind_to_interface(&socket, &interface)
+        && let Err(e) = net::bind_to_interface(&socket, &interface)
     {
         log::error!("Failed to bind DHT UDP socket to interface {interface}: {e}");
         return;
