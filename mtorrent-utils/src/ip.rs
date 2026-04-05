@@ -1,7 +1,7 @@
 use bytes::Buf;
 use socket2::SockRef;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::{Ipv4Addr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::{io, ops};
 
 /// Get local (non-loopback) IPv4.
@@ -26,10 +26,80 @@ pub fn get_local_addr() -> io::Result<Ipv4Addr> {
         .filter(|adapter| matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp))
         .flat_map(ipconfig::Adapter::ip_addresses)
         .find_map(|addr| match addr {
-            std::net::IpAddr::V4(ipv4) => Some(*ipv4),
+            IpAddr::V4(ipv4) => Some(*ipv4),
             _ => None,
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IPv4 not found"))
+}
+
+#[cfg(windows)]
+fn get_adapter_addrs<'a>(
+    adapters: impl IntoIterator<Item = &'a ipconfig::Adapter>,
+    iface: &str,
+) -> impl Iterator<Item = &'a IpAddr> {
+    adapters
+        .into_iter()
+        .filter(move |adapter| {
+            matches!(adapter.oper_status(), ipconfig::OperStatus::IfOperStatusUp)
+                && (adapter.adapter_name() == iface || adapter.friendly_name() == iface)
+        })
+        .flat_map(ipconfig::Adapter::ip_addresses)
+}
+
+pub fn get_bind_addr_v4(interface: Option<&str>) -> Ipv4Addr {
+    let Some(iface) = interface else {
+        return Ipv4Addr::UNSPECIFIED;
+    };
+
+    #[cfg(windows)]
+    if let Ok(adapters) = ipconfig::get_adapters() {
+        let found = get_adapter_addrs(&adapters, iface).find_map(|addr| match addr {
+            IpAddr::V4(ipv4) => Some(*ipv4),
+            _ => None,
+        });
+        debug_assert!(found.is_some(), "failed to find network adapter");
+        return found.unwrap_or(Ipv4Addr::UNSPECIFIED);
+    }
+
+    #[cfg(not(windows))]
+    if let Some(network_data) = sysinfo::Networks::new_with_refreshed_list().get(iface) {
+        let found = network_data.ip_networks().iter().find_map(|network| match network.addr {
+            IpAddr::V4(ipv4) => Some(ipv4),
+            _ => None,
+        });
+        debug_assert!(found.is_some(), "failed to find network adapter");
+        return found.unwrap_or(Ipv4Addr::UNSPECIFIED);
+    }
+
+    Ipv4Addr::UNSPECIFIED
+}
+
+pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
+    let Some(iface) = interface else {
+        return Ipv6Addr::UNSPECIFIED;
+    };
+
+    #[cfg(windows)]
+    if let Ok(adapters) = ipconfig::get_adapters() {
+        let found = get_adapter_addrs(&adapters, iface).find_map(|addr| match addr {
+            IpAddr::V6(ipv6) => Some(*ipv6),
+            _ => None,
+        });
+        debug_assert!(found.is_some(), "failed to find network adapter");
+        return found.unwrap_or(Ipv6Addr::UNSPECIFIED);
+    }
+
+    #[cfg(not(windows))]
+    if let Some(network_data) = sysinfo::Networks::new_with_refreshed_list().get(iface) {
+        let found = network_data.ip_networks().iter().find_map(|network| match network.addr {
+            IpAddr::V6(ipv6) => Some(ipv6),
+            _ => None,
+        });
+        debug_assert!(found.is_some(), "failed to find network adapter");
+        return found.unwrap_or(Ipv6Addr::UNSPECIFIED);
+    }
+
+    Ipv6Addr::UNSPECIFIED
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -241,5 +311,22 @@ mod tests {
             let idx = unsafe { libc::if_nametoindex(name_buf.as_ptr() as *const i8) };
             assert_eq!(idx, i);
         }
+    }
+
+    #[test]
+    fn test_get_bind_addr() {
+        let iface = if cfg!(target_os = "windows") {
+            "Loopback Pseudo-Interface 1"
+        } else if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        };
+
+        let addr = get_bind_addr_v4(Some(iface));
+        assert_eq!(addr, Ipv4Addr::LOCALHOST);
+
+        let addr = get_bind_addr_v6(Some(iface));
+        assert!(addr.is_loopback() || addr.is_unicast_link_local());
     }
 }

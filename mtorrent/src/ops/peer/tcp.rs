@@ -1,11 +1,12 @@
 use super::super::PeerReporter;
+use super::ctx;
 use bytes::BytesMut;
 use mtorrent_core::{pe, pwp};
 use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime;
 
@@ -34,25 +35,23 @@ fn bound_pwp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Resu
     Ok(socket)
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn new_outbound_connection(
-    local_peer_id: &PeerId,
+    data: &ctx::ConstData,
     info_hash: &[u8; 20],
     extension_protocol_enabled: bool,
     protocol_encryption_enabled: bool,
     peer_addr: SocketAddr,
-    local_port: u16,
-    interface: Option<&str>,
     pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let local_addr = match &peer_addr {
-        SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-        SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+        SocketAddr::V4(_) => data.pwp_local_addr_v4().into(),
+        SocketAddr::V6(_) => data.pwp_local_addr_v6().into(),
     };
 
-    let local_peer_id = *local_peer_id;
+    let local_peer_id = *data.local_peer_id();
     let info_hash = *info_hash;
-    let interface = interface.map(ToOwned::to_owned);
+    let interface = data.bind_interface().map(ToOwned::to_owned);
+    let local_port = data.pwp_internal_port();
     pwp_runtime
         .spawn(async move {
             let socket =

@@ -6,7 +6,7 @@ use mtorrent_core::pwp::{BlockInfo, MAX_BLOCK_SIZE};
 use mtorrent_core::{msgs, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::{fs, panic};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
@@ -30,13 +30,11 @@ async fn connecting_peer_downloading_metadata(remote_ip: SocketAddr, metainfo_pa
 
     let (mut download_chans, mut upload_chans, extended_chans) =
         super::tcp::new_outbound_connection(
-            &local_id.into(),
+            &ctx::ConstData::new_stub(),
             metainfo.info_hash(),
             true, // extensions
             true, // PE
             remote_ip,
-            0u16,
-            None, // interface
             &runtime::Handle::current(),
         )
         .await
@@ -140,6 +138,8 @@ async fn run_listening_seeder(
         PeerId::from(&local_id),
         listener_ip.port(),
         listener_ip.port(),
+        Ipv4Addr::LOCALHOST,
+        Ipv6Addr::LOCALHOST,
         None,
     )
     .unwrap();

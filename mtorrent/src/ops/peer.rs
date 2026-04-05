@@ -227,22 +227,16 @@ impl PeerConnector for MainConnectionData {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
         }
 
-        let (info_hash, local_peer_id, local_port, interface) = with_ctx!(|ctx| (
-            *ctx.metainfo.info_hash(),
-            *ctx.const_data.local_peer_id(),
-            ctx.const_data.pwp_internal_port(),
-            ctx.const_data.bind_interface().map(ToOwned::to_owned),
-        ));
+        let (info_hash, data) =
+            with_ctx!(|ctx| (*ctx.metainfo.info_hash(), ctx.const_data.clone()));
         time::timeout_at(
             deadline,
             tcp::new_outbound_connection(
-                &local_peer_id,
+                &data,
                 &info_hash,
                 EXTENSION_PROTOCOL_ENABLED,
                 use_pe,
                 peer_addr,
-                local_port,
-                interface.as_deref(),
                 &self.pwp_worker_handle,
             ),
         )
@@ -442,22 +436,15 @@ impl PeerConnector for PreliminaryConnectionData {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
         }
 
-        let (info_hash, local_peer_id, local_port, interface) = with_ctx!(|ctx| (
-            *ctx.magnet.info_hash(),
-            *ctx.const_data.local_peer_id(),
-            ctx.const_data.pwp_internal_port(),
-            ctx.const_data.bind_interface().map(ToOwned::to_owned),
-        ));
+        let (info_hash, data) = with_ctx!(|ctx| (*ctx.magnet.info_hash(), ctx.const_data.clone()));
         let (dl, ul, ext) = time::timeout_at(
             deadline,
             tcp::new_outbound_connection(
-                &local_peer_id,
+                &data,
                 &info_hash,
                 true, // extension_protocol_enabled
                 use_pe,
                 peer_addr,
-                local_port,
-                interface.as_deref(),
                 &self.pwp_worker_handle,
             ),
         )
