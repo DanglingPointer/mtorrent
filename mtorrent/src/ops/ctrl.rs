@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::utils::startup;
     use ctx::MainCtx;
-    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4};
 
     fn ip(port: u16) -> SocketAddr {
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
@@ -691,7 +691,16 @@ mod tests {
     fn test_request_rarest_piece_not_already_requested() {
         let metainfo =
             startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
-        let mut handle = MainCtx::new(metainfo, [0u8; 20].into(), 1234, 12345, None).unwrap();
+        let mut handle = MainCtx::new(
+            metainfo,
+            [0u8; 20].into(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+        )
+        .unwrap();
         define_with_ctx!(handle);
 
         with_ctx!(|ctx| {

@@ -6,7 +6,7 @@ use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::fmt::Debug;
 use std::io::Read;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, iter, panic};
@@ -177,6 +177,8 @@ impl PeerBuilder {
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
             local_addr.port(),
             local_addr.port(),
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
             None,
         )
         .unwrap();
@@ -241,6 +243,8 @@ impl PeerBuilder {
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
             local_addr.port(),
             local_addr.port(),
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
             None,
         );
 

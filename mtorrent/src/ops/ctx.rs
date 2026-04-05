@@ -8,7 +8,7 @@ use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::rc::Rc;
 use std::{cmp, fs, io, mem};
@@ -30,7 +30,7 @@ macro_rules! define_with_ctx {
     };
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum PwpMode {
     TcpOnly,
@@ -50,10 +50,13 @@ fn get_outbound_pwp_mode() -> PwpMode {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct ConstData {
     local_peer_id: PeerId,
     pwp_external_port: u16,
     pwp_internal_port: u16,
+    pwp_local_addr_v4: Ipv4Addr,
+    pwp_local_addr_v6: Ipv6Addr,
     bind_interface: Option<String>,
     outbound_pwp_mode: PwpMode,
 }
@@ -67,6 +70,12 @@ impl ConstData {
     }
     pub(super) fn pwp_internal_port(&self) -> u16 {
         self.pwp_internal_port
+    }
+    pub(super) fn pwp_local_addr_v4(&self) -> Ipv4Addr {
+        self.pwp_local_addr_v4
+    }
+    pub(super) fn pwp_local_addr_v6(&self) -> Ipv6Addr {
+        self.pwp_local_addr_v6
     }
     pub(super) fn bind_interface(&self) -> Option<&str> {
         self.bind_interface.as_deref()
@@ -94,6 +103,8 @@ impl PreliminaryCtx {
         local_peer_id: PeerId,
         pwp_external_port: u16,
         pwp_internal_port: u16,
+        pwp_local_addr_v4: Ipv4Addr,
+        pwp_local_addr_v6: Ipv6Addr,
         bind_interface: Option<String>,
     ) -> Handle<Self> {
         Handle::new(Self {
@@ -106,6 +117,8 @@ impl PreliminaryCtx {
                 local_peer_id,
                 pwp_external_port,
                 pwp_internal_port,
+                pwp_local_addr_v4,
+                pwp_local_addr_v6,
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
@@ -129,6 +142,8 @@ impl MainCtx {
         local_peer_id: PeerId,
         pwp_external_port: u16,
         pwp_internal_port: u16,
+        pwp_local_addr_v4: Ipv4Addr,
+        pwp_local_addr_v6: Ipv6Addr,
         bind_interface: Option<String>,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
@@ -155,6 +170,8 @@ impl MainCtx {
                 local_peer_id,
                 pwp_external_port,
                 pwp_internal_port,
+                pwp_local_addr_v4,
+                pwp_local_addr_v6,
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
             },
@@ -268,5 +285,20 @@ fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
             total_pieces: metadata_pieces,
             downloaded_pieces: metadata_pieces,
         },
+    }
+}
+
+#[cfg(test)]
+impl ConstData {
+    pub(crate) fn new_stub() -> Self {
+        Self {
+            local_peer_id: PeerId::generate_new(),
+            pwp_external_port: 12345,
+            pwp_internal_port: 0,
+            pwp_local_addr_v4: Ipv4Addr::LOCALHOST,
+            pwp_local_addr_v6: Ipv6Addr::LOCALHOST,
+            bind_interface: None,
+            outbound_pwp_mode: PwpMode::Any,
+        }
     }
 }

@@ -2,7 +2,7 @@ use local_async_utils::prelude::*;
 use mtorrent_utils::{benc, ip};
 use reqwest::{ClientBuilder, Url};
 use std::collections::{BTreeMap, HashMap};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::{fmt, io, str};
 use thiserror::Error;
 
@@ -60,10 +60,11 @@ fn set_interface(builder: ClientBuilder, interface: Option<&str>) -> ClientBuild
 }
 
 impl TrackerClient {
-    pub fn new(interface: Option<&str>) -> Result<Self, Error> {
+    pub fn new(local_addr: IpAddr, interface: Option<&str>) -> Result<Self, Error> {
         let builder = reqwest::Client::builder()
             .gzip(true)
             .user_agent(APP_USER_AGENT)
+            .local_address(local_addr)
             .timeout(sec!(30));
 
         let inner = set_interface(builder, interface).build()?;
@@ -417,6 +418,7 @@ fn dictionary_peers(data: &[benc::Element]) -> impl Iterator<Item = SocketAddr> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn test_announce_uri() {
@@ -529,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn test_https_scrape_and_announce() {
         let tracker_url = "https://torrent.ubuntu.com/announce";
-        let client = TrackerClient::new(Default::default()).unwrap();
+        let client = TrackerClient::new(Ipv4Addr::UNSPECIFIED.into(), None).unwrap();
 
         let request = TrackerRequestBuilder::try_from(tracker_url).unwrap();
         let response = client.scrape(request).await.unwrap_or_else(|e| panic!("Scrape error: {e}"));

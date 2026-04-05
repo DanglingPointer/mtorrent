@@ -1,8 +1,7 @@
 use mtorrent_dht as dht;
-use mtorrent_utils::ip::bind_to_interface;
 use mtorrent_utils::{info_stopwatch, ip, upnp, worker};
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -92,13 +91,18 @@ async fn dht_main(
 ) {
     let _sw = info_stopwatch!("DHT");
 
-    let socket = match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, local_port)).await {
+    let socket = match UdpSocket::bind(SocketAddrV4::new(
+        ip::get_bind_addr_v4(bind_interface.as_deref()),
+        local_port,
+    ))
+    .await
+    {
         Err(e) => return log::error!("Failed to create a UDP socket for DHT: {e}"),
         Ok(socket) => socket,
     };
 
     if let Some(interface) = bind_interface
-        && let Err(e) = bind_to_interface(&socket, &interface)
+        && let Err(e) = ip::bind_to_interface(&socket, &interface)
     {
         log::error!("Failed to bind DHT UDP socket to interface {interface}: {e}");
         return;

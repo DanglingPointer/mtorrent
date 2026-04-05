@@ -4,7 +4,7 @@ mod url;
 
 use futures_util::TryFutureExt;
 use local_async_utils::sec;
-use mtorrent_utils::ip::bind_to_interface;
+use mtorrent_utils::ip;
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -183,7 +183,10 @@ impl Manager {
             }};
         }
 
-        let http_client = http::TrackerClient::new(self.config.bind_interface.as_deref())
+        let interface = self.config.bind_interface.as_deref();
+        let local_ipv4 = ip::get_bind_addr_v4(interface);
+        let local_ipv6 = ip::get_bind_addr_v6(interface);
+        let http_client = http::TrackerClient::new(local_ipv4.into(), interface)
             .inspect_err(|e| log::error!("Failed to create HTTP tracker client: {e}"))
             .ok();
 
@@ -206,8 +209,14 @@ impl Manager {
                     TrackerUrl::Udp(addr) => {
                         let interface = self.config.bind_interface.clone();
                         spawn_child_task!(async move {
-                            let result =
-                                do_udp_announce(&addr, request.data, interface.as_deref()).await;
+                            let result = do_udp_announce(
+                                &addr,
+                                request.data,
+                                interface.as_deref(),
+                                local_ipv4,
+                                local_ipv6,
+                            )
+                            .await;
                             _ = request.responder.send(result).inspect_err(|_| {
                                 log::warn!("Failed to send back udp announce result")
                             });
@@ -231,8 +240,14 @@ impl Manager {
                     TrackerUrl::Udp(addr) => {
                         let interface = self.config.bind_interface.clone();
                         spawn_child_task!(async move {
-                            let result =
-                                do_udp_scrape(&addr, request.data, interface.as_deref()).await;
+                            let result = do_udp_scrape(
+                                &addr,
+                                request.data,
+                                interface.as_deref(),
+                                local_ipv4,
+                                local_ipv6,
+                            )
+                            .await;
                             _ = request.responder.send(result).inspect_err(|_| {
                                 log::warn!("Failed to send back udp scrape result")
                             });
@@ -318,6 +333,8 @@ async fn do_http_scrape(
 async fn new_udp_client(
     tracker_addr_str: &str,
     interface: Option<&str>,
+    local_ipv4: Ipv4Addr,
+    local_ipv6: Ipv6Addr,
 ) -> io::Result<udp::TrackerConnection> {
     async fn bind_and_connect_socket(
         bind_addr: &SocketAddr,
@@ -326,7 +343,7 @@ async fn new_udp_client(
     ) -> io::Result<UdpSocket> {
         let socket = UdpSocket::bind(bind_addr).await?;
         if let Some(iface) = interface {
-            bind_to_interface(&socket, iface)?;
+            ip::bind_to_interface(&socket, iface)?;
         }
         socket.connect(&remote_addr).await?;
         Ok(socket)
@@ -334,8 +351,8 @@ async fn new_udp_client(
 
     for tracker_addr in net::lookup_host(tracker_addr_str).await? {
         let local_ip = match &tracker_addr {
-            SocketAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
-            SocketAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
+            SocketAddr::V4(_) => local_ipv4.into(),
+            SocketAddr::V6(_) => local_ipv6.into(),
         };
         let local_addr = SocketAddr::new(local_ip, 0);
         if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr, interface)
@@ -352,8 +369,10 @@ async fn do_udp_announce(
     tracker_addr: &str,
     data: AnnounceRequest,
     interface: Option<&str>,
+    local_ipv4: Ipv4Addr,
+    local_ipv6: Ipv6Addr,
 ) -> io::Result<AnnounceResponse> {
-    let mut client = new_udp_client(tracker_addr, interface).await?;
+    let mut client = new_udp_client(tracker_addr, interface, local_ipv4, local_ipv6).await?;
 
     let request = udp::AnnounceRequest {
         info_hash: data.info_hash,
@@ -379,8 +398,10 @@ async fn do_udp_scrape(
     tracker_addr: &str,
     data: ScrapeRequest,
     interface: Option<&str>,
+    local_ipv4: Ipv4Addr,
+    local_ipv6: Ipv6Addr,
 ) -> io::Result<ScrapeResponse> {
-    let mut client = new_udp_client(tracker_addr, interface).await?;
+    let mut client = new_udp_client(tracker_addr, interface, local_ipv4, local_ipv6).await?;
 
     let request = udp::ScrapeRequest {
         info_hashes: data.info_hashes.clone(),
