@@ -22,11 +22,11 @@ local_async_utils = { workspace = true }
 bytes = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
-igd-next = { version = "0.16.1", features = ["aio_tokio"] }
+igd-next = { version = "0.17", features = ["aio_tokio"] }
 socket2 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-ipconfig = "0.3.2"
+ipconfig = "0.3"
 
 [dev-dependencies]
 static_assertions = { workspace = true }

@@ -1,12 +1,11 @@
 use super::utils::sha1_of;
 use derive_more::Debug;
-use rc4::consts::U20;
 use rc4::{KeyInit, Rc4, StreamCipher};
 
 /// RC4 stream cipher used for encryption in PE.
 #[derive(Debug)]
 #[debug("Encryptor")]
-pub struct Encryptor(Rc4<U20>);
+pub struct Encryptor(Rc4);
 
 impl Encryptor {
     /// Encrypts the given buffer in-place.
@@ -18,7 +17,7 @@ impl Encryptor {
 /// RC4 stream cipher used for decryption in PE.
 #[derive(Debug)]
 #[debug("Decryptor")]
-pub struct Decryptor(Rc4<U20>);
+pub struct Decryptor(Rc4);
 
 impl Decryptor {
     /// Decrypts the given buffer in-place.
@@ -44,8 +43,10 @@ pub(super) fn crypto_for_outbound_connection(
 ) -> (Encryptor, Decryptor) {
     let encryption_key = sha1_of![b"keyA", &secret.to_be_bytes(), info_hash];
     let decryption_key = sha1_of![b"keyB", &secret.to_be_bytes(), info_hash];
-    let mut encryptor = Encryptor(Rc4::new(&encryption_key.into()));
-    let mut decryptor = Decryptor(Rc4::new(&decryption_key.into()));
+    let mut encryptor =
+        Encryptor(Rc4::new_from_slice(&encryption_key).expect("20-byte key is supported"));
+    let mut decryptor =
+        Decryptor(Rc4::new_from_slice(&decryption_key).expect("20-byte key is supported"));
 
     let mut buf = [0u8; 1024];
     encryptor.encrypt(&mut buf);
@@ -61,8 +62,10 @@ pub(super) fn crypto_for_inbound_connection(
 ) -> (Encryptor, Decryptor) {
     let encryption_key = sha1_of![b"keyB", &secret.to_be_bytes(), info_hash];
     let decryption_key = sha1_of![b"keyA", &secret.to_be_bytes(), info_hash];
-    let mut encryptor = Encryptor(Rc4::new(&encryption_key.into()));
-    let mut decryptor = Decryptor(Rc4::new(&decryption_key.into()));
+    let mut encryptor =
+        Encryptor(Rc4::new_from_slice(&encryption_key).expect("20-byte key is supported"));
+    let mut decryptor =
+        Decryptor(Rc4::new_from_slice(&decryption_key).expect("20-byte key is supported"));
 
     let mut buf = [0u8; 1024];
     encryptor.encrypt(&mut buf);
@@ -74,7 +77,10 @@ pub(super) fn crypto_for_inbound_connection(
 pub(crate) fn crypto_pair(info_hash: &[u8; 20]) -> (Encryptor, Decryptor) {
     let secret: [u8; 96] = rand::random();
     let key = sha1_of![b"keyA", &secret, info_hash];
-    (Encryptor(Rc4::new(&key.into())), Decryptor(Rc4::new(&key.into())))
+    (
+        Encryptor(Rc4::new_from_slice(&key).expect("20-byte key is supported")),
+        Decryptor(Rc4::new_from_slice(&key).expect("20-byte key is supported")),
+    )
 }
 
 #[cfg(test)]

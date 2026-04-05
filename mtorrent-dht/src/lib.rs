@@ -10,6 +10,7 @@
 //! # let local_port = 6881;
 //! # let max_concurrent_queries = Some(100);
 //! # let config_dir = std::env::current_dir().unwrap();
+//! # let query_timeout = None;
 //! let (cmd_sender, cmd_receiver) = dht::setup_commands();
 //!
 //! # tokio::task::spawn_local(async move {
@@ -19,7 +20,7 @@
 //! // Set up the DHT stack that consists of 3 layers:
 //! let (outgoing_msgs_sink, incoming_msgs_source, io_driver) = dht::setup_udp(socket);
 //! let (client, server, router) =
-//!     dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries);
+//!     dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries, query_timeout);
 //! let processor = dht::Processor::new(config_dir, client);
 //!
 //! // Run the DHT system:
