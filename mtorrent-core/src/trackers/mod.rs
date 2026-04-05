@@ -4,13 +4,13 @@ mod url;
 
 use futures_util::TryFutureExt;
 use local_async_utils::sec;
-use mtorrent_utils::ip;
+use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use std::{io, iter};
-use tokio::net::{self, UdpSocket};
+use tokio::net::{UdpSocket, lookup_host};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio_util::sync::CancellationToken;
@@ -184,8 +184,8 @@ impl Manager {
         }
 
         let interface = self.config.bind_interface.as_deref();
-        let local_ipv4 = ip::get_bind_addr_v4(interface);
-        let local_ipv6 = ip::get_bind_addr_v6(interface);
+        let local_ipv4 = net::get_bind_addr_v4(interface);
+        let local_ipv6 = net::get_bind_addr_v6(interface);
         let http_client = http::TrackerClient::new(local_ipv4.into(), interface)
             .inspect_err(|e| log::error!("Failed to create HTTP tracker client: {e}"))
             .ok();
@@ -343,13 +343,13 @@ async fn new_udp_client(
     ) -> io::Result<UdpSocket> {
         let socket = UdpSocket::bind(bind_addr).await?;
         if let Some(iface) = interface {
-            ip::bind_to_interface(&socket, iface)?;
+            net::bind_to_interface(&socket, iface)?;
         }
         socket.connect(&remote_addr).await?;
         Ok(socket)
     }
 
-    for tracker_addr in net::lookup_host(tracker_addr_str).await? {
+    for tracker_addr in lookup_host(tracker_addr_str).await? {
         let local_ip = match &tracker_addr {
             SocketAddr::V4(_) => local_ipv4.into(),
             SocketAddr::V6(_) => local_ipv6.into(),

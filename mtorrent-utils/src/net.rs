@@ -46,6 +46,7 @@ fn get_adapter_addrs<'a>(
         .flat_map(ipconfig::Adapter::ip_addresses)
 }
 
+/// Get the local IP address to bind to, based on the specified network interface (if any).
 pub fn get_bind_addr_v4(interface: Option<&str>) -> Ipv4Addr {
     let Some(iface) = interface else {
         return Ipv4Addr::UNSPECIFIED;
@@ -74,6 +75,7 @@ pub fn get_bind_addr_v4(interface: Option<&str>) -> Ipv4Addr {
     Ipv4Addr::UNSPECIFIED
 }
 
+/// Get the local IP address to bind to, based on the specified network interface (if any).
 pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
     let Some(iface) = interface else {
         return Ipv6Addr::UNSPECIFIED;
@@ -121,6 +123,7 @@ pub fn set_so_rcvbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, 
     }
 }
 
+/// Bind a socket to a specific network interface. Does nothing on Windows.
 #[cfg(target_os = "windows")]
 pub fn bind_to_interface<'s>(_socket: impl Into<SockRef<'s>>, _interface: &str) -> io::Result<()> {
     // not supported on Windows
@@ -177,7 +180,7 @@ pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) ->
 #[macro_export]
 macro_rules! set_so_sndbuf {
     ($sock:expr, $size:expr) => {{
-        $crate::ip::set_so_sndbuf_internal($sock, $size, std::module_path!());
+        $crate::net::set_so_sndbuf_internal($sock, $size, std::module_path!());
     }};
 }
 
@@ -185,7 +188,7 @@ macro_rules! set_so_sndbuf {
 #[macro_export]
 macro_rules! set_so_rcvbuf {
     ($sock:expr, $size:expr) => {{
-        $crate::ip::set_so_rcvbuf_internal($sock, $size, std::module_path!());
+        $crate::net::set_so_rcvbuf_internal($sock, $size, std::module_path!());
     }};
 }
 

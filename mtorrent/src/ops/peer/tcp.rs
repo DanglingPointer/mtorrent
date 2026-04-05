@@ -3,7 +3,7 @@ use super::ctx;
 use bytes::BytesMut;
 use mtorrent_core::{pe, pwp};
 use mtorrent_utils::info_stopwatch;
-use mtorrent_utils::ip::bind_to_interface;
+use mtorrent_utils::net::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
 use std::net::SocketAddr;

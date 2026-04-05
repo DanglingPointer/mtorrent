@@ -1,7 +1,7 @@
 use bitvec::prelude::*;
 use bytes::{Buf, BufMut};
 use derive_more::Display;
-use mtorrent_utils::{benc, ip};
+use mtorrent_utils::{benc, net};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{fmt, io};
@@ -684,16 +684,16 @@ impl PeerExchangeData {
         let mut dropped = HashSet::new();
 
         if let Some(ByteString(s)) = root.remove(Self::KEY_ADDED_V4) {
-            added.extend(ip::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
+            added.extend(net::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
         }
         if let Some(ByteString(s)) = root.remove(Self::KEY_ADDED_V6) {
-            added.extend(ip::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
+            added.extend(net::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
         }
         if let Some(ByteString(s)) = root.remove(Self::KEY_DROPPED_V4) {
-            dropped.extend(ip::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
+            dropped.extend(net::SocketAddrV4BytesIter(&s).map(SocketAddr::V4));
         }
         if let Some(ByteString(s)) = root.remove(Self::KEY_DROPPED_V6) {
-            dropped.extend(ip::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
+            dropped.extend(net::SocketAddrV6BytesIter(&s).map(SocketAddr::V6));
         }
         Some(PeerExchangeData { added, dropped })
     }

@@ -108,7 +108,7 @@ impl Drop for PortOpener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ip;
+    use crate::net;
     use log::Level;
     use std::net::SocketAddrV4;
     use tokio::time;
@@ -118,7 +118,7 @@ mod tests {
     async fn test_async_port_opener() {
         simple_logger::init_with_level(Level::Debug).unwrap();
 
-        let local_ip = ip::get_local_addr().unwrap();
+        let local_ip = net::get_local_addr().unwrap();
         let local_internal_ip = SocketAddrV4::new(local_ip, 23015);
         let port_opener = PortOpener::new(local_internal_ip.into(), PortMappingProtocol::TCP, None)
             .await

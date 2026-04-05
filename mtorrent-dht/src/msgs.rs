@@ -1,7 +1,7 @@
 use super::error::Error;
 use super::u160::U160;
 use derive_more::derive::From;
-use mtorrent_utils::{benc, ip};
+use mtorrent_utils::{benc, net};
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::{fmt, iter};
@@ -557,7 +557,7 @@ impl TryFrom<ResponseMsg> for GetPeersResponse {
                     benc::Element::ByteString(bytes) => Some(bytes.as_slice()),
                     _ => None,
                 })
-                .flat_map(ip::SocketAddrV4BytesIter)
+                .flat_map(net::SocketAddrV4BytesIter)
                 .collect::<Vec<_>>(),
             Some(_) => return Err(Error::ParseError("values not a list".into())),
             None => Vec::new(),

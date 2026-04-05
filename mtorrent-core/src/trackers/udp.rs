@@ -1,7 +1,7 @@
 use bytes::{Buf, BufMut};
 use derive_more::Display;
 use local_async_utils::prelude::*;
-use mtorrent_utils::ip;
+use mtorrent_utils::net;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::Utf8Error;
 use std::{io, str};
@@ -366,8 +366,8 @@ impl TryFrom<(&[u8], &IpAddr)> for AnnounceResponse {
             let leechers = src.get_u32();
             let seeders = src.get_u32();
             let ips: Vec<_> = match tracker_ip {
-                IpAddr::V4(_) => ip::SocketAddrV4BytesIter(src).map(SocketAddr::V4).collect(),
-                IpAddr::V6(_) => ip::SocketAddrV6BytesIter(src).map(SocketAddr::V6).collect(),
+                IpAddr::V4(_) => net::SocketAddrV4BytesIter(src).map(SocketAddr::V4).collect(),
+                IpAddr::V6(_) => net::SocketAddrV6BytesIter(src).map(SocketAddr::V6).collect(),
             };
             Ok(AnnounceResponse {
                 interval,

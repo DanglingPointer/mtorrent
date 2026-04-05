@@ -3,7 +3,7 @@ use crate::utils::{listener, startup};
 use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::{info_stopwatch, ip, upnp};
+use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -101,15 +101,15 @@ pub async fn single_torrent(
     }
     let ctx: &Context = ctx.borrow();
 
-    let listener_port = cfg.pwp_port.unwrap_or_else(|| ip::port_from_hash(&metainfo_uri.as_ref()));
-    let pwp_local_addr_v4 = ip::get_bind_addr_v4(cfg.bind_interface.as_deref());
-    let pwp_local_addr_v6 = ip::get_bind_addr_v6(cfg.bind_interface.as_deref());
+    let listener_port = cfg.pwp_port.unwrap_or_else(|| net::port_from_hash(&metainfo_uri.as_ref()));
+    let pwp_local_addr_v4 = net::get_bind_addr_v4(cfg.bind_interface.as_deref());
+    let pwp_local_addr_v6 = net::get_bind_addr_v6(cfg.bind_interface.as_deref());
 
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
     let external_pwp_port = if cfg.use_upnp {
         let _g = ctx.pwp_runtime.enter();
-        let internal_addr = (ip::get_local_addr()?, listener_port).into();
+        let internal_addr = (net::get_local_addr()?, listener_port).into();
         let (_public_pwp_addr, public_utp_addr) = join!(
             start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::TCP),
             start_upnp(internal_addr, cfg.pwp_port, upnp::PortMappingProtocol::UDP),

@@ -14,7 +14,7 @@ pub mod connect_throttle;
 pub mod fifo_set;
 
 /// Local IP address discovery and socket helpers.
-pub mod ip;
+pub mod net;
 
 /// Single-value watch channel for `!Send` types.
 pub mod local_watch;
