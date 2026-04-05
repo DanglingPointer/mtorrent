@@ -342,7 +342,8 @@ fn get_piece_info(metainfo: &Metainfo) -> data::PieceInfo {
         .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
         .unwrap();
 
-    data::PieceInfo::new(metainfo.pieces().unwrap(), metainfo.piece_length().unwrap(), total_length)
+    data::PieceInfo::new(metainfo.pieces().cloned(), metainfo.piece_length().unwrap(), total_length)
+        .unwrap()
 }
 
 impl Peer for Seeder {

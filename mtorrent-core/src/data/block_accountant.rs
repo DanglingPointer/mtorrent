@@ -201,7 +201,7 @@ mod tests {
     use std::iter;
 
     fn piece_info() -> Rc<PieceInfo> {
-        Rc::new(PieceInfo::new(iter::empty(), 3, 256))
+        Rc::new(PieceInfo::new(iter::repeat_n([0u8; 20], 86), 3, 256).unwrap())
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::data::Error;
+use std::io;
 
 /// Helper for obtaining various information about pieces of a torrent.
 #[derive(Debug)]
@@ -11,21 +12,32 @@ pub struct PieceInfo {
 impl PieceInfo {
     /// Create new [`PieceInfo`] from an iterator over 20-bytes slices representing SHA-1 hashes of
     /// the pieces of a torrent.
-    pub fn new<'a, I: Iterator<Item = &'a [u8]>>(
+    pub fn new<I: Iterator<Item = [u8; 20]>>(
         piece_it: I,
         piece_length: usize,
         total_length: usize,
-    ) -> Self {
-        fn to_20_byte_array(slice: &[u8]) -> [u8; 20] {
-            let mut ret = [0u8; 20];
-            ret.copy_from_slice(slice);
-            ret
+    ) -> Result<Self, Error> {
+        if piece_length == 0 {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "piece length cannot be zero").into()
+            );
         }
-        PieceInfo {
-            pieces: piece_it.map(to_20_byte_array).collect(),
+        if total_length == 0 {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "total length cannot be zero").into()
+            );
+        }
+        let pieces: Vec<[u8; 20]> = piece_it.collect();
+        if pieces.len() != total_length.div_ceil(piece_length) {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "unexpected number of pieces").into()
+            );
+        }
+        Ok(PieceInfo {
+            pieces,
             piece_length,
             total_length,
-        }
+        })
     }
 
     /// Get global offset relative to the start of the entire torrent (a single entity possibly
@@ -78,7 +90,7 @@ mod tests {
 
     #[test]
     fn last_incomplete_piece_is_handled_correctly() {
-        let p = PieceInfo::new(std::iter::repeat_n([0u8; 20].as_slice(), 3), 5, 12);
+        let p = PieceInfo::new(std::iter::repeat_n([0u8; 20], 3), 5, 12).unwrap();
         assert_eq!(3, p.piece_count());
         assert_eq!(5, p.piece_len(0));
         assert_eq!(5, p.piece_len(1));

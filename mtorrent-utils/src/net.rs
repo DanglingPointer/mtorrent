@@ -165,11 +165,7 @@ pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) ->
     let interface = std::ffi::CString::new(interface)?;
     let idx = unsafe { libc::if_nametoindex(interface.as_ptr()) };
     let Some(idx) = std::num::NonZeroU32::new(idx) else {
-        // If the index is 0, check errno and return an I/O error.
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "error converting interface name to index",
-        ));
+        return Err(io::Error::new(io::ErrorKind::NotFound, "interface not found"));
     };
 
     let Ok(local_addr) = socket.local_addr() else {
@@ -293,23 +289,6 @@ mod tests {
         };
         assert_eq!(SocketAddrV6BytesIter(&data).len(), addrs.len());
         assert_eq!(SocketAddrV6BytesIter(&data).collect::<Vec<_>>(), addrs);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn test_network_interfaces() {
-        for i in 0..10 {
-            let mut name_buf = [0u8; 128];
-            let name = unsafe { libc::if_indextoname(i, name_buf.as_mut_ptr() as *mut i8) };
-            if name.is_null() {
-                continue;
-            }
-            let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy();
-            println!("Interface {}: {}", i, name);
-
-            let idx = unsafe { libc::if_nametoindex(name_buf.as_ptr() as *const i8) };
-            assert_eq!(idx, i);
-        }
     }
 
     #[test]

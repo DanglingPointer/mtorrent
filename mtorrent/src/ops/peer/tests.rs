@@ -129,7 +129,7 @@ async fn run_listening_seeder(
         join!(content_storage_server.run(), meta_storage_server.run());
     });
 
-    let piece_count = metainfo.pieces().unwrap().count();
+    let piece_count = metainfo.pieces().count();
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 

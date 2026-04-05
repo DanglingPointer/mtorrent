@@ -43,7 +43,8 @@ pub struct ConnectThrottle {
 impl ConnectThrottle {
     /// Create new throttle that allows up to `max_connections` concurrent permits, and keeps track
     /// of `remembered_peers` last addresses that have been issued a permit (regardless of whether
-    /// the permit is still alive or not).
+    /// the permit is still alive or not). Both `max_connections` and `remembered_peers` must be
+    /// non-zero.
     pub fn new(max_connections: usize, remembered_peers: usize) -> Self {
         Self {
             connected_peers: Rc::new(sealed::Set::with_capacity(max_connections)),

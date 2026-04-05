@@ -105,12 +105,11 @@ impl Metainfo {
     }
 
     /// 20-byte SHA-1 hash values, one per piece.
-    pub fn pieces(&self) -> Option<impl Iterator<Item = &[u8]>> {
-        if let Some(benc::Element::ByteString(data)) = self.info.get("pieces") {
-            Some(data.chunks_exact(20))
-        } else {
-            None
-        }
+    pub fn pieces(&self) -> impl Iterator<Item = &[u8; 20]> {
+        self.info.get("pieces").into_iter().flat_map(|e| match e {
+            benc::Element::ByteString(data) => data.as_chunks::<20>().0,
+            _ => &[],
+        })
     }
 
     /// Length of the file in bytes for single file torrents.
@@ -223,7 +222,7 @@ mod tests {
         let piece_length = info.piece_length().unwrap();
         assert_eq!(2_097_152, piece_length, "piece length: {piece_length}");
 
-        let piece_count = info.pieces().unwrap().count();
+        let piece_count = info.pieces().count();
         assert_eq!(/* 13360 / 20 */ 668, piece_count);
 
         let length = info.length();
@@ -411,7 +410,7 @@ mod tests {
             info.name().unwrap()
         );
         assert_eq!(1048576, info.piece_length().unwrap());
-        assert_eq!(28040 / 20, info.pieces().unwrap().count());
+        assert_eq!(28040 / 20, info.pieces().count());
         assert_eq!(data.len(), info.size());
 
         assert!(info.files().is_none());

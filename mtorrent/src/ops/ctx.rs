@@ -150,13 +150,13 @@ impl MainCtx {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
         }
         let pieces = Rc::new(data::PieceInfo::new(
-            metainfo.pieces().ok_or_else(make_error("no pieces in metainfo"))?,
+            metainfo.pieces().cloned(),
             metainfo.piece_length().ok_or_else(make_error("no piece length in metainfo"))?,
             metainfo
                 .length()
                 .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
                 .ok_or_else(make_error("no total length in metainfo"))?,
-        ));
+        )?);
         let accountant = data::BlockAccountant::new(pieces.clone());
         let piece_tracker = data::PieceTracker::new(pieces.piece_count());
         let ctx = Self {
