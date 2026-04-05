@@ -111,6 +111,8 @@ fn main() -> io::Result<()> {
         name: "pwp".to_owned(),
         io_enabled: true,
         time_enabled: true,
+        #[cfg(coverage)]
+        stack_size: 1024 * 1024,
         ..Default::default()
     })?;
 
