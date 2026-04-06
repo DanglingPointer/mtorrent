@@ -111,16 +111,19 @@ pub fn bound_udp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
             SocketAddr::V6(_) => socket2::Domain::IPV6,
         },
         socket2::Type::DGRAM,
-        None,
+        Some(socket2::Protocol::UDP),
     )?;
+
     if local_addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
     socket.set_nonblocking(true)?;
+
     if let Some(interface) = interface {
         bind_to_interface(&socket, interface)?;
     }
     socket.bind(&local_addr.into())?;
+
     let std_socket = std::net::UdpSocket::from(socket);
     UdpSocket::from_std(std_socket)
 }
@@ -137,12 +140,12 @@ pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
             SocketAddr::V6(_) => socket2::Domain::IPV6,
         },
         socket2::Type::STREAM,
-        None,
+        Some(socket2::Protocol::TCP),
     )?;
+
     if local_addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
-
     // To use the same local addr and port for outgoing PWP connections and for TCP listener,
     // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
     // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
@@ -154,17 +157,19 @@ pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
     // timeout See https://stackoverflow.com/a/71975993
     socket.set_linger(Some(Duration::ZERO))?;
     socket.set_tcp_nodelay(true)?;
-
     socket.set_nonblocking(true)?;
+
     if let Some(interface) = interface {
         bind_to_interface(&socket, interface)?;
     }
     socket.bind(&local_addr.into())?;
+
     #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
     unsafe {
         use std::os::fd::{FromRawFd, IntoRawFd};
         Ok(FromRawFd::from_raw_fd(socket.into_raw_fd()))
     }
+
     #[cfg(windows)]
     unsafe {
         use std::os::windows::io::{FromRawSocket, IntoRawSocket};
