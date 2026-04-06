@@ -72,7 +72,7 @@ impl PortOpener {
     }
 
     /// Get the external socket address that was mapped to the internal port.
-    pub fn external_ip(&self) -> SocketAddr {
+    pub fn external_addr(&self) -> SocketAddr {
         self.external_addr
     }
 
@@ -146,7 +146,7 @@ mod tests {
         let port_opener = PortOpener::new(PortMappingProtocol::TCP, internal_port, None, None)
             .await
             .unwrap_or_else(|e| panic!("Failed to create PortOpener: {e}"));
-        log::info!("port opener created, external ip: {}", port_opener.external_ip());
+        log::info!("port opener created, external ip: {}", port_opener.external_addr());
         time::sleep(sec!(1)).await;
         drop(port_opener);
         log::info!("port opener dropped");

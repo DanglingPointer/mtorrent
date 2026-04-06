@@ -2,38 +2,12 @@ use super::super::PeerReporter;
 use super::ctx;
 use bytes::BytesMut;
 use mtorrent_core::{pe, pwp};
-use mtorrent_utils::info_stopwatch;
-use mtorrent_utils::net::bind_to_interface;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::{info_stopwatch, net};
 use std::io;
 use std::net::SocketAddr;
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::TcpStream;
 use tokio::runtime;
-
-fn bound_pwp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<TcpSocket> {
-    let socket = match local_addr {
-        SocketAddr::V4(_) => TcpSocket::new_v4()?,
-        SocketAddr::V6(_) => TcpSocket::new_v6()?,
-    };
-
-    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
-    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
-    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
-    // See https://stackoverflow.com/a/14388707/4432988 for details.
-    socket.set_reuseaddr(true)?;
-    #[cfg(not(windows))]
-    socket.set_reuseport(true)?;
-    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0
-    // timeout See https://stackoverflow.com/a/71975993
-    socket.set_zero_linger()?;
-    socket.set_nodelay(true)?;
-
-    socket.bind(local_addr)?;
-    if let Some(interface) = interface {
-        bind_to_interface(&socket, interface)?;
-    }
-    Ok(socket)
-}
 
 pub async fn new_outbound_connection(
     data: &ctx::ConstData,
@@ -44,8 +18,8 @@ pub async fn new_outbound_connection(
     pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let local_addr = match &peer_addr {
-        SocketAddr::V4(_) => data.pwp_local_addr_v4().into(),
-        SocketAddr::V6(_) => data.pwp_local_addr_v6().into(),
+        SocketAddr::V4(_) => data.local_ip_v4().into(),
+        SocketAddr::V6(_) => data.local_ip_v6().into(),
     };
 
     let local_peer_id = *data.local_peer_id();
@@ -54,8 +28,10 @@ pub async fn new_outbound_connection(
     let local_port = data.pwp_internal_port();
     pwp_runtime
         .spawn(async move {
-            let socket =
-                bound_pwp_socket(SocketAddr::new(local_addr, local_port), interface.as_deref())?;
+            let socket = net::bound_tcp_socket(
+                SocketAddr::new(local_addr, local_port),
+                interface.as_deref(),
+            )?;
             let mut stream = socket.connect(peer_addr).await?;
             let crypto = if protocol_encryption_enabled {
                 pe::outbound_handshake(&mut stream, &info_hash, &[0u8; 0][..]).await?
@@ -129,7 +105,7 @@ pub async fn run_pwp_listener(
     let _sw = info_stopwatch!("TCP listener on {local_addr}");
 
     let result: io::Result<()> = async {
-        let socket = bound_pwp_socket(local_addr, interface.as_deref())?;
+        let socket = net::bound_tcp_socket(local_addr, interface.as_deref())?;
         let listener = socket.listen(1024)?;
         log::info!("TCP listener started on {}", listener.local_addr()?);
         loop {
