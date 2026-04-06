@@ -1,10 +1,8 @@
 use mtorrent_dht as dht;
 use mtorrent_utils::{info_stopwatch, net, upnp, worker};
 use std::io;
-use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::{join, task};
 
 /// Startup configuration for the DHT system.
@@ -90,22 +88,15 @@ async fn dht_main(
 ) {
     let _sw = info_stopwatch!("DHT");
 
-    let socket = match UdpSocket::bind(SocketAddrV4::new(
-        net::get_bind_addr_v4(bind_interface.as_deref()),
-        local_port,
-    ))
-    .await
-    {
-        Err(e) => return log::error!("Failed to create a UDP socket for DHT: {e}"),
-        Ok(socket) => socket,
-    };
-
-    if let Some(interface) = &bind_interface
-        && let Err(e) = net::bind_to_interface(&socket, interface)
-    {
-        log::error!("Failed to bind DHT UDP socket to interface {interface}: {e}");
-        return;
-    }
+    let local_ipv4 = net::get_bind_addr_v4(bind_interface.as_deref());
+    let socket =
+        match net::bound_udp_socket((local_ipv4, local_port).into(), bind_interface.as_deref()) {
+            Err(e) => {
+                log::error!("Failed to create a UDP socket for DHT: {e}");
+                return;
+            }
+            Ok(socket) => socket,
+        };
 
     if use_upnp && let Err(e) = start_upnp(local_port, bind_interface.as_deref()).await {
         log::error!("UPnP for DHT failed: {e}");

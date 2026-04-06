@@ -1,40 +1,61 @@
 use super::super::PeerReporter;
 use bytes::BytesMut;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt, stream};
 use mtorrent_core::{pe, pwp, utp};
-use mtorrent_utils::net::bind_to_interface;
+use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
 use std::io;
-use std::net::SocketAddr;
-use tokio::net::UdpSocket;
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio::{join, runtime, select, task, time};
 
+fn create_endpoint(
+    local_addr: SocketAddr,
+    interface: Option<&str>,
+) -> io::Result<(utp::EndpointHandle, utp::InboundListener)> {
+    let socket = net::bound_udp_socket(local_addr, interface)?;
+    let (endpoint, listener, driver) = utp::new_endpoint(socket);
+    task::spawn_local(driver.run());
+    Ok((endpoint, listener))
+}
+
 pub fn launch_utp(
     pwp_runtime: &runtime::Handle,
-    local_addr: SocketAddr,
+    local_addr_v4: SocketAddrV4,
+    local_addr_v6: SocketAddrV6,
     interface: Option<String>,
 ) -> UtpHandle {
     let (cmd_sender, cmd_receiver) = mpsc::channel(1);
     pwp_runtime.spawn(async move {
-        let Ok(socket) = UdpSocket::bind(local_addr)
-            .await
-            .inspect_err(|e| log::error!("Failed to create uTP socket: {e}"))
-        else {
-            return;
-        };
-
-        if let Some(interface) = interface
-            && let Err(e) = bind_to_interface(&socket, &interface)
-        {
-            log::error!("Failed to bind uTP socket to interface {interface}: {e}");
-            return;
-        }
-
         task::spawn_local(async move {
-            let (endpoint, connect_reporter, udp_demux) = utp::new_endpoint(socket);
-            join!(udp_demux.run(), bridge_task(endpoint, cmd_receiver, connect_reporter));
+            let local_addr_v4 = SocketAddr::V4(local_addr_v4);
+            let local_addr_v6 = SocketAddr::V6(local_addr_v6);
+
+            let v6_result = create_endpoint(local_addr_v6, interface.as_deref());
+            let v4_result = create_endpoint(local_addr_v4, interface.as_deref());
+
+            for (result, local_addr) in [(&v4_result, local_addr_v4), (&v6_result, local_addr_v6)] {
+                match &result {
+                    Ok((_, _)) => log::info!("Created uTP endpoint on {local_addr}"),
+                    Err(e) => log::error!("Failed to create uTP endpoint on {local_addr}: {e}"),
+                }
+            }
+
+            match (v4_result, v6_result) {
+                (Ok(v4), Ok(v6)) => {
+                    run_bridge(v4, v6, cmd_receiver).await;
+                }
+                (Ok(v4), Err(_)) => {
+                    let ep = v4.0.clone();
+                    run_bridge(v4, (ep, stream::pending()), cmd_receiver).await;
+                }
+                (Err(_), Ok(v6)) => {
+                    let ep = v6.0.clone();
+                    run_bridge((ep, stream::pending()), v6, cmd_receiver).await;
+                }
+                (Err(_), Err(_)) => {}
+            }
         });
     });
     UtpHandle(cmd_sender)
@@ -115,14 +136,18 @@ impl UtpHandle {
     }
 }
 
-async fn bridge_task(
-    endpoint: utp::EndpointHandle,
+async fn run_bridge<
+    L1: Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
+    L2: Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
+>(
+    (endpoint_v4, mut listener_v4): (utp::EndpointHandle, L1),
+    (endpoint_v6, mut listener_v6): (utp::EndpointHandle, L2),
     mut cmd_receiver: mpsc::Receiver<Command>,
-    mut listener: utp::InboundListener,
 ) {
     struct Bridge {
         reporter: Option<PeerReporter>,
-        endpoint: utp::EndpointHandle,
+        endpoint_v4: utp::EndpointHandle,
+        endpoint_v6: utp::EndpointHandle,
     }
 
     impl Bridge {
@@ -142,10 +167,16 @@ async fn bridge_task(
             match cmd {
                 Command::Restart { reporter } => {
                     self.reporter = Some(reporter);
-                    self.endpoint.reset_connections().await;
+                    join!(
+                        self.endpoint_v4.reset_connections(),
+                        self.endpoint_v6.reset_connections(),
+                    );
                 }
                 Command::OutboundConnect { args, resp } => {
-                    let endpoint = self.endpoint.clone();
+                    let endpoint = match args.peer_addr {
+                        SocketAddr::V4(_) => self.endpoint_v4.clone(),
+                        SocketAddr::V6(_) => self.endpoint_v6.clone(),
+                    };
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
                             let mut stream =
@@ -172,7 +203,10 @@ async fn bridge_task(
                     });
                 }
                 Command::InboundConnect { args, resp } => {
-                    let endpoint = self.endpoint.clone();
+                    let endpoint = match args.peer_addr {
+                        SocketAddr::V4(_) => self.endpoint_v4.clone(),
+                        SocketAddr::V6(_) => self.endpoint_v6.clone(),
+                    };
                     task::spawn_local(async move {
                         let ret = time::timeout_at(args.deadline, async {
                             let stream =
@@ -221,7 +255,8 @@ async fn bridge_task(
 
     let mut bridge = Bridge {
         reporter: None,
-        endpoint,
+        endpoint_v4,
+        endpoint_v6,
     };
 
     loop {
@@ -233,7 +268,13 @@ async fn bridge_task(
                 };
                 bridge.process_command(cmd).await;
             }
-            inbound = listener.next() => {
+            inbound = listener_v4.next() => {
+                let Some((addr, data)) = inbound else {
+                    break;
+                };
+                bridge.report_inbound(addr, data).await;
+            }
+            inbound = listener_v6.next() => {
                 let Some((addr, data)) = inbound else {
                     break;
                 };

@@ -6,7 +6,7 @@ use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::broadcast;
@@ -43,11 +43,11 @@ pub struct Context {
 
 #[derive(Clone)]
 struct Handles<'h> {
-    dht_handle: Option<&'h dht::CommandSink>,
+    dht: Option<&'h dht::CommandSink>,
     pwp_runtime: &'h runtime::Handle,
     storage_runtime: &'h runtime::Handle,
-    utp_handle: &'h ops::UtpHandle,
-    trackers_handle: &'h trackers::Client,
+    utp: ops::UtpHandle,
+    trackers: trackers::Client,
 }
 
 #[derive(Clone)]
@@ -130,10 +130,10 @@ pub async fn single_torrent(
         listener_port
     };
 
-    // start uTP on IPv4 only for now
     let utp_handle = ops::launch_utp(
         &ctx.pwp_runtime,
-        (pwp_local_addr_v4, listener_port).into(),
+        SocketAddrV4::new(pwp_local_addr_v4, listener_port),
+        SocketAddrV6::new(pwp_local_addr_v6, listener_port, 0, 0),
         cfg.bind_interface.clone(),
     );
 
@@ -143,11 +143,11 @@ pub async fn single_torrent(
     ctx.pwp_runtime.spawn(trackers_mgr.run());
 
     let handles = Handles {
-        dht_handle: ctx.dht_handle.as_ref(),
+        dht: ctx.dht_handle.as_ref(),
         pwp_runtime: &ctx.pwp_runtime,
         storage_runtime: &ctx.storage_runtime,
-        utp_handle: &utp_handle,
-        trackers_handle: &tracker_client,
+        utp: utp_handle,
+        trackers: tracker_client,
     };
 
     let params = Params {
@@ -234,18 +234,18 @@ async fn preliminary_stage(
             ctx_handle: ctx.clone(),
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
-            utp_handle: handles.utp_handle.clone(),
+            utp_handle: handles.utp.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
 
-    if let Err(e) = handles.utp_handle.restart(peer_reporter.clone()).await {
+    if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
     }
-    if let Err(e) = handles.trackers_handle.abort_all().await {
+    if let Err(e) = handles.trackers.abort_all().await {
         log::error!("Failed to abort tracker announces: {e}");
     }
 
-    handles.dht_handle.map(|dht_cmds| {
+    handles.dht.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
             dht_cmds.clone(),
@@ -274,7 +274,7 @@ async fn preliminary_stage(
 
     tasks.spawn_local(ops::make_preliminary_announces(
         ctx.clone(),
-        handles.trackers_handle.clone(),
+        handles.trackers,
         peer_reporter.clone(),
         config_dir,
     ));
@@ -337,18 +337,18 @@ async fn main_stage(
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
             piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
-            utp_handle: handles.utp_handle.clone(),
+            utp_handle: handles.utp.clone(),
         });
     tasks.spawn_local(connect_throttle.run());
 
-    if let Err(e) = handles.utp_handle.restart(peer_reporter.clone()).await {
+    if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
     }
-    if let Err(e) = handles.trackers_handle.abort_all().await {
+    if let Err(e) = handles.trackers.abort_all().await {
         log::error!("Failed to abort tracker announces: {e}");
     }
 
-    handles.dht_handle.map(|dht_cmds| {
+    handles.dht.map(|dht_cmds| {
         tasks.spawn_local(ops::run_dht_search(
             info_hash,
             dht_cmds.clone(),
@@ -377,7 +377,7 @@ async fn main_stage(
 
     tasks.spawn_local(ops::make_periodic_announces(
         ctx.clone(),
-        handles.trackers_handle.clone(),
+        handles.trackers,
         peer_reporter.clone(),
         config_dir,
     ));

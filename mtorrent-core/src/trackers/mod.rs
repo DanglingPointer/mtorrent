@@ -2,7 +2,6 @@ mod http;
 mod udp;
 mod url;
 
-use futures_util::TryFutureExt;
 use local_async_utils::sec;
 use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
@@ -10,7 +9,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use std::{io, iter};
-use tokio::net::{UdpSocket, lookup_host};
+use tokio::net::lookup_host;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task;
 use tokio_util::sync::CancellationToken;
@@ -336,17 +335,14 @@ async fn new_udp_client(
     local_ipv4: Ipv4Addr,
     local_ipv6: Ipv6Addr,
 ) -> io::Result<udp::TrackerConnection> {
-    async fn bind_and_connect_socket(
+    async fn bind_and_connect(
         bind_addr: &SocketAddr,
         remote_addr: &SocketAddr,
         interface: Option<&str>,
-    ) -> io::Result<UdpSocket> {
-        let socket = UdpSocket::bind(bind_addr).await?;
-        if let Some(iface) = interface {
-            net::bind_to_interface(&socket, iface)?;
-        }
+    ) -> io::Result<udp::TrackerConnection> {
+        let socket = net::bound_udp_socket(*bind_addr, interface)?;
         socket.connect(&remote_addr).await?;
-        Ok(socket)
+        udp::TrackerConnection::from_connected_socket(socket).await
     }
 
     for tracker_addr in lookup_host(tracker_addr_str).await? {
@@ -355,10 +351,7 @@ async fn new_udp_client(
             SocketAddr::V6(_) => local_ipv6.into(),
         };
         let local_addr = SocketAddr::new(local_ip, 0);
-        if let Ok(client) = bind_and_connect_socket(&local_addr, &tracker_addr, interface)
-            .and_then(udp::TrackerConnection::from_connected_socket)
-            .await
-        {
+        if let Ok(client) = bind_and_connect(&local_addr, &tracker_addr, interface).await {
             return Ok(client);
         }
     }
@@ -427,6 +420,7 @@ async fn do_udp_scrape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UdpSocket;
     use tokio::time;
 
     fn init_loopback() -> (Client, Manager) {

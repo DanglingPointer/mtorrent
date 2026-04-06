@@ -1,8 +1,10 @@
 use bytes::Buf;
 use socket2::SockRef;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::time::Duration;
 use std::{io, ops};
+use tokio::net::{TcpSocket, UdpSocket};
 
 #[cfg(not(windows))]
 pub(crate) fn get_local_addr(mut predicate: impl FnMut(&IpAddr) -> bool) -> Option<IpAddr> {
@@ -101,6 +103,77 @@ pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
 
 // ------------------------------------------------------------------------------------------------
 
+/// Create a UDP socket bound to the specified local address and network interface (if any).
+pub fn bound_udp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        match local_addr {
+            SocketAddr::V4(_) => socket2::Domain::IPV4,
+            SocketAddr::V6(_) => socket2::Domain::IPV6,
+        },
+        socket2::Type::DGRAM,
+        None,
+    )?;
+    if local_addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    if let Some(interface) = interface {
+        bind_to_interface(&socket, interface)?;
+    }
+    socket.bind(&local_addr.into())?;
+    let std_socket = std::net::UdpSocket::from(socket);
+    UdpSocket::from_std(std_socket)
+}
+
+/// Create a TCP socket bound to the specified local address and network interface (if any).
+/// The following socket options are set on the created socket:
+/// - SO_REUSEADDR (on all platforms) and SO_REUSEPORT (on Linux)
+/// - SO_LINGER with 0 timeout, to avoid putting socket into TIME_WAIT when disconnecting someone
+/// - TCP_NODELAY
+pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<TcpSocket> {
+    let socket = socket2::Socket::new(
+        match local_addr {
+            SocketAddr::V4(_) => socket2::Domain::IPV4,
+            SocketAddr::V6(_) => socket2::Domain::IPV6,
+        },
+        socket2::Type::STREAM,
+        None,
+    )?;
+    if local_addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+
+    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
+    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
+    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
+    // See https://stackoverflow.com/a/14388707/4432988 for details.
+    socket.set_reuse_address(true)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_port(true)?;
+    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0
+    // timeout See https://stackoverflow.com/a/71975993
+    socket.set_linger(Some(Duration::ZERO))?;
+    socket.set_tcp_nodelay(true)?;
+
+    socket.set_nonblocking(true)?;
+    if let Some(interface) = interface {
+        bind_to_interface(&socket, interface)?;
+    }
+    socket.bind(&local_addr.into())?;
+    #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
+    unsafe {
+        use std::os::fd::{FromRawFd, IntoRawFd};
+        Ok(FromRawFd::from_raw_fd(socket.into_raw_fd()))
+    }
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+        Ok(FromRawSocket::from_raw_socket(socket.into_raw_socket()))
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
 #[doc(hidden)]
 pub fn set_so_sndbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
     if let Err(e) = socket.into().set_send_buffer_size(value) {
@@ -135,14 +208,14 @@ macro_rules! set_so_rcvbuf {
 
 /// Bind a socket to a specific network interface. Does nothing on Windows.
 #[cfg(target_os = "windows")]
-pub fn bind_to_interface<'s>(_socket: impl Into<SockRef<'s>>, _interface: &str) -> io::Result<()> {
+fn bind_to_interface<'s>(_socket: impl Into<SockRef<'s>>, _interface: &str) -> io::Result<()> {
     // not supported on Windows
     Ok(())
 }
 
 /// Bind a socket to a specific network interface.
 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
+fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
     let socket = socket.into();
 
     socket.bind_device(Some(interface.as_bytes()))?;
@@ -159,7 +232,7 @@ pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) ->
     target_os = "visionos",
     target_os = "watchos",
 ))]
-pub fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
+fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io::Result<()> {
     let socket = socket.into();
 
     let interface = std::ffi::CString::new(interface)?;
