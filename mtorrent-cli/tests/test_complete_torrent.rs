@@ -446,10 +446,17 @@ async fn listening_peer<P: Peer>(
                 accept_and_run!(listener);
             }
         }
-        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::AddrInUse
+                    | io::ErrorKind::PermissionDenied
+                    | io::ErrorKind::AddrNotAvailable
+            ) =>
+        {
             eprintln!("Couldn't create listener on {listening_addr}")
         }
-        Err(e) => panic!("{e}"),
+        Err(e) => panic!("{e:?}"),
     }
 }
 
