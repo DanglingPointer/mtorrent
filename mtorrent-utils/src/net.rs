@@ -43,7 +43,7 @@ fn get_adapter_addrs<'a>(
         .flat_map(ipconfig::Adapter::ip_addresses)
 }
 
-/// Get the local IP address to bind to, based on the specified network interface (if any).
+/// Get the local IPv4 address to bind to, based on the specified network interface (if any).
 pub fn get_bind_addr_v4(interface: Option<&str>) -> Ipv4Addr {
     let Some(iface) = interface else {
         return Ipv4Addr::UNSPECIFIED;
@@ -72,7 +72,7 @@ pub fn get_bind_addr_v4(interface: Option<&str>) -> Ipv4Addr {
     Ipv4Addr::UNSPECIFIED
 }
 
-/// Get the local IP address to bind to, based on the specified network interface (if any).
+/// Get the local IPv6 address to bind to, based on the specified network interface (if any).
 pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
     let Some(iface) = interface else {
         return Ipv6Addr::UNSPECIFIED;
@@ -103,46 +103,58 @@ pub fn get_bind_addr_v6(interface: Option<&str>) -> Ipv6Addr {
 
 // ------------------------------------------------------------------------------------------------
 
+const MIN_UDP_BUF_SIZE: usize = 64 * 1024;
+
 /// Create a UDP socket bound to the specified local address and network interface (if any).
+/// The SO_RCVBUF and SO_SNDBUF options are set to at least 64 KB, to avoid dropping large UDP
+/// packets.
 pub fn bound_udp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<UdpSocket> {
     let socket = socket2::Socket::new(
-        match local_addr {
-            SocketAddr::V4(_) => socket2::Domain::IPV4,
-            SocketAddr::V6(_) => socket2::Domain::IPV6,
-        },
+        socket2::Domain::for_address(local_addr),
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
 
+    // set options
     if local_addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
+    if let Ok(buf_size) = socket.send_buffer_size()
+        && buf_size < MIN_UDP_BUF_SIZE
+    {
+        socket.set_send_buffer_size(MIN_UDP_BUF_SIZE)?;
+    }
+    if let Ok(buf_size) = socket.recv_buffer_size()
+        && buf_size < MIN_UDP_BUF_SIZE
+    {
+        socket.set_recv_buffer_size(MIN_UDP_BUF_SIZE)?;
+    }
     socket.set_nonblocking(true)?;
 
+    // bind
     if let Some(interface) = interface {
         bind_to_interface(&socket, interface)?;
     }
     socket.bind(&local_addr.into())?;
 
+    // convert to tokio socket
     let std_socket = std::net::UdpSocket::from(socket);
     UdpSocket::from_std(std_socket)
 }
 
 /// Create a TCP socket bound to the specified local address and network interface (if any).
 /// The following socket options are set on the created socket:
-/// - SO_REUSEADDR (on all platforms) and SO_REUSEPORT (on Linux)
-/// - SO_LINGER with 0 timeout, to avoid putting socket into TIME_WAIT when disconnecting someone
+/// - SO_REUSEADDR (on all platforms) and SO_REUSEPORT (on unix)
+/// - SO_LINGER with 0 timeout, to avoid TIME_WAIT
 /// - TCP_NODELAY
 pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::Result<TcpSocket> {
     let socket = socket2::Socket::new(
-        match local_addr {
-            SocketAddr::V4(_) => socket2::Domain::IPV4,
-            SocketAddr::V6(_) => socket2::Domain::IPV6,
-        },
+        socket2::Domain::for_address(local_addr),
         socket2::Type::STREAM,
         Some(socket2::Protocol::TCP),
     )?;
 
+    // set options
     if local_addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
@@ -159,54 +171,23 @@ pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
     socket.set_tcp_nodelay(true)?;
     socket.set_nonblocking(true)?;
 
+    // bind
     if let Some(interface) = interface {
         bind_to_interface(&socket, interface)?;
     }
     socket.bind(&local_addr.into())?;
 
+    // convert to tokio socket
     #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
     unsafe {
         use std::os::fd::{FromRawFd, IntoRawFd};
         Ok(FromRawFd::from_raw_fd(socket.into_raw_fd()))
     }
-
     #[cfg(windows)]
     unsafe {
         use std::os::windows::io::{FromRawSocket, IntoRawSocket};
         Ok(FromRawSocket::from_raw_socket(socket.into_raw_socket()))
     }
-}
-
-// ------------------------------------------------------------------------------------------------
-
-#[doc(hidden)]
-pub fn set_so_sndbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
-    if let Err(e) = socket.into().set_send_buffer_size(value) {
-        log::warn!(target: module, "Failed to set socket send buffer size: {e}");
-    }
-}
-
-#[doc(hidden)]
-pub fn set_so_rcvbuf_internal<'s>(socket: impl Into<SockRef<'s>>, value: usize, module: &str) {
-    if let Err(e) = socket.into().set_recv_buffer_size(value) {
-        log::warn!(target: module, "Failed to set socket receive buffer size: {e}");
-    }
-}
-
-/// Set SO_SNDBUF on a socket.
-#[macro_export]
-macro_rules! set_so_sndbuf {
-    ($sock:expr, $size:expr) => {{
-        $crate::net::set_so_sndbuf_internal($sock, $size, std::module_path!());
-    }};
-}
-
-/// Set SO_RCVBUF on a socket.
-#[macro_export]
-macro_rules! set_so_rcvbuf {
-    ($sock:expr, $size:expr) => {{
-        $crate::net::set_so_rcvbuf_internal($sock, $size, std::module_path!());
-    }};
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -246,15 +227,13 @@ fn bind_to_interface<'s>(socket: impl Into<SockRef<'s>>, interface: &str) -> io:
         return Err(io::Error::new(io::ErrorKind::NotFound, "interface not found"));
     };
 
-    let Ok(local_addr) = socket.local_addr() else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket not bound"));
-    };
+    let local_addr = socket.local_addr()?;
     let Some(local_addr) = local_addr.as_socket() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket is not AF_INET"));
     };
     match local_addr {
-        std::net::SocketAddr::V4(_) => socket.bind_device_by_index_v4(Some(idx))?,
-        std::net::SocketAddr::V6(_) => socket.bind_device_by_index_v6(Some(idx))?,
+        SocketAddr::V4(_) => socket.bind_device_by_index_v4(Some(idx))?,
+        SocketAddr::V6(_) => socket.bind_device_by_index_v6(Some(idx))?,
     }
 
     Ok(())
@@ -333,6 +312,16 @@ mod tests {
     use std::iter;
     use std::net::Ipv6Addr;
 
+    fn loopback_interface() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "Loopback Pseudo-Interface 1"
+        } else if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        }
+    }
+
     #[test]
     fn test_socketaddr_v4_iter() {
         fn random_addr() -> SocketAddrV4 {
@@ -371,13 +360,7 @@ mod tests {
 
     #[test]
     fn test_get_bind_addr() {
-        let iface = if cfg!(target_os = "windows") {
-            "Loopback Pseudo-Interface 1"
-        } else if cfg!(target_os = "macos") {
-            "lo0"
-        } else {
-            "lo"
-        };
+        let iface = loopback_interface();
 
         let addr = get_bind_addr_v4(Some(iface));
         assert_eq!(addr, Ipv4Addr::LOCALHOST);
@@ -387,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn test_local_addr_predicate() {
+    fn test_get_local_addr() {
         let addr = get_local_addr(|addr| addr.is_loopback() && addr.is_ipv4());
         assert_eq!(addr, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
 
@@ -395,5 +378,100 @@ mod tests {
         let addr = addr.expect("failed to find non-loopback address");
         assert!(!addr.is_loopback());
         assert!(!addr.is_unspecified());
+    }
+
+    #[test]
+    fn test_bound_tcp_sockets_reuse_ipv4_addr() {
+        let iface = loopback_interface();
+
+        let sock1 = bound_tcp_socket((Ipv4Addr::LOCALHOST, 0).into(), Some(iface)).unwrap();
+        let local_addr1 = sock1.local_addr().unwrap();
+        assert!(local_addr1.ip().is_loopback());
+        assert!(local_addr1.is_ipv4());
+        assert_ne!(local_addr1.port(), 0);
+
+        let sock2 = bound_tcp_socket(local_addr1, Some(iface)).unwrap();
+        assert_eq!(sock1.local_addr().unwrap(), sock2.local_addr().unwrap());
+        let local_addr2 = sock2.local_addr().unwrap();
+        assert_eq!(local_addr1, local_addr2);
+    }
+
+    #[test]
+    fn test_bound_tcp_sockets_reuse_ipv6_addr() {
+        let iface = loopback_interface();
+
+        let sock1 = bound_tcp_socket((Ipv6Addr::LOCALHOST, 0).into(), Some(iface)).unwrap();
+        let SocketAddr::V6(local_addr1) = sock1.local_addr().unwrap() else {
+            panic!("expected IPv6 address");
+        };
+        assert!(local_addr1.ip().is_loopback());
+        assert_ne!(local_addr1.port(), 0);
+
+        let sock2 = bound_tcp_socket(local_addr1.into(), Some(iface)).unwrap();
+        assert_eq!(sock1.local_addr().unwrap(), sock2.local_addr().unwrap());
+        let local_addr2 = sock2.local_addr().unwrap();
+        assert_eq!(SocketAddr::V6(local_addr1), local_addr2);
+    }
+
+    #[test]
+    fn test_bound_tcp_sockets_ipv4_and_ipv6_same_port() {
+        let iface = loopback_interface();
+
+        let sock1 = bound_tcp_socket((Ipv4Addr::LOCALHOST, 0).into(), Some(iface)).unwrap();
+        let local_addr1 = sock1.local_addr().unwrap();
+        assert!(local_addr1.ip().is_loopback());
+        assert!(local_addr1.is_ipv4());
+        assert_ne!(local_addr1.port(), 0);
+
+        let sock2 = bound_tcp_socket((Ipv6Addr::LOCALHOST, local_addr1.port()).into(), Some(iface))
+            .unwrap();
+        let SocketAddr::V6(local_addr2) = sock2.local_addr().unwrap() else {
+            panic!("expected IPv6 address");
+        };
+        assert!(local_addr2.ip().is_loopback());
+        assert_eq!(local_addr2.port(), local_addr1.port());
+    }
+
+    #[tokio::test]
+    async fn test_bound_udp_sockets_ipv4_and_ipv6_same_port() {
+        let iface = loopback_interface();
+
+        let sock1 = bound_udp_socket((Ipv4Addr::LOCALHOST, 0).into(), Some(iface)).unwrap();
+        let local_addr1 = sock1.local_addr().unwrap();
+        assert!(local_addr1.ip().is_loopback());
+        assert!(local_addr1.is_ipv4());
+        assert_ne!(local_addr1.port(), 0);
+
+        let sock2 = bound_udp_socket((Ipv6Addr::LOCALHOST, local_addr1.port()).into(), Some(iface))
+            .unwrap();
+        let SocketAddr::V6(local_addr2) = sock2.local_addr().unwrap() else {
+            panic!("expected IPv6 address");
+        };
+        assert!(local_addr2.ip().is_loopback());
+        assert_eq!(local_addr2.port(), local_addr1.port());
+
+        let sock1_ref = SockRef::from(&sock1);
+        let sock2_ref = SockRef::from(&sock2);
+        let sock1_send_buf = sock1_ref.send_buffer_size().unwrap();
+        let sock1_recv_buf = sock1_ref.recv_buffer_size().unwrap();
+        let sock2_send_buf = sock2_ref.send_buffer_size().unwrap();
+        let sock2_recv_buf = sock2_ref.recv_buffer_size().unwrap();
+
+        assert!(
+            sock1_send_buf >= MIN_UDP_BUF_SIZE,
+            "sock1 send buffer size is too small: {sock1_send_buf}"
+        );
+        assert!(
+            sock1_recv_buf >= MIN_UDP_BUF_SIZE,
+            "sock1 receive buffer size is too small: {sock1_recv_buf}"
+        );
+        assert!(
+            sock2_send_buf >= MIN_UDP_BUF_SIZE,
+            "sock2 send buffer size is too small: {sock2_send_buf}"
+        );
+        assert!(
+            sock2_recv_buf >= MIN_UDP_BUF_SIZE,
+            "sock2 receive buffer size is too small: {sock2_recv_buf}"
+        );
     }
 }

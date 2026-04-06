@@ -1,6 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
-use mtorrent_utils::{benc, debug_stopwatch, set_so_rcvbuf};
+use mtorrent_utils::{benc, debug_stopwatch};
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -38,7 +38,6 @@ pub struct IoDriver {
 
 impl IoDriver {
     pub async fn run(self) {
-        set_so_rcvbuf!(&self.socket, RX_BUFFER_SIZE);
         let _sw = debug_stopwatch!("UDP runner");
         let ingress = Ingress {
             socket: &self.socket,

@@ -2,8 +2,8 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use log::log_enabled;
+use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::loop_select::loop_select;
-use mtorrent_utils::{info_stopwatch, set_so_rcvbuf, set_so_sndbuf};
 use std::collections::hash_map::{Entry, HashMap};
 use std::io;
 use std::mem::MaybeUninit;
@@ -56,8 +56,6 @@ impl IoDriver {
         socket: UdpSocket,
         new_source_reporter: local_bounded::Sender<(SocketAddr, Bytes)>,
     ) -> Self {
-        set_so_sndbuf!(&socket, MAX_UDP_PACKET_SIZE);
-        set_so_rcvbuf!(&socket, MAX_UDP_PACKET_SIZE);
         Self {
             commands: command_receiver,
             socket,
