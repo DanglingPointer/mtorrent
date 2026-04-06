@@ -18,8 +18,8 @@ pub async fn new_outbound_connection(
     pwp_runtime: &runtime::Handle,
 ) -> io::Result<(pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>)> {
     let local_addr = match &peer_addr {
-        SocketAddr::V4(_) => data.pwp_local_addr_v4().into(),
-        SocketAddr::V6(_) => data.pwp_local_addr_v6().into(),
+        SocketAddr::V4(_) => data.local_ip_v4().into(),
+        SocketAddr::V6(_) => data.local_ip_v6().into(),
     };
 
     let local_peer_id = *data.local_peer_id();

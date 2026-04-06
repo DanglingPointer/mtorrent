@@ -63,7 +63,7 @@ async fn start_upnp(local_port: u16, interface: Option<&str>) -> io::Result<()> 
     .await
     .map_err(io::Error::other)?;
 
-    log::info!("UPnP for DHT succeeded, public ip: {}", port_opener.external_ip());
+    log::info!("UPnP for DHT succeeded, public ip: {}", port_opener.external_addr());
 
     // start periodic renewal of port mapping. It will stop and remove the mapping
     // automatically once the DHT runtime shuts down

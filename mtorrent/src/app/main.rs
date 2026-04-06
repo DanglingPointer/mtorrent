@@ -53,10 +53,10 @@ struct Handles<'h> {
 #[derive(Clone)]
 struct Params {
     local_peer_id: PeerId,
-    listener_port: u16,
-    pwp_external_port: u16,
-    pwp_local_addr_v4: Ipv4Addr,
-    pwp_local_addr_v6: Ipv6Addr,
+    internal_pwp_port: u16,
+    external_pwp_port: u16,
+    local_ip_v4: Ipv4Addr,
+    local_ip_v6: Ipv6Addr,
     bind_interface: Option<String>,
 }
 
@@ -74,7 +74,7 @@ async fn start_upnp(
         return internal_port;
     };
 
-    let external_addr = port_opener.external_ip();
+    let external_addr = port_opener.external_addr();
     log::info!("UPnP: {proto:?} port mapping succeeded, public addr: {external_addr}");
 
     task::spawn(async move {
@@ -103,37 +103,38 @@ pub async fn single_torrent(
     }
     let ctx: &Context = ctx.borrow();
 
-    let listener_port = cfg.pwp_port.unwrap_or_else(|| net::port_from_hash(&metainfo_uri.as_ref()));
-    let pwp_local_addr_v4 = net::get_bind_addr_v4(cfg.bind_interface.as_deref());
-    let pwp_local_addr_v6 = net::get_bind_addr_v6(cfg.bind_interface.as_deref());
+    let internal_pwp_port =
+        cfg.pwp_port.unwrap_or_else(|| net::port_from_hash(&metainfo_uri.as_ref()));
+    let local_addr_v4 = net::get_bind_addr_v4(cfg.bind_interface.as_deref());
+    let local_addr_v6 = net::get_bind_addr_v6(cfg.bind_interface.as_deref());
 
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
     let external_pwp_port = if cfg.use_upnp {
         let _g = ctx.pwp_runtime.enter();
-        let (_public_pwp_port, public_utp_port) = join!(
+        let (_external_tcp_port, external_udp_port) = join!(
             start_upnp(
-                listener_port,
+                internal_pwp_port,
                 cfg.pwp_port,
                 upnp::PortMappingProtocol::TCP,
                 cfg.bind_interface.as_deref()
             ),
             start_upnp(
-                listener_port,
+                internal_pwp_port,
                 cfg.pwp_port,
                 upnp::PortMappingProtocol::UDP,
                 cfg.bind_interface.as_deref()
             ),
         );
-        public_utp_port
+        external_udp_port
     } else {
-        listener_port
+        internal_pwp_port
     };
 
     let utp_handle = ops::launch_utp(
         &ctx.pwp_runtime,
-        SocketAddrV4::new(pwp_local_addr_v4, listener_port),
-        SocketAddrV6::new(pwp_local_addr_v6, listener_port, 0, 0),
+        SocketAddrV4::new(local_addr_v4, internal_pwp_port),
+        SocketAddrV6::new(local_addr_v6, internal_pwp_port, 0, 0),
         cfg.bind_interface.clone(),
     );
 
@@ -152,10 +153,10 @@ pub async fn single_torrent(
 
     let params = Params {
         local_peer_id: cfg.local_peer_id,
-        listener_port,
-        pwp_external_port: external_pwp_port,
-        pwp_local_addr_v4,
-        pwp_local_addr_v6,
+        internal_pwp_port,
+        external_pwp_port,
+        local_ip_v4: local_addr_v4,
+        local_ip_v6: local_addr_v6,
         bind_interface: cfg.bind_interface,
     };
 
@@ -220,10 +221,10 @@ async fn preliminary_stage(
     let ctx = ops::PreliminaryCtx::new(
         magnet_link,
         params.local_peer_id,
-        params.pwp_external_port,
-        params.listener_port,
-        params.pwp_local_addr_v4,
-        params.pwp_local_addr_v6,
+        params.external_pwp_port,
+        params.internal_pwp_port,
+        params.local_ip_v4,
+        params.local_ip_v6,
         params.bind_interface.clone(),
     );
 
@@ -250,13 +251,13 @@ async fn preliminary_stage(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
-            params.pwp_external_port,
+            params.external_pwp_port,
         ))
     });
 
     tasks.spawn_on(
         ops::run_pwp_listener(
-            SocketAddr::new(params.pwp_local_addr_v4.into(), params.listener_port),
+            SocketAddr::new(params.local_ip_v4.into(), params.internal_pwp_port),
             params.bind_interface.clone(),
             peer_reporter.clone(),
         ),
@@ -265,7 +266,7 @@ async fn preliminary_stage(
 
     tasks.spawn_on(
         ops::run_pwp_listener(
-            SocketAddr::new(params.pwp_local_addr_v6.into(), params.listener_port),
+            SocketAddr::new(params.local_ip_v6.into(), params.internal_pwp_port),
             params.bind_interface,
             peer_reporter.clone(),
         ),
@@ -320,10 +321,10 @@ async fn main_stage(
     let ctx: ops::Handle<_> = ops::MainCtx::new(
         metainfo,
         params.local_peer_id,
-        params.pwp_external_port,
-        params.listener_port,
-        params.pwp_local_addr_v4,
-        params.pwp_local_addr_v6,
+        params.external_pwp_port,
+        params.internal_pwp_port,
+        params.local_ip_v4,
+        params.local_ip_v6,
         params.bind_interface.clone(),
     )?;
 
@@ -353,13 +354,13 @@ async fn main_stage(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
-            params.pwp_external_port,
+            params.external_pwp_port,
         ))
     });
 
     tasks.spawn_on(
         ops::run_pwp_listener(
-            SocketAddr::new(params.pwp_local_addr_v4.into(), params.listener_port),
+            SocketAddr::new(params.local_ip_v4.into(), params.internal_pwp_port),
             params.bind_interface.clone(),
             peer_reporter.clone(),
         ),
@@ -368,7 +369,7 @@ async fn main_stage(
 
     tasks.spawn_on(
         ops::run_pwp_listener(
-            SocketAddr::new(params.pwp_local_addr_v6.into(), params.listener_port),
+            SocketAddr::new(params.local_ip_v6.into(), params.internal_pwp_port),
             params.bind_interface,
             peer_reporter.clone(),
         ),
