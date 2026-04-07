@@ -454,7 +454,7 @@ async fn listening_peer<P: Peer>(
                     | io::ErrorKind::AddrNotAvailable
             ) =>
         {
-            eprintln!("Couldn't create listener on {listening_addr}")
+            eprintln!("Couldn't create listener on {listening_addr}: {e:?}");
         }
         Err(e) => panic!("{e:?}"),
     }
