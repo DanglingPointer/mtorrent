@@ -28,8 +28,7 @@ pub mod peer_id;
 /// Trait for splitting a bidirectional stream into read/write halves.
 pub mod split_stream;
 
-/// Logging stopwatch macros at various log levels.
-pub mod stopwatch;
+mod stopwatch;
 
 /// UPnP/IGD port forwarding helpers.
 pub mod upnp;

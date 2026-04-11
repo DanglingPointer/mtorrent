@@ -66,7 +66,7 @@ async fn start_upnp(
     proto: upnp::PortMappingProtocol,
     interface: Option<&str>,
 ) -> u16 {
-    let Ok(port_opener) =
+    let Ok(mut port_opener) =
         upnp::PortOpener::new(proto, internal_port, desired_external_port, interface)
             .await
             .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))

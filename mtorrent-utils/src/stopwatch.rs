@@ -1,3 +1,4 @@
+#[doc(hidden)]
 #[macro_export]
 macro_rules! debug_stopwatch {
     ($($arg:tt)+) => {
@@ -5,6 +6,7 @@ macro_rules! debug_stopwatch {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! trace_stopwatch {
     ($($arg:tt)+) => {
@@ -12,6 +14,7 @@ macro_rules! trace_stopwatch {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! info_stopwatch {
     ($($arg:tt)+) => {
@@ -19,6 +22,7 @@ macro_rules! info_stopwatch {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! warn_stopwatch {
     ($($arg:tt)+) => {
@@ -26,6 +30,7 @@ macro_rules! warn_stopwatch {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! error_stopwatch {
     ($($arg:tt)+) => {
