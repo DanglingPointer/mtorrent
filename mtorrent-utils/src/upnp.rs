@@ -10,6 +10,9 @@ type BlockingGateway = igd_next::Gateway;
 
 pub use igd_next::PortMappingProtocol;
 
+/// Utility for creating and maintaining a port mapping on the local gateway via UPnP. The mapping
+/// is valid for `PORT_LEASE_DURATION_SEC` seconds, but automatic renewal can be enabled by calling
+/// `run_continuous_renewal()`. The mapping is removed when the `PortOpener` is dropped.
 pub struct PortOpener {
     gateway: AsyncGateway,
     internal_addr: SocketAddr,
@@ -19,12 +22,15 @@ pub struct PortOpener {
 
 impl PortOpener {
     /// Recommended lease duration from <https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf>.
-    const LEASE_DURATION_SEC: u32 = 3600;
+    pub const PORT_LEASE_DURATION_SEC: u32 = 3600;
 
-    /// Create a port mapping on the local gateway and return a `PortOpener` that maintains it.
+    /// Create a TCP or UDP port mapping that will be valid for
+    /// `PORT_LEASE_DURATION_SEC` seconds and return a `PortOpener` that maintains it.
     ///
-    /// The mapping will be automatically removed when the `PortOpener` is dropped, but it will not
-    /// be renewed unless `run_continuous_renewal()` is called.
+    /// If `desired_external_port` is not specified, the gateway will assign an arbitrary external
+    /// port number.
+    /// If `interface` is not specified, the first active network adapter with a non-loopback IPv4
+    /// address will be used.
     pub async fn new(
         proto: PortMappingProtocol,
         internal_port: u16,
@@ -54,11 +60,13 @@ impl PortOpener {
         let public_ip = gateway.get_external_ip().await?;
         let public_port = if let Some(desired_port) = desired_external_port {
             gateway
-                .add_port(proto, desired_port, internal_addr, Self::LEASE_DURATION_SEC, "")
+                .add_port(proto, desired_port, internal_addr, Self::PORT_LEASE_DURATION_SEC, "")
                 .await?;
             desired_port
         } else {
-            gateway.add_any_port(proto, internal_addr, Self::LEASE_DURATION_SEC, "").await?
+            gateway
+                .add_any_port(proto, internal_addr, Self::PORT_LEASE_DURATION_SEC, "")
+                .await?
         };
         let external_addr = SocketAddr::new(public_ip, public_port);
 
@@ -76,12 +84,12 @@ impl PortOpener {
         self.external_addr
     }
 
-    /// Start continuous renewal of the port mapping. The mapping will be automatically removed when
-    /// the returned future is dropped.
-    pub async fn run_continuous_renewal(self) -> igd_next::Result<()> {
+    /// Continuously renew the port mapping every `PORT_LEASE_DURATION_SEC` seconds. This function
+    /// never returns unless an error occurs.
+    pub async fn run_continuous_renewal(&mut self) -> igd_next::Result<()> {
         // renewal interval must be slightly higher than the lease duration because renewing a
         // mapping that hasn't expired yet has no effect
-        let renewal_interval = sec!(Self::LEASE_DURATION_SEC as u64) + millisec!(500);
+        let renewal_interval = sec!(Self::PORT_LEASE_DURATION_SEC as u64) + millisec!(500);
         loop {
             sleep(renewal_interval).await;
 
@@ -90,7 +98,7 @@ impl PortOpener {
                     self.proto,
                     self.external_addr.port(),
                     self.internal_addr,
-                    Self::LEASE_DURATION_SEC,
+                    Self::PORT_LEASE_DURATION_SEC,
                     "",
                 )
                 .await?;
@@ -106,7 +114,7 @@ impl PortOpener {
 
 impl Drop for PortOpener {
     /// Remove the port mapping when the `PortOpener` is dropped. Note that this is a blocking
-    /// operation because [`AsyncDrop`](https://doc.rust-lang.org/std/future/trait.AsyncDrop.html) is experimental.
+    /// operation since [`AsyncDrop`](https://doc.rust-lang.org/std/future/trait.AsyncDrop.html) is still experimental.
     fn drop(&mut self) {
         let gateway = BlockingGateway {
             addr: self.gateway.addr,

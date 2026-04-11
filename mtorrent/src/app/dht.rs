@@ -54,7 +54,7 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
 
 async fn start_upnp(local_port: u16, interface: Option<&str>) -> io::Result<()> {
     // try create a port mapping with the same port number
-    let port_opener = upnp::PortOpener::new(
+    let mut port_opener = upnp::PortOpener::new(
         upnp::PortMappingProtocol::UDP,
         local_port,
         Some(local_port),
