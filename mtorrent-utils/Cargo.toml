@@ -42,5 +42,4 @@ workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "docsrs", "--cfg", "tokio_unstable"]
-rustc-args = ["--cfg", "tokio_unstable"]
+rustdoc-args = ["--cfg", "docsrs"]

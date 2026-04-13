@@ -7,9 +7,7 @@ Lightweight CLI Bittorrent client in Rust. Blazingly fast, incredibly robust and
 # Installation
 Download the latest pre-compiled binary for Linux or Windows here: https://github.com/DanglingPointer/mtorrent/releases/latest
 
-Alternatively, compile locally using the following commands:
-- Linux: `RUSTFLAGS="--cfg=tokio_unstable" cargo install mtorrent-cli`
-- Windows: `$env:RUSTFLAGS="--cfg=tokio_unstable"; cargo install mtorrent-cli`
+Alternatively, compile locally and install using `cargo install mtorrent-cli`.
 
 # Features
 - Peer Wire Protocol over IPv4 and IPv6

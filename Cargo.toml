@@ -70,7 +70,4 @@ rstest_reuse = { version = "0.7", default-features = false }
 opt-level = 3
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(tokio_unstable)',
-    'cfg(coverage)',
-] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
