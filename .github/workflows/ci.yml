@@ -35,8 +35,8 @@ jobs:
     - name: Build docs
       run: cargo +nightly doc --lib --no-deps --all-features --document-private-items
       env:
-        RUSTDOCFLAGS: --cfg docsrs --cfg tokio_unstable -Dwarnings
-        RUSTFLAGS: --cfg tokio_unstable -Dwarnings
+        RUSTDOCFLAGS: --cfg docsrs -Dwarnings
+        RUSTFLAGS: -Dwarnings
     - name: Run doctests
       run: cargo test --doc
 

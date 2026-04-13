@@ -450,7 +450,6 @@ mod tests {
     use std::future::pending;
     use std::net::Ipv4Addr;
     use std::sync::Arc;
-    use tokio::runtime::UnhandledPanic;
     use tokio::time::{sleep, sleep_until};
 
     fn addr(i: u16) -> SocketAddr {
@@ -463,7 +462,6 @@ mod tests {
     macro_rules! run_in_local_set {
         ($($tokens:tt)+) => {{
             task::LocalSet::new()
-                .unhandled_panic(UnhandledPanic::ShutdownRuntime)
                 .run_until(async move {
                     $($tokens)+
 
