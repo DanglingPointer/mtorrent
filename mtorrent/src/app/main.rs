@@ -64,10 +64,10 @@ async fn start_upnp(
     internal_port: u16,
     desired_external_port: Option<u16>,
     proto: upnp::PortMappingProtocol,
-    interface: Option<&str>,
+    interface: Option<String>,
 ) -> u16 {
     let Ok(mut port_opener) =
-        upnp::PortOpener::new(proto, internal_port, desired_external_port, interface)
+        upnp::PortOpener::new(proto, internal_port, desired_external_port, interface.as_deref())
             .await
             .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
     else {
@@ -111,22 +111,21 @@ pub async fn single_torrent(
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
     let external_pwp_port = if cfg.use_upnp {
-        let _g = ctx.pwp_runtime.enter();
-        let (_external_tcp_port, external_udp_port) = join!(
-            start_upnp(
-                internal_pwp_port,
-                cfg.pwp_port,
-                upnp::PortMappingProtocol::TCP,
-                cfg.bind_interface.as_deref()
-            ),
-            start_upnp(
-                internal_pwp_port,
-                cfg.pwp_port,
-                upnp::PortMappingProtocol::UDP,
-                cfg.bind_interface.as_deref()
-            ),
-        );
-        external_udp_port
+        // UPnP tasks must be spawned on the pwp runtime
+        let tcp_task = ctx.pwp_runtime.spawn(start_upnp(
+            internal_pwp_port,
+            cfg.pwp_port,
+            upnp::PortMappingProtocol::TCP,
+            cfg.bind_interface.clone(),
+        ));
+        let utp_task = ctx.pwp_runtime.spawn(start_upnp(
+            internal_pwp_port,
+            cfg.pwp_port,
+            upnp::PortMappingProtocol::UDP,
+            cfg.bind_interface.clone(),
+        ));
+        let (_external_tcp_port, external_udp_port) = join!(tcp_task, utp_task);
+        external_udp_port.unwrap_or(internal_pwp_port)
     } else {
         internal_pwp_port
     };
