@@ -32,7 +32,7 @@ log = "0.4"
 simple_logger = { version = "5", features = ["threads"] }
 sha1_smol = "1.0"
 bytes = "1.11"
-tokio = { version = "1.51", features = [
+tokio = { version = "1.52", features = [
     "rt",
     "net",
     "time",
