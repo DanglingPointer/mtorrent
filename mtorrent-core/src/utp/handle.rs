@@ -84,10 +84,7 @@ impl EndpointHandle {
         let (left, right) = local_pipe::duplex_pipe(Self::PIPE_CAPACITY);
         let (egress_sender, egress_receiver) = local_bounded::channel(1);
         let (ingress_sender, ingress_receiver) = local_bounded::channel(Self::INGRESS_QUEUE);
-        let handle = udp::ConnectionHandle {
-            egress: egress_receiver,
-            ingress: ingress_sender,
-        };
+        let handle = udp::ConnectionHandle::new(egress_receiver, ingress_sender);
         self.cmds
             .send(udp::Command::AddConnection((remote_addr, handle)))
             .await
@@ -132,10 +129,7 @@ impl EndpointHandle {
         let (left, right) = local_pipe::duplex_pipe(Self::PIPE_CAPACITY);
         let (egress_sender, egress_receiver) = local_bounded::channel(1);
         let (ingress_sender, ingress_receiver) = local_bounded::channel(Self::INGRESS_QUEUE);
-        let handle = udp::ConnectionHandle {
-            egress: egress_receiver,
-            ingress: ingress_sender,
-        };
+        let handle = udp::ConnectionHandle::new(egress_receiver, ingress_sender);
         self.cmds
             .send(udp::Command::AddConnection((remote_addr, handle)))
             .await

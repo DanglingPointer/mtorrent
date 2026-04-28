@@ -2,7 +2,6 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use log::log_enabled;
-use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::loop_select::loop_select;
 use std::collections::hash_map::{Entry, HashMap};
 use std::io;
@@ -13,6 +12,7 @@ use std::task::{Context, Poll, ready};
 use tokio::io::ReadBuf;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 pub(super) enum Command {
     AddConnection((SocketAddr, ConnectionHandle)),
@@ -20,8 +20,17 @@ pub(super) enum Command {
 }
 
 pub(super) struct ConnectionHandle {
-    pub(super) egress: local_bounded::Receiver<Bytes>,
-    pub(super) ingress: local_bounded::Sender<Bytes>,
+    egress: local_bounded::Receiver<Bytes>,
+    ingress: local_bounded::Sender<Bytes>,
+}
+
+impl ConnectionHandle {
+    pub(super) fn new(
+        egress: local_bounded::Receiver<Bytes>,
+        ingress: local_bounded::Sender<Bytes>,
+    ) -> Self {
+        Self { egress, ingress }
+    }
 }
 
 const MAX_UDP_PACKET_SIZE: usize = 65536;
@@ -48,6 +57,7 @@ pub struct IoDriver {
     rx_buffer: Box<[MaybeUninit<u8>]>,
     new_source_reporter: local_bounded::Sender<(SocketAddr, Bytes)>,
     reset_in_progress: bool,
+    dropped_packets: u64,
 }
 
 impl IoDriver {
@@ -64,14 +74,20 @@ impl IoDriver {
             rx_buffer: Box::new_uninit_slice(MAX_UDP_PACKET_SIZE),
             new_source_reporter,
             reset_in_progress: false,
+            dropped_packets: 0,
         }
     }
 
     /// Run the I/O (de-)multiplexing.
     pub async fn run(mut self) {
         log::info!("uTP IoDriver started");
-        let _sw = info_stopwatch!("uTP IoDriver");
+        let start_time = Instant::now();
         loop_select(&mut self, [Self::poll_commands, Self::poll_egress, Self::poll_ingress]).await;
+        log::info!(
+            "uTP IoDriver finished in {:?}, dropped {} packets",
+            start_time.elapsed(),
+            self.dropped_packets
+        );
     }
 
     fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<ControlFlow<()>> {
@@ -223,18 +239,16 @@ impl IoDriver {
                     }
                     Err(local_sync_error::TrySendError::Closed(_buf)) => {
                         connection.remove();
-                        log::warn!(
-                            "Dropping received packet from a recently closed connection to {source_addr}"
-                        );
+                        self.dropped_packets += 1;
                         // TODO: should we report this as unknown source?
                     }
                 }
             }
             Entry::Vacant(_) => match self.new_source_reporter.try_send((source_addr, packet)) {
                 Ok(_) => {}
-                Err(e) => {
+                Err(_) => {
                     // don't exit even if the channel is closed
-                    log::warn!("Dropping received packet from new source {source_addr}: {e}");
+                    self.dropped_packets += 1;
                 }
             },
         }
