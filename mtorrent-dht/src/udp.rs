@@ -1,6 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
-use mtorrent_utils::{benc, debug_stopwatch};
+use mtorrent_utils::benc;
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -11,6 +11,7 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::time::Instant;
 
 pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
 pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
@@ -38,23 +39,48 @@ pub struct IoDriver {
 
 impl IoDriver {
     pub async fn run(self) {
-        let _sw = debug_stopwatch!("UDP runner");
+        log::debug!("UDP IoDriver started");
+        let start_time = Instant::now();
+
+        let mut ingress_stats = IngressStats::default();
+        let mut egress_stats = EgressStats::default();
+
         let ingress = Ingress {
             socket: &self.socket,
             buffer: Box::new_uninit_slice(RX_BUFFER_SIZE),
             sink: self.ingress_sender,
+            stats: &mut ingress_stats,
         };
         let egress = Egress {
             socket: &self.socket,
             pending: None,
             source: self.egress_receiver,
+            stats: &mut egress_stats,
         };
         select! {
             biased;
             _ = egress => (),
             _ = ingress => (),
         }
+
+        log::debug!(
+            "UDP IoDriver finished in {:?}, {ingress_stats:?}, {egress_stats:?}",
+            start_time.elapsed()
+        );
     }
+}
+
+#[derive(Debug, Default)]
+struct IngressStats {
+    dropped_packets: u64,
+    parse_errors: u64,
+    receive_errors: u64,
+}
+
+#[derive(Debug, Default)]
+struct EgressStats {
+    send_errors: u64,
+    incomplete_sends: u64,
 }
 
 const RX_BUFFER_SIZE: usize = 64 * 1024;
@@ -63,12 +89,14 @@ struct Ingress<'s> {
     socket: &'s UdpSocket,
     buffer: Box<[MaybeUninit<u8>]>,
     sink: mpsc::Sender<(Message, SocketAddr)>,
+    stats: &'s mut IngressStats,
 }
 
 struct Egress<'s> {
     socket: &'s UdpSocket,
     pending: Option<(Vec<u8>, SocketAddr)>,
     source: mpsc::Receiver<(Message, SocketAddr)>,
+    stats: &'s mut EgressStats,
 }
 
 impl<'s> Future for Ingress<'s> {
@@ -95,20 +123,21 @@ impl<'s> Future for Ingress<'s> {
             socket,
             buffer,
             sink,
+            stats,
         } = self.get_mut();
         let mut buffer = ReadBuf::uninit(buffer);
         loop {
             buffer.clear();
             let src_addr = match ready!(socket.poll_recv_from(cx, &mut buffer)) {
-                Err(e) => {
-                    log::error!("Failed to receive UDP packet: {e}");
+                Err(_e) => {
+                    stats.receive_errors += 1;
                     continue;
                 }
                 Ok(addr) => addr,
             };
             let message = match parse_msg(buffer.filled()) {
-                Err(e) => {
-                    log::trace!("Failed to parse message from {src_addr}: {e}");
+                Err(_e) => {
+                    stats.parse_errors += 1;
                     continue;
                 }
                 Ok(msg) => msg,
@@ -118,7 +147,7 @@ impl<'s> Future for Ingress<'s> {
                     return Poll::Ready(());
                 }
                 Err(TrySendError::Full(_)) => {
-                    log::warn!("Dropping message from {src_addr}: channel is full");
+                    stats.dropped_packets += 1;
                     continue;
                 }
                 Ok(()) => continue,
@@ -135,6 +164,7 @@ impl<'s> Future for Egress<'s> {
             socket,
             pending,
             source,
+            stats,
         } = self.get_mut();
 
         loop {
@@ -151,13 +181,11 @@ impl<'s> Future for Egress<'s> {
                 Some((data, dest_addr)) => {
                     let data_len = data.len();
                     match ready!(socket.poll_send_to(cx, data, *dest_addr)) {
-                        Err(e) => {
-                            log::warn!("Failed to send UDP packet to {dest_addr}: {e}");
+                        Err(_e) => {
+                            stats.send_errors += 1;
                         }
                         Ok(bytes_sent) if bytes_sent != data_len => {
-                            log::error!(
-                                "Could only send {bytes_sent}/{data_len} bytes to {dest_addr}"
-                            );
+                            stats.incomplete_sends += 1;
                         }
                         Ok(_) => (),
                     }
