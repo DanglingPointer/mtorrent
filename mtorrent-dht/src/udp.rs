@@ -15,7 +15,7 @@ use tokio::sync::mpsc::error::TrySendError;
 pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
 pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
 
-pub(super) const MSG_QUEUE_LEN: usize = 512;
+const MSG_QUEUE_LEN: usize = 512;
 
 /// Create the networking layer that handles low-level I/O.
 pub fn setup_udp(socket: UdpSocket) -> (MessageChannelSender, MessageChannelReceiver, IoDriver) {

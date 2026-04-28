@@ -140,7 +140,6 @@ pub fn setup_queries(
 ) -> (OutboundQueries, InboundQueries, QueryRouter) {
     let (outgoing_queries_sink, outgoing_queries_source) = local_unbounded::channel();
     let (incoming_queries_sink, incoming_queries_source) = local_unbounded::channel();
-    let max_in_flight = max_concurrent_queries.unwrap_or(udp::MSG_QUEUE_LEN);
 
     let runner = QueryRouter {
         handler: Handler::new(outgoing_msgs_sink, incoming_queries_sink, query_timeout),
@@ -149,9 +148,9 @@ pub fn setup_queries(
     };
     let client = OutboundQueries {
         channel: outgoing_queries_sink,
-        query_slots: Rc::new(Semaphore::const_new(max_in_flight)),
+        query_slots: Rc::new(Semaphore::const_new(max_concurrent_queries.unwrap_or(0))),
     };
-    if max_in_flight == 0 {
+    if max_concurrent_queries.is_none() {
         client.query_slots.close();
     }
     (client, InboundQueries(incoming_queries_source), runner)

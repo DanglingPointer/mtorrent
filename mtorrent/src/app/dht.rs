@@ -10,10 +10,9 @@ use tokio::{join, task};
 pub struct Config {
     /// Local UDP port to bind to.
     pub local_port: u16,
-    /// Optional name of network interface to bind the UDP socket to (e.g. "eth0" or "lo").
+    /// Optional name of the network interface to use (e.g. "eth0" or "lo").
     pub bind_interface: Option<String>,
-    /// Maximum number of outbound queries in flight.
-    /// Uses an internal default if `None`.
+    /// Maximum number of concurrent outbound queries in flight. Unlimited if `None`.
     pub max_concurrent_queries: Option<usize>,
     /// Directory for storing data persistent across boots.
     pub config_dir: PathBuf,
