@@ -1,6 +1,6 @@
 [package]
 name = "mtorrent"
-description = "Fast and lightweight BitTorrent client in Rust"
+description = "Fast and lightweight BitTorrent engine in Rust"
 categories = ["asynchronous", "network-programming", "security"]
 keywords = ["bittorrent", "torrent", "client", "p2p", "protocol"]
 version.workspace = true

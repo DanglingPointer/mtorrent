@@ -3,7 +3,7 @@
 [![codecov](https://codecov.io/github/DanglingPointer/mtorrent/graph/badge.svg?token=UA46BNVZ4T)](https://codecov.io/github/DanglingPointer/mtorrent)
 
 # mtorrent
-Lightweight BitTorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general.
+Lightweight BitTorrent engine in Rust. Blazingly fast, incredibly robust and very impressive in general.
 
 This repo contains reusable library crates and a CLI executable. For GUI versions see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui) and [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui).
 

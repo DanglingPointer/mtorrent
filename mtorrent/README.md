@@ -4,7 +4,7 @@
 [![codecov](https://codecov.io/github/DanglingPointer/mtorrent/graph/badge.svg?token=UA46BNVZ4T)](https://codecov.io/github/DanglingPointer/mtorrent)
 
 # mtorrent
-Lightweight Bittorrent client engine in Rust. Blazingly fast, incredibly robust and very impressive in general. This is a high-level library crate, for executables see below:
+Lightweight Bittorrent engine in Rust. Blazingly fast, incredibly robust and very impressive in general. This is a high-level library crate, for executables see below:
 - CLI version: [`mtorrent-cli`](https://crates.io/crates/mtorrent-cli).
 - GUI version: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui) or [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui).
 
@@ -23,3 +23,5 @@ Alternatively, compile [`mtorrent-egui`](https://github.com/DanglingPointer/mtor
 - Peer Exchange extension
 - Magnet links and metadata exchange
 - DHT
+- Protocol Encryption (MSE/PE)
+- uTP
