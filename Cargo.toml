@@ -13,13 +13,13 @@ edition = "2024"
 authors = ["Mikhail Vasilyev <mikail.vasilyev@gmail.com>"]
 repository = "https://github.com/DanglingPointer/mtorrent"
 license = "Apache-2.0"
-version = "0.5.4"
+version = "0.5.5"
 
 [workspace.dependencies]
-mtorrent-core = { path = "mtorrent-core", version = "0.5.4" }
-mtorrent-dht = { path = "mtorrent-dht", version = "0.5.4" }
-mtorrent-utils = { path = "mtorrent-utils", version = "0.5.4" }
-mtorrent = { path = "mtorrent", version = "0.5.4" }
+mtorrent-core = { path = "mtorrent-core", version = "0.5.5" }
+mtorrent-dht = { path = "mtorrent-dht", version = "0.5.5" }
+mtorrent-utils = { path = "mtorrent-utils", version = "0.5.5" }
+mtorrent = { path = "mtorrent", version = "0.5.5" }
 
 url = "2.5"
 reqwest = { version = "0.13", features = ["gzip"], default-features = false }
