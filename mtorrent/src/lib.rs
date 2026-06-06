@@ -4,7 +4,7 @@
 //!
 //! Example usage:
 //! - CLI application: [`mtorrent-cli`](https://github.com/DanglingPointer/mtorrent/blob/main/mtorrent-cli/)
-//! - GUI application: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui/)
+//! - GUI application: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui/) and [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui/)
 
 /// Application modules.
 /// These modules contain entry points and high-level logic for the BitTorrent client.

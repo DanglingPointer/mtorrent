@@ -5,7 +5,7 @@
 # mtorrent
 Lightweight BitTorrent client in Rust. Blazingly fast, incredibly robust and very impressive in general.
 
-This repo contains reusable library crates and a CLI executable. For GUI version see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui).
+This repo contains reusable library crates and a CLI executable. For GUI versions see [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui) and [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui).
 
 ## Useful links
 - https://wiki.theory.org/BitTorrentSpecification
