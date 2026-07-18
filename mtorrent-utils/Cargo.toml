@@ -27,7 +27,7 @@ socket2 = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 libc = "0.2"
-sysinfo = "0.38"
+sysinfo = "0.39"
 
 [target.'cfg(windows)'.dependencies]
 ipconfig = "0.3"

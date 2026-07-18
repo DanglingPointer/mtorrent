@@ -26,7 +26,7 @@ log = { workspace = true }
 local_async_utils = { workspace = true }
 tokio = { workspace = true }
 simple_logger = { workspace = true }
-clap = { version = "4.5.40", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 dirs-next = "2.0.0"
 
 
