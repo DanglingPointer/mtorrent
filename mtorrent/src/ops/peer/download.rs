@@ -100,7 +100,7 @@ pub async fn new_peer(
     // try wait for bitfield
     match inner.rx.receive_message_timed(sec!(1)).await {
         Ok(msg) => {
-            update_state_with_msg(&mut inner.handle, &mut inner.state, inner.tx.remote_ip(), &msg);
+            update_state_with_msg(&inner.handle, &mut inner.state, inner.tx.remote_ip(), &msg);
         }
         Err(pwp::ChannelError::Timeout) => (),
         Err(e) => return Err(e.into()),
@@ -109,12 +109,7 @@ pub async fn new_peer(
     loop {
         match inner.rx.receive_message_timed(sec!(0)).await {
             Ok(msg) => {
-                update_state_with_msg(
-                    &mut inner.handle,
-                    &mut inner.state,
-                    inner.tx.remote_ip(),
-                    &msg,
-                );
+                update_state_with_msg(&inner.handle, &mut inner.state, inner.tx.remote_ip(), &msg);
             }
             Err(pwp::ChannelError::Timeout) => break,
             Err(e) => return Err(e.into()),
@@ -170,7 +165,7 @@ pub async fn linger(peer: Peer, deadline: Instant) -> io::Result<Peer> {
         match inner.rx.receive_message_timed(deadline - Instant::now()).await {
             Ok(msg) => {
                 if update_state_with_msg(
-                    &mut inner.handle,
+                    &inner.handle,
                     &mut inner.state,
                     inner.tx.remote_ip(),
                     &msg,
@@ -289,7 +284,7 @@ async fn wait_with_retries(
 }
 
 async fn request_pieces(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     tx: &mut pwp::DownloadTxChannel,
     received_blocks_ever: bool,
     mut block_received_signal: local_condvar::Receiver,
@@ -351,7 +346,7 @@ async fn request_pieces(
 }
 
 async fn receive_pieces(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     rx: &mut pwp::DownloadRxChannel,
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
@@ -385,8 +380,7 @@ async fn receive_pieces(
                 block_received_reporter.signal_one();
             }
             msg => {
-                if update_state_with_msg(&mut handle, state, rx.remote_ip(), &msg)
-                    && state.peer_choking
+                if update_state_with_msg(&handle, state, rx.remote_ip(), &msg) && state.peer_choking
                 {
                     requests_in_flight.clear();
                     with_ctx!(|ctx| ctx.pending_requests.clear_requests_to(rx.remote_ip()));
@@ -401,7 +395,7 @@ async fn receive_pieces(
 }
 
 async fn verify_pieces(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     storage: &data::StorageClient,
     progress_reporter: &broadcast::Sender<usize>,
     mut downloaded_pieces: local_bounded::Receiver<usize>,
@@ -440,7 +434,7 @@ async fn verify_pieces(
 }
 
 fn update_state_with_msg(
-    handle: &mut CtxHandle,
+    handle: &CtxHandle,
     state: &mut pwp::DownloadState,
     ip: &SocketAddr,
     msg: &pwp::UploaderMessage,

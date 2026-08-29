@@ -172,7 +172,7 @@ impl PeerBuilder {
             self.socket.unwrap_or_else(|| Box::new(io::empty())),
         );
         let local_addr = self.local_ip.unwrap_or(SocketAddr::new([0, 0, 0, 0].into(), 7777));
-        let mut ctx_handle = ctx::MainCtx::new(
+        let ctx_handle = ctx::MainCtx::new(
             metainfo,
             self.local_peer_id.unwrap_or(PeerId::from(&[b'l'; 20])),
             local_addr.port(),

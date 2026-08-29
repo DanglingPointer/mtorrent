@@ -45,7 +45,7 @@ const PEX_INTERVAL: Duration = sec!(30);
 async fn run_download(
     mut peer: download::Peer,
     remote_ip: SocketAddr,
-    mut ctx_handle: MainHandle,
+    ctx_handle: MainHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
@@ -83,7 +83,7 @@ async fn run_download(
 async fn run_upload(
     mut peer: upload::Peer,
     remote_ip: SocketAddr,
-    mut ctx_handle: MainHandle,
+    ctx_handle: MainHandle,
 ) -> io::Result<()> {
     define_with_ctx!(ctx_handle);
     loop {
@@ -176,7 +176,6 @@ async fn run_peer_connection(
         try_join!(extensions_fut, download_fut, upload_fut)?;
 
     data.ctx_handle
-        .clone()
         .with(|ctx| ctx.peer_states.set_info(&remote_ip, origin, transport, encryption));
 
     try_join!(
@@ -220,8 +219,7 @@ impl PeerConnector for MainConnectionData {
         use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_tcp_allowed()) {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
@@ -249,8 +247,7 @@ impl PeerConnector for MainConnectionData {
         use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_utp_allowed()) {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
@@ -277,8 +274,7 @@ impl PeerConnector for MainConnectionData {
         deadline: Instant,
         stream: tokio::net::TcpStream,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
@@ -302,8 +298,7 @@ impl PeerConnector for MainConnectionData {
         deadline: Instant,
         data: mtorrent_core::utp::InboundConnectData,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.metainfo.info_hash(), *ctx.const_data.local_peer_id()));
@@ -340,7 +335,7 @@ async fn run_metadata_download(
     download_chans: pwp::DownloadChannels,
     upload_chans: pwp::UploadChannels,
     extended_chans: pwp::ExtendedChannels,
-    mut ctx_handle: PreliminaryHandle,
+    ctx_handle: PreliminaryHandle,
     peer_reporter: PeerReporter,
 ) -> io::Result<()> {
     ctx_handle.with(|ctx| ctx.discovered_peers.insert(*download_chans.0.remote_ip()));
@@ -363,7 +358,7 @@ async fn run_metadata_download(
         origin: pwp::PeerOrigin,
         transport: pwp::TransportProto,
         extended_chans: pwp::ExtendedChannels,
-        mut ctx_handle: PreliminaryHandle,
+        ctx_handle: PreliminaryHandle,
         peer_reporter: PeerReporter,
     ) -> io::Result<()> {
         define_with_ctx!(ctx_handle);
@@ -429,8 +424,7 @@ impl PeerConnector for PreliminaryConnectionData {
         use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_tcp_allowed()) {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
@@ -461,8 +455,7 @@ impl PeerConnector for PreliminaryConnectionData {
         use_pe: bool,
         deadline: Instant,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         if with_ctx!(|ctx| !ctx.const_data.pwp_outbound_utp_allowed()) {
             return Err(io::Error::from(io::ErrorKind::Unsupported));
@@ -494,8 +487,7 @@ impl PeerConnector for PreliminaryConnectionData {
         deadline: Instant,
         stream: tokio::net::TcpStream,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));
@@ -523,8 +515,7 @@ impl PeerConnector for PreliminaryConnectionData {
         deadline: Instant,
         data: mtorrent_core::utp::InboundConnectData,
     ) -> io::Result<Self::PeerConnection> {
-        let mut handle = self.ctx_handle.clone();
-        define_with_ctx!(handle);
+        define_with_ctx!(self.ctx_handle);
 
         let (info_hash, local_peer_id) =
             with_ctx!(|ctx| (*ctx.magnet.info_hash(), *ctx.const_data.local_peer_id()));

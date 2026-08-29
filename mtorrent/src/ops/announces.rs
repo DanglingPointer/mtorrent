@@ -11,7 +11,7 @@ use std::{io, iter};
 use tokio::time::{self, Instant};
 
 pub async fn make_periodic_announces(
-    mut ctx_handle: ctx::Handle<ctx::MainCtx>,
+    ctx_handle: ctx::Handle<ctx::MainCtx>,
     tracker_client: Client,
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,
@@ -23,7 +23,7 @@ pub async fn make_periodic_announces(
 }
 
 pub async fn make_preliminary_announces(
-    mut ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
+    ctx_handle: ctx::Handle<ctx::PreliminaryCtx>,
     trackers_handle: Client,
     peer_reporter: PeerReporter,
     config_dir: impl AsRef<Path>,

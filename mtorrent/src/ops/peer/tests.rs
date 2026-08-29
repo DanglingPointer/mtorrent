@@ -133,7 +133,7 @@ async fn run_listening_seeder(
     let mut local_id = [0u8; 20];
     local_id[..6].copy_from_slice("seeder".as_bytes());
 
-    let mut handle = ctx::MainCtx::new(
+    let handle = ctx::MainCtx::new(
         metainfo,
         PeerId::from(&local_id),
         listener_ip.port(),
@@ -211,7 +211,7 @@ async fn pass_torrent_from_peer_to_peer(
 
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
 
-    let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
+    let (downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
         .with_socket(downloader_sock)
         .with_local_ip(ip1)
         .with_remote_ip(ip2)
@@ -285,7 +285,7 @@ async fn test_pass_metadata_from_peer_to_peer() {
 
     let (downloader_sock, uploader_sock) = io::duplex(17 * 1024);
 
-    let (mut downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
+    let (downloader_ctx_handle, downloader_fut) = PeerBuilder::new()
         .with_socket(downloader_sock)
         .with_magnet_link(magnet)
         .build_preliminary();
@@ -426,7 +426,7 @@ async fn test_reevaluate_interest_every_min() {
         .write(KEEPALIVE)
         .build();
 
-    let (mut ctx, peer_future) = PeerBuilder::new().with_socket(socket).build_main();
+    let (ctx, peer_future) = PeerBuilder::new().with_socket(socket).build_main();
 
     let _ = try_join!(time::timeout(min!(3), peer_future), async move {
         time::sleep(sec!(119)).await;
@@ -767,7 +767,7 @@ async fn test_clear_pending_requests_when_peer_chokes() {
         })])
         .build();
 
-    let (mut ctx, peer_future) = PeerBuilder::new()
+    let (ctx, peer_future) = PeerBuilder::new()
         .with_socket(socket)
         .with_metainfo_file(metainfo_filepath)
         .build_main();

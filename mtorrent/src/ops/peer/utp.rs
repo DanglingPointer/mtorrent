@@ -36,7 +36,7 @@ pub fn launch_utp(
             let v4_result = create_endpoint(local_addr_v4, interface.as_deref());
 
             for (result, local_addr) in [(&v4_result, local_addr_v4), (&v6_result, local_addr_v6)] {
-                match &result {
+                match result {
                     Ok((_, _)) => log::info!("Created uTP endpoint on {local_addr}"),
                     Err(e) => log::error!("Failed to create uTP endpoint on {local_addr}: {e}"),
                 }

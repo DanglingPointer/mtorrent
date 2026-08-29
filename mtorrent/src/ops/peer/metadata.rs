@@ -144,7 +144,7 @@ async fn process_pex(inner: &mut Data, pex: Box<PeerExchangeData>) {
 }
 
 pub async fn new_peer(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     extended_chans: pwp::ExtendedChannels,
     peer_reporter: PeerReporter,
 ) -> io::Result<Peer> {

@@ -182,7 +182,7 @@ impl MainCtx {
 }
 
 pub async fn periodic_metadata_check<L: StateListener>(
-    mut ctx_handle: Handle<PreliminaryCtx>,
+    ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
 ) -> io::Result<impl IntoIterator<Item = SocketAddr> + 'static> {
@@ -206,7 +206,7 @@ pub async fn periodic_metadata_check<L: StateListener>(
 }
 
 pub async fn periodic_state_dump<L: StateListener>(
-    mut ctx_handle: Handle<MainCtx>,
+    ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
 ) {

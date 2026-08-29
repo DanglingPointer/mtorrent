@@ -135,7 +135,7 @@ macro_rules! update_state_with_msg {
 }
 
 pub async fn new_peer(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
     storage: data::StorageClient,

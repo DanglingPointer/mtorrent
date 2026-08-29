@@ -24,7 +24,7 @@ struct Data {
 pub struct Peer(Box<Data>);
 
 pub async fn new_peer(
-    mut handle: CtxHandle,
+    handle: CtxHandle,
     rx: pwp::ExtendedRxChannel,
     tx: pwp::ExtendedTxChannel,
     metadata_storage: data::StorageClient,
