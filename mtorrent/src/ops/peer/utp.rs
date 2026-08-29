@@ -1,6 +1,7 @@
 use super::super::PeerReporter;
 use bytes::BytesMut;
 use futures_util::{Stream, StreamExt, stream};
+use local_async_utils::prelude::*;
 use mtorrent_core::{pe, pwp, utp};
 use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
@@ -140,145 +141,141 @@ async fn run_bridge<
     L1: Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
     L2: Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
 >(
-    (endpoint_v4, mut listener_v4): (utp::EndpointHandle, L1),
-    (endpoint_v6, mut listener_v6): (utp::EndpointHandle, L2),
-    mut cmd_receiver: mpsc::Receiver<Command>,
+    (endpoint_v4, listener_v4): (utp::EndpointHandle, L1),
+    (endpoint_v6, listener_v6): (utp::EndpointHandle, L2),
+    cmd_receiver: mpsc::Receiver<Command>,
 ) {
-    struct Bridge {
-        reporter: Option<PeerReporter>,
-        endpoint_v4: utp::EndpointHandle,
-        endpoint_v6: utp::EndpointHandle,
-    }
+    let (reporter_sender, reporter_receiver) = local_unbounded::channel();
 
-    impl Bridge {
-        async fn report_inbound(&mut self, addr: SocketAddr, data: utp::InboundConnectData) {
-            match self.reporter.as_ref() {
-                Some(reporter) => {
-                    if !reporter.report_accepted_utp(addr, data).await {
-                        self.reporter.take();
-                    }
-                }
-                None => {
-                    log::warn!("Ignored inbound uTP connect: no reporter");
-                }
-            }
-        }
-        async fn process_command(&mut self, cmd: Command) {
-            match cmd {
-                Command::Restart { reporter } => {
-                    self.reporter = Some(reporter);
-                    join!(
-                        self.endpoint_v4.reset_connections(),
-                        self.endpoint_v6.reset_connections(),
-                    );
-                }
-                Command::OutboundConnect { args, resp } => {
-                    let endpoint = match args.peer_addr {
-                        SocketAddr::V4(_) => self.endpoint_v4.clone(),
-                        SocketAddr::V6(_) => self.endpoint_v6.clone(),
-                    };
-                    task::spawn_local(async move {
-                        let ret = time::timeout_at(args.deadline, async {
-                            let mut stream =
-                                endpoint.add_outbound_connection(args.peer_addr).await?;
-                            let crypto = if args.protocol_encryption_enabled {
-                                pe::outbound_handshake(&mut stream, &args.info_hash, &[0u8; 0][..])
-                                    .await?
-                            } else {
-                                None
-                            };
-                            pwp::channels_for_outbound_connection(
-                                &args.local_peer_id,
-                                &args.info_hash,
-                                args.extension_protocol_enabled,
-                                args.peer_addr,
-                                stream,
-                                None,
-                                crypto,
-                            )
-                            .await
-                        })
-                        .await;
-                        _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));
-                    });
-                }
-                Command::InboundConnect { args, resp } => {
-                    let endpoint = match args.peer_addr {
-                        SocketAddr::V4(_) => self.endpoint_v4.clone(),
-                        SocketAddr::V6(_) => self.endpoint_v6.clone(),
-                    };
-                    task::spawn_local(async move {
-                        let ret = time::timeout_at(args.deadline, async {
-                            let stream =
-                                endpoint.add_inbound_connection(args.peer_addr, args.data).await?;
-                            match pe::detect_encryption(stream).await? {
-                                pe::MaybeEncrypted::Plain(stream) => {
-                                    pwp::channels_for_inbound_connection(
-                                        &args.local_peer_id,
-                                        &args.info_hash,
-                                        args.extension_protocol_enabled,
-                                        args.peer_addr,
-                                        stream,
-                                        None,
-                                    )
-                                    .await
-                                }
-                                pe::MaybeEncrypted::Encrypted(mut stream) => {
-                                    let mut ia_buffer = BytesMut::new();
-                                    let crypto = pe::inbound_handshake(
-                                        &mut stream,
-                                        &args.info_hash,
-                                        &mut ia_buffer,
-                                    )
-                                    .await?;
-                                    let (_, stream) = stream.into_parts();
-                                    let stream = pe::PrefixedStream::new(ia_buffer, stream);
-                                    pwp::channels_for_inbound_connection(
-                                        &args.local_peer_id,
-                                        &args.info_hash,
-                                        args.extension_protocol_enabled,
-                                        args.peer_addr,
-                                        stream,
-                                        crypto,
-                                    )
-                                    .await
-                                }
-                            }
-                        })
-                        .await;
-                        _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));
-                    });
-                }
-            }
-        }
+    select! {
+        biased;
+        _ = handle_commands(cmd_receiver, endpoint_v4, endpoint_v6, reporter_sender) => (),
+        _ = handle_inbound(listener_v4, listener_v6, reporter_receiver) => (),
     }
+}
 
-    let mut bridge = Bridge {
-        reporter: None,
-        endpoint_v4,
-        endpoint_v6,
+async fn handle_inbound(
+    mut listener_v4: impl Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
+    mut listener_v6: impl Stream<Item = (SocketAddr, utp::InboundConnectData)> + Unpin,
+    mut reporter_receiver: local_unbounded::Receiver<PeerReporter>,
+) {
+    let Some(mut reporter) = reporter_receiver.next().await else {
+        return;
     };
 
     loop {
+        let next_inbound = async {
+            select! {
+                inbound = listener_v4.next() => inbound,
+                inbound = listener_v6.next() => inbound,
+            }
+        };
+
         select! {
             biased;
-            cmd = cmd_receiver.recv() => {
-                let Some(cmd) = cmd else {
-                    break;
-                };
-                bridge.process_command(cmd).await;
+            received = reporter_receiver.next() => match received {
+                Some(new_reporter) => {
+                    reporter = new_reporter;
+                }
+                None => break,
+            },
+            received = next_inbound => match received {
+                Some((addr, data)) => {
+                    _ = reporter.report_accepted_utp(addr, data).await;
+                }
+                None => break,
+            },
+        }
+    }
+}
+
+async fn handle_commands(
+    mut cmd_receiver: mpsc::Receiver<Command>,
+    endpoint_v4: utp::EndpointHandle,
+    endpoint_v6: utp::EndpointHandle,
+    reporter_sender: local_unbounded::Sender<PeerReporter>,
+) {
+    while let Some(cmd) = cmd_receiver.recv().await {
+        match cmd {
+            Command::Restart { reporter } => {
+                _ = reporter_sender.send(reporter);
+                join!(endpoint_v4.reset_connections(), endpoint_v6.reset_connections(),);
             }
-            inbound = listener_v4.next() => {
-                let Some((addr, data)) = inbound else {
-                    break;
+            Command::OutboundConnect { args, resp } => {
+                let endpoint = match args.peer_addr {
+                    SocketAddr::V4(_) => endpoint_v4.clone(),
+                    SocketAddr::V6(_) => endpoint_v6.clone(),
                 };
-                bridge.report_inbound(addr, data).await;
+                task::spawn_local(async move {
+                    let ret = time::timeout_at(args.deadline, async {
+                        let mut stream = endpoint.add_outbound_connection(args.peer_addr).await?;
+                        let crypto = if args.protocol_encryption_enabled {
+                            pe::outbound_handshake(&mut stream, &args.info_hash, &[0u8; 0][..])
+                                .await?
+                        } else {
+                            None
+                        };
+                        pwp::channels_for_outbound_connection(
+                            &args.local_peer_id,
+                            &args.info_hash,
+                            args.extension_protocol_enabled,
+                            args.peer_addr,
+                            stream,
+                            None,
+                            crypto,
+                        )
+                        .await
+                    })
+                    .await;
+                    _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));
+                });
             }
-            inbound = listener_v6.next() => {
-                let Some((addr, data)) = inbound else {
-                    break;
+            Command::InboundConnect { args, resp } => {
+                let endpoint = match args.peer_addr {
+                    SocketAddr::V4(_) => endpoint_v4.clone(),
+                    SocketAddr::V6(_) => endpoint_v6.clone(),
                 };
-                bridge.report_inbound(addr, data).await;
+                task::spawn_local(async move {
+                    let ret = time::timeout_at(args.deadline, async {
+                        let stream =
+                            endpoint.add_inbound_connection(args.peer_addr, args.data).await?;
+                        match pe::detect_encryption(stream).await? {
+                            pe::MaybeEncrypted::Plain(stream) => {
+                                pwp::channels_for_inbound_connection(
+                                    &args.local_peer_id,
+                                    &args.info_hash,
+                                    args.extension_protocol_enabled,
+                                    args.peer_addr,
+                                    stream,
+                                    None,
+                                )
+                                .await
+                            }
+                            pe::MaybeEncrypted::Encrypted(mut stream) => {
+                                let mut ia_buffer = BytesMut::new();
+                                let crypto = pe::inbound_handshake(
+                                    &mut stream,
+                                    &args.info_hash,
+                                    &mut ia_buffer,
+                                )
+                                .await?;
+                                let (_, stream) = stream.into_parts();
+                                let stream = pe::PrefixedStream::new(ia_buffer, stream);
+                                pwp::channels_for_inbound_connection(
+                                    &args.local_peer_id,
+                                    &args.info_hash,
+                                    args.extension_protocol_enabled,
+                                    args.peer_addr,
+                                    stream,
+                                    crypto,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                    .await;
+                    _ = resp.send(ret.unwrap_or_else(|e| Err(e.into())));
+                });
             }
         }
     }
