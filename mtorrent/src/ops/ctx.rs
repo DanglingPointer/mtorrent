@@ -11,8 +11,9 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 use std::{cmp, fs, io, mem};
-use tokio::time;
+use tokio::time::{self, Instant};
 
 pub type Handle<C> = LocalShared<C>;
 
@@ -211,8 +212,12 @@ pub async fn periodic_state_dump<L: StateListener>(
 ) {
     define_with_ctx!(ctx_handle);
 
-    with_ctx!(|ctx| {
-        match config::load_state(&outputdir, ctx.metainfo.info_hash()) {
+    let mut progress_file = config::open_progress_file(&outputdir)
+        .inspect_err(|e| log::error!("Failed to open progress file: {e}"))
+        .ok();
+
+    if let Some(file) = progress_file.as_mut() {
+        with_ctx!(|ctx| match config::load_progress(file, ctx.metainfo.info_hash()) {
             Ok(mut state) => {
                 state.resize(ctx.pieces.piece_count(), false);
                 ctx.accountant.submit_bitfield(&state);
@@ -223,30 +228,38 @@ pub async fn periodic_state_dump<L: StateListener>(
                 }
             }
             Err(e) => {
-                log::warn!("Failed to load saved state: {e}");
+                log::warn!("Failed to load saved progress: {e}");
             }
-        }
-    });
+        });
+    }
 
     // sleep for 5s because of integration tests
     #[cfg(debug_assertions)]
     time::sleep(sec!(5)).await;
 
-    let mut check_finished = || {
-        with_ctx!(|ctx| {
-            if let Err(e) = config::save_state(
-                &outputdir,
+    const MIN_WRITE_INTERVAL: Duration = sec!(1);
+    let mut last_write_time = Instant::now();
+
+    let mut check_finished = move |ctx: &mut MainCtx| {
+        // save progress to file if enough time has passed since the last write
+        if let Some(file) = progress_file.as_mut()
+            && last_write_time.elapsed() >= MIN_WRITE_INTERVAL
+        {
+            if let Err(e) = config::save_progress(
+                file,
                 ctx.metainfo.info_hash(),
                 ctx.accountant.generate_bitfield(),
             ) {
-                log::warn!("Failed to save state to file: {e}");
+                log::warn!("Failed to save progress to file: {e}");
             }
-            state_listener.on_snapshot(main_snapshot(ctx)).is_break() || ctrl::is_finished(ctx)
-        })
+            last_write_time = Instant::now();
+        }
+        // submit state snapshot and check if we should stop
+        state_listener.on_snapshot(main_snapshot(ctx)).is_break() || ctrl::is_finished(ctx)
     };
 
     let mut timer = time::interval(L::INTERVAL);
-    while !check_finished() {
+    while with_ctx!(|ctx| !check_finished(ctx)) {
         timer.tick().await;
     }
 }

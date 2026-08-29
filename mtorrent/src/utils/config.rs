@@ -16,12 +16,12 @@ use mtorrent_core::trackers::TrackerUrl;
 use mtorrent_utils::benc::Element;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Seek;
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::{fs, io};
 
 const FILENAME_TRACKERS: &str = ".mtorrent_cfg";
-const FILENAME_STATE: &str = ".mtorrent";
+const FILENAME_PROGRESS: &str = ".mtorrent";
 
 #[derive(Default, Serialize, Deserialize)]
 struct Trackers {
@@ -87,9 +87,28 @@ pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io:
     Ok(())
 }
 
+/// Open an existing progress file for reading and writing or create a new one if it doesn't exist.
+pub fn open_progress_file(config_dir: impl AsRef<Path>) -> io::Result<fs::File> {
+    // r+w mode, open existing or create new
+    fs::File::options()
+        .write(true)
+        .read(true)
+        .create(true)
+        .truncate(false)
+        .append(false)
+        .open(config_dir.as_ref().join(FILENAME_PROGRESS))
+}
+
 /// Read the bencoded progress file, and get the state of `info_hash`.
-pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
-    let buf = fs::read(config_dir.as_ref().join(FILENAME_STATE))?;
+pub fn load_progress(file: &mut fs::File, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
+    let mut buf = Vec::with_capacity(file.metadata().map(|meta| meta.len()).unwrap_or(0) as usize);
+    file.seek(io::SeekFrom::Start(0))?;
+    file.read_to_end(&mut buf)?;
+
+    if buf.is_empty() {
+        return Err(io::ErrorKind::NotFound.into());
+    }
+
     let bencode = Element::from_bytes(&buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
 
@@ -105,18 +124,14 @@ pub fn load_state(config_dir: impl AsRef<Path>, info_hash: &[u8; 20]) -> io::Res
 }
 
 /// Write the state of `info_hash` to the bencoded progress file.
-pub fn save_state(
-    config_dir: impl AsRef<Path>,
-    info_hash: &[u8; 20],
-    state: Bitfield,
-) -> io::Result<()> {
+pub fn save_progress(file: &mut fs::File, info_hash: &[u8; 20], state: Bitfield) -> io::Result<()> {
     let key = Element::ByteString(info_hash.into());
     let value = Element::ByteString(state.into_vec());
     let root: BTreeMap<Element, Element> = [(key, value)].into();
     let bencode = Element::Dictionary(root);
 
-    let config_path = config_dir.as_ref().join(FILENAME_STATE);
-    fs::write(config_path, bencode.encode())?;
+    file.seek(io::SeekFrom::Start(0))?;
+    file.write_all(&bencode.encode())?;
     Ok(())
 }
 
@@ -126,22 +141,23 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn test_write_and_read_state_for_single_torrent() {
-        let dir = "test_write_and_read_state_for_single_torrent";
+    fn test_write_and_read_progress_for_single_torrent() {
+        let dir = "test_write_and_read_progress_for_single_torrent";
         fs::create_dir_all(dir).unwrap();
 
         let info_hash = [b'a'; 20];
         let piece_count = 668;
         let bitfield = Bitfield::repeat(true, piece_count);
 
-        assert!(
-            matches!(load_state(dir, &info_hash), Err(e) if e.kind() == io::ErrorKind::NotFound)
-        );
+        let mut file = open_progress_file(dir).unwrap();
 
-        save_state(dir, &info_hash, bitfield.clone()).unwrap();
-        assert!(Path::new(dir).join(FILENAME_STATE).is_file());
+        let err = load_progress(&mut file, &info_hash).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
 
-        let mut loaded_state = load_state(dir, &info_hash).unwrap();
+        save_progress(&mut file, &info_hash, bitfield.clone()).unwrap();
+        assert!(Path::new(dir).join(FILENAME_PROGRESS).is_file());
+
+        let mut loaded_state = load_progress(&mut file, &info_hash).unwrap();
         loaded_state.resize(bitfield.len(), false);
         assert_eq!(bitfield, loaded_state);
 

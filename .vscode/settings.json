@@ -24,6 +24,19 @@
     "rust-analyzer.runnables.extraTestBinaryArgs": [
         "--nocapture"
     ],
+    "rust-analyzer.runnables.test.overrideCommand": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "${package}",
+        "${target_arg}",
+        "${target}",
+        "--",
+        "${test_name}",
+        "${exact}",
+        "${include_ignored}"
+    ],
     "rust-analyzer.rustfmt.extraArgs": [
         "+nightly"
     ],
