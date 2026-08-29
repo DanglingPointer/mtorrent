@@ -110,7 +110,7 @@ pub async fn run_pwp_listener(
         log::info!("TCP listener started on {}", listener.local_addr()?);
         loop {
             let (stream, addr) = listener.accept().await?;
-            peer_reporter.report_accepted(addr, stream).await;
+            peer_reporter.report_accepted_tcp(addr, stream).await;
         }
     }
     .await;

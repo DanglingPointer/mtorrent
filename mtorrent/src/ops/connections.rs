@@ -2,7 +2,7 @@ use derive_more::Debug;
 use local_async_utils::prelude::*;
 use mtorrent_core::pwp::{PeerOrigin, TransportProto};
 use mtorrent_core::utp;
-use mtorrent_utils::connect_throttle::{ConnectPermit, ConnectThrottle};
+use mtorrent_utils::connect_recorder::{ConnectRecord, ConnectRecorder};
 use rand::RngExt;
 use std::cell::Cell;
 use std::net::SocketAddr;
@@ -57,7 +57,7 @@ impl PeerReporter {
         }
     }
 
-    pub async fn report_accepted(&self, addr: SocketAddr, stream: TcpStream) -> bool {
+    pub async fn report_accepted_tcp(&self, addr: SocketAddr, stream: TcpStream) -> bool {
         self.accepted_reporter
             .send(InboundConnect {
                 addr,
@@ -143,7 +143,8 @@ pub fn connect_control<C: PeerConnector + 'static>(
             reconnect_reporter: discovered_tx,
             discovered_peers_receiver: discovered_rx,
             accepted_peers_receiver: accepted_rx,
-            throttle: ConnectThrottle::new(connector.max_connections(), 512),
+            recorder: ConnectRecorder::new(512),
+            capacity: local_semaphore::Semaphore::new(connector.max_connections()),
             connector: Rc::new(connector),
             canceller: CancellationToken::new(),
         },
@@ -155,7 +156,8 @@ pub struct ConnectControl<C: PeerConnector> {
     discovered_peers_receiver: mpsc::Receiver<OutboundConnect>,
     accepted_peers_receiver: mpsc::Receiver<InboundConnect>,
     connector: Rc<C>,
-    throttle: ConnectThrottle,
+    recorder: ConnectRecorder,
+    capacity: local_semaphore::Semaphore,
     canceller: CancellationToken,
 }
 
@@ -174,17 +176,19 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
     pub async fn run(mut self) {
         let _auto_cancel = self.canceller.clone().drop_guard();
         loop {
+            let slot = self.capacity.acquire_permit().await;
+
             select! {
                 biased;
                 accepted = self.accepted_peers_receiver.recv() => {
                     match accepted {
-                        Some(peer) => self.handle_accepted(peer),
+                        Some(peer) => self.handle_accepted(peer, slot),
                         None => return,
                     }
                 }
                 discovered = self.discovered_peers_receiver.recv() => {
                     match discovered {
-                        Some(peer) => self.handle_discovered(peer).await,
+                        Some(peer) => self.handle_discovered(peer, slot),
                         None => return,
                     }
                 }
@@ -192,10 +196,8 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
         }
     }
 
-    async fn handle_discovered(&mut self, outbound: OutboundConnect) {
-        if let Some(permit) =
-            self.throttle.permit_for_outbound(outbound.addr, outbound.attempt > 0).await
-        {
+    fn handle_discovered(&mut self, outbound: OutboundConnect, slot: local_semaphore::Permit) {
+        if let Some(record) = self.recorder.create_record(outbound.addr, outbound.attempt > 0) {
             let peer_addr = outbound.addr;
             let connector = self.connector.clone();
             let canceller = self.canceller.clone();
@@ -205,7 +207,8 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
                     .run_until_cancelled(outgoing_pwp_connection(
                         outbound,
                         &*connector,
-                        permit,
+                        slot,
+                        record,
                         reconnect_reporter,
                     ))
                     .await;
@@ -216,8 +219,8 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
         }
     }
 
-    fn handle_accepted(&mut self, inbound: InboundConnect) {
-        if let Some(permit) = self.throttle.permit_for_inbound(inbound.addr) {
+    fn handle_accepted(&mut self, inbound: InboundConnect, slot: local_semaphore::Permit) {
+        if let Some(record) = self.recorder.create_record(inbound.addr, true) {
             let peer_addr = inbound.addr;
             let connector = self.connector.clone();
             let canceller = self.canceller.clone();
@@ -227,7 +230,8 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
                     .run_until_cancelled(incoming_pwp_connection(
                         inbound,
                         &*connector,
-                        permit,
+                        slot,
+                        record,
                         reconnect_reporter,
                     ))
                     .await;
@@ -235,6 +239,11 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
                     log!(e, "Incoming peer connection from {peer_addr} failed: {e}");
                 }
             });
+        } else {
+            log::error!(
+                "Incoming peer connection from {} rejected: already connected",
+                inbound.addr
+            );
         }
     }
 }
@@ -269,7 +278,8 @@ fn with_jitter(duration: Duration) -> Duration {
 async fn outgoing_pwp_connection<C: PeerConnector>(
     connect: OutboundConnect,
     connector: &C,
-    mut permit: ConnectPermit,
+    slot: local_semaphore::Permit,
+    record: ConnectRecord,
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
     log::debug!("{connect:?} initiated");
@@ -338,7 +348,7 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         Ok(connection) => connection,
         Err(e) => {
             if connect.attempt < connector.max_connect_retries() && !is_fatal_error(&e) {
-                permit.release_slot();
+                drop(slot);
                 time::sleep_until(connect_deadline).await;
                 _ = reconnect_reporter
                     .send(OutboundConnect {
@@ -364,9 +374,11 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         && connected_time.elapsed() > sec!(5)
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
-        permit.release_slot();
+        drop(slot);
         // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
+
+        drop(record);
         _ = reconnect_reporter
             .send(OutboundConnect {
                 attempt: 1,
@@ -374,14 +386,14 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
             })
             .await;
     }
-
     run_result
 }
 
 async fn incoming_pwp_connection<C: PeerConnector>(
     connect: InboundConnect,
     connector: &C,
-    mut permit: ConnectPermit,
+    slot: local_semaphore::Permit,
+    record: ConnectRecord,
     reconnect_reporter: mpsc::Sender<OutboundConnect>,
 ) -> io::Result<()> {
     log::debug!("{connect:?} accepted");
@@ -411,10 +423,11 @@ async fn incoming_pwp_connection<C: PeerConnector>(
         && !is_fatal_error(e)
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
-        permit.release_slot();
+        drop(slot);
         // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
 
+        drop(record);
         _ = reconnect_reporter
             .send(OutboundConnect {
                 addr: connect.addr,
@@ -871,7 +884,7 @@ mod tests {
             connector
                 .expect_run_connection()
                 .once()
-                .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(port as i32))
+                .with(eq(PeerOrigin::Dht), eq(TransportProto::Tcp), eq(port as i32))
                 .returning(|_, _, _| pending::<io::Result<()>>().boxed());
         }
 
@@ -880,9 +893,8 @@ mod tests {
             task::spawn_local(ctrl.run());
 
             for port in 1..=100 {
+                println!("reporting discovered peer {}", port);
                 let peer_addr = addr(port);
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).now_or_never().unwrap());
                 task::yield_now().await;
                 assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
                 task::yield_now().await;

@@ -6,7 +6,7 @@ pub trait Policy: Clone {
     fn capacity(&self) -> usize;
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Bounded(usize);
 impl Policy for Bounded {
     fn capacity(&self) -> usize {
@@ -14,7 +14,7 @@ impl Policy for Bounded {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Unbounded;
 impl Policy for Unbounded {
     fn capacity(&self) -> usize {

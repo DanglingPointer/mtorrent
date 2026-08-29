@@ -7,9 +7,6 @@ pub mod bandwidth;
 /// Bencoding parser and serializer.
 pub mod benc;
 
-/// Rate-limited connection permits for peer addresses.
-pub mod connect_throttle;
-
 /// FIFO set with optional bounded capacity and deduplication.
 pub mod fifo_set;
 
@@ -35,3 +32,6 @@ pub mod upnp;
 
 /// Dedicated single-threaded Tokio worker thread.
 pub mod worker;
+
+/// Connect recorder for tracking connected and known peers.
+pub mod connect_recorder;
