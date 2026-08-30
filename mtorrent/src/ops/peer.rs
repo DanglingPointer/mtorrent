@@ -8,7 +8,7 @@ mod utp;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod testutils;
+pub(super) mod testutils;
 
 pub use tcp::run_pwp_listener;
 pub use utp::{UtpHandle, launch_utp};

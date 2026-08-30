@@ -28,6 +28,8 @@
         "cargo",
         "nextest",
         "run",
+        "--nocapture",
+        "--no-fail-fast",
         "--package",
         "${package}",
         "${target_arg}",

@@ -19,7 +19,7 @@ use tokio::task;
 
 /// Opaque data for an inbound connection attempt, returned by [`InboundListener`] and consumed by
 /// [`EndpointHandle::add_inbound_connection`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundConnectData(Header);
 
 /// Stream of incoming connection attempts (i.e. received SYN packets that don't belong to an
@@ -215,5 +215,21 @@ impl SplitStream for DataStream {
 
     fn split(&mut self) -> (Self::Ingress<'_>, Self::Egress<'_>) {
         self.pipe.split()
+    }
+}
+
+#[cfg(feature = "mocks")]
+impl InboundConnectData {
+    pub fn new_mock() -> Self {
+        Self(Header {
+            type_ver: TypeVer::Syn,
+            extension: 0,
+            connection_id: 0x1234,
+            timestamp_us: 0x56789abc,
+            timestamp_diff_us: 0xdef01234,
+            wnd_size: 0x456789ab,
+            seq_nr: 0x9abc.into(),
+            ack_nr: 0xdef0.into(),
+        })
     }
 }

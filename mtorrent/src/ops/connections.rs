@@ -456,31 +456,19 @@ impl PeerReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::peer::testutils::setup;
     use futures_util::FutureExt;
     use mockall::predicate::eq;
     use rstest::rstest;
     use rstest_reuse::{self, *};
     use std::future::pending;
     use std::net::Ipv4Addr;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
     use tokio::time::{sleep, sleep_until};
 
     fn addr(i: u16) -> SocketAddr {
         (Ipv4Addr::LOCALHOST, 1024 + i).into()
-    }
-
-    /// ```no_run
-    /// run_in_local_set! { }
-    /// ```
-    macro_rules! run_in_local_set {
-        ($($tokens:tt)+) => {{
-            task::LocalSet::new()
-                .run_until(async move {
-                    $($tokens)+
-
-                    sleep(Duration::MAX).await;
-                }).await;
-        }};
     }
 
     #[template]
@@ -514,8 +502,10 @@ mod tests {
     }
 
     #[apply(for_retriable_errors)]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_outbound_connect_retry_on_error(error_kind: io::ErrorKind) {
+        setup(false);
+
         let start_time = Instant::now();
         let peer_addr = addr(1);
 
@@ -555,21 +545,23 @@ mod tests {
                 async move { Err(io::Error::from(error_kind)) }.boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+
+        sleep(Duration::MAX).await;
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_outbound_connect_retry_on_timeout() {
+        setup(false);
+
         let start_time = Instant::now();
         let peer_addr = addr(1);
 
@@ -621,21 +613,23 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+
+        sleep(Duration::MAX).await;
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_successful_connect_after_retry() {
+        setup(false);
+
         let start_time = Instant::now();
         let peer_addr = addr(1);
 
@@ -684,105 +678,110 @@ mod tests {
             })
             .returning(|_, _, _| pending::<io::Result<()>>().boxed());
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+
+        sleep(Duration::MAX).await;
     }
 
     #[apply(for_fatal_errors)]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_outbound_connect_no_retry(error_kind: io::ErrorKind) {
-        run_in_local_set! {
-            let start_time = Instant::now();
-            let peer_addr = addr(1);
+        setup(false);
 
-            let mut connector = MockPeerConnector::new();
-            connector.expect_max_connections().return_const(100usize);
-            connector.expect_connect_retry_interval().return_const(sec!(10));
-            connector.expect_max_connect_retries().return_const(2usize);
+        let start_time = Instant::now();
+        let peer_addr = addr(1);
 
-            connector
-                .expect_outbound_connect_and_handshake()
-                .once()
-                .withf(move |&addr, &use_pe, _deadline| addr == peer_addr && Instant::now() == start_time && use_pe)
-                .returning(move |_, _, _deadline| {
-                    async move { Err(io::Error::from(error_kind)) }.boxed()
-                });
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_retry_interval().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
 
-            connector
-                .expect_outbound_utp_connect_and_handshake()
-                .once()
-                .withf(move |&addr, &use_pe, _deadline| addr == peer_addr && Instant::now() == start_time && use_pe)
-                .returning(move |_, _, _deadline| {
-                    async move { Err(io::Error::from(error_kind)) }.boxed()
-                });
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .withf(move |&addr, &use_pe, _deadline| {
+                addr == peer_addr && Instant::now() == start_time && use_pe
+            })
+            .returning(move |_, _, _deadline| {
+                async move { Err(io::Error::from(error_kind)) }.boxed()
+            });
 
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        connector
+            .expect_outbound_utp_connect_and_handshake()
+            .once()
+            .withf(move |&addr, &use_pe, _deadline| {
+                addr == peer_addr && Instant::now() == start_time && use_pe
+            })
+            .returning(move |_, _, _deadline| {
+                async move { Err(io::Error::from(error_kind)) }.boxed()
+            });
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
+
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
     }
 
     #[apply(for_retriable_errors)]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_connection_reconnect(error_kind: io::ErrorKind) {
-        run_in_local_set! {
-            let peer_addr = addr(1);
+        setup(false);
 
-            let mut connector = MockPeerConnector::new();
-            connector.expect_max_connections().return_const(100usize);
-            connector.expect_connect_retry_interval().return_const(sec!(10));
-            connector.expect_max_connect_retries().return_const(2usize);
-            connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _, _| {
-                std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        let peer_addr = addr(1);
+
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_retry_interval().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_utp_connect_and_handshake().returning(move |_, _, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
+
+        connector
+            .expect_outbound_connect_and_handshake()
+            .times(9)
+            .returning(|_, _, _| async move { Ok(42) }.boxed());
+        connector
+            .expect_run_connection()
+            .times(9)
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .returning(move |_, _, _| {
+                async move {
+                    sleep(sec!(6)).await;
+                    Err(io::Error::from(error_kind))
+                }
+                .boxed()
             });
 
-            connector
-                .expect_outbound_connect_and_handshake()
-                .times(9)
-                .returning(|_, _, _| {
-                    async move { Ok(42) }.boxed()
-                });
-            connector
-                .expect_run_connection()
-                .times(9)
-                .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
-                .returning(move |_, _, _| {
-                    async move {
-                        sleep(sec!(6)).await;
-                        Err(io::Error::from(error_kind))
-                    }.boxed()
-                });
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
-
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-            sleep(sec!(60)).await;
-            task::yield_now().await;
-            drop(reporter);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+        sleep(sec!(60)).await;
+        task::yield_now().await;
+        drop(reporter);
     }
 
     #[apply(for_fatal_errors)]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_connection_no_reconnect_on_fatal_error(error_kind: io::ErrorKind) {
+        setup(false);
+
         let peer_addr = addr(1);
 
         let mut connector = MockPeerConnector::new();
@@ -809,21 +808,21 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_connection_no_reconnect_if_short_lived() {
+        setup(false);
+
         let peer_addr = addr(1);
 
         let mut connector = MockPeerConnector::new();
@@ -850,21 +849,21 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
-            sleep(sec!(1)).await;
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
-        }
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
+        sleep(sec!(1)).await;
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_concurrent_connections_up_to_capacity() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -888,25 +887,30 @@ mod tests {
                 .returning(|_, _, _| pending::<io::Result<()>>().boxed());
         }
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            for port in 1..=100 {
-                println!("reporting discovered peer {}", port);
-                let peer_addr = addr(port);
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
-            }
+        for port in 1..=100 {
+            println!("reporting discovered peer {}", port);
+            let peer_addr = addr(port);
             task::yield_now().await;
-            assert!(reporter.report_discovered(addr(12345), PeerOrigin::Pex).now_or_never().is_none());
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
+            task::yield_now().await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
         }
+        task::yield_now().await;
+        assert!(
+            reporter
+                .report_discovered(addr(12345), PeerOrigin::Pex)
+                .now_or_never()
+                .is_none()
+        );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_release_capacity_when_retrying() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(1usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -926,25 +930,30 @@ mod tests {
                 });
         }
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
 
-            for port in 1..=100 {
-                let peer_addr = addr(port);
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).now_or_never().unwrap());
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
-                task::yield_now().await;
-                assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
-            }
-            drop(reporter);
+        for port in 1..=100 {
+            let peer_addr = addr(port);
+            task::yield_now().await;
+            assert!(
+                reporter
+                    .report_discovered(peer_addr, PeerOrigin::Tracker)
+                    .now_or_never()
+                    .unwrap()
+            );
+            task::yield_now().await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).now_or_never().unwrap());
+            task::yield_now().await;
+            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).now_or_never().unwrap());
         }
+        drop(reporter);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_outbound_connect_explicit_cancellation() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -968,23 +977,23 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let canceller = CancellationToken::new();
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
+        let canceller = CancellationToken::new();
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 2);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 2);
 
-            canceller.cancel();
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 1);
-        }
+        canceller.cancel();
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 1);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_outbound_connect_implicit_cancellation() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -1008,23 +1017,23 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            let run_task = task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        let run_task = task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 2);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 2);
 
-            drop(reporter);
-            task::yield_now().await;
-            assert!(run_task.is_finished());
-            assert_eq!(Arc::strong_count(&token), 1);
-        }
+        drop(reporter);
+        task::yield_now().await;
+        assert!(run_task.is_finished());
+        assert_eq!(Arc::strong_count(&token), 1);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_connection_explicit_cancellation() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -1054,23 +1063,23 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let canceller = CancellationToken::new();
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
+        let canceller = CancellationToken::new();
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 2);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 2);
 
-            canceller.cancel();
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 1);
-        }
+        canceller.cancel();
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 1);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_run_connection_implicit_cancellation() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().return_const(100usize);
         connector.expect_connect_retry_interval().return_const(sec!(10));
@@ -1100,23 +1109,23 @@ mod tests {
                 .boxed()
             });
 
-        run_in_local_set! {
-            let (reporter, ctrl) = connect_control(move |_| connector);
-            let run_task = task::spawn_local(ctrl.run());
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        let run_task = task::spawn_local(ctrl.run());
 
-            assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
-            task::yield_now().await;
-            assert_eq!(Arc::strong_count(&token), 2);
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+        task::yield_now().await;
+        assert_eq!(Arc::strong_count(&token), 2);
 
-            drop(reporter);
-            task::yield_now().await;
-            assert!(run_task.is_finished());
-            assert_eq!(Arc::strong_count(&token), 1);
-        }
+        drop(reporter);
+        task::yield_now().await;
+        assert!(run_task.is_finished());
+        assert_eq!(Arc::strong_count(&token), 1);
     }
 
     #[tokio::test(flavor = "local")]
     async fn test_peer_reporter_filters_out_invalid_peer_addrs() {
+        setup(false);
+
         let mut connector = MockPeerConnector::new();
         connector.expect_max_connections().once().return_const(100usize);
 
@@ -1135,5 +1144,75 @@ mod tests {
             assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
             task::yield_now().await;
         }
+    }
+
+    #[tokio::test(flavor = "local")]
+    async fn test_prioritize_inbound_connections_over_outbound() {
+        setup(false);
+
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().once().return_const(1usize);
+        connector.expect_connect_retry_interval().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        let initial_peer_addr = addr(5000);
+        let discovered_addr = addr(5001);
+        let accepted_addr = addr(5002);
+
+        let (initial_peer_exit, initial_exit_receiver) = oneshot::channel::<()>();
+        let initial_exit_receiver = Arc::new(Mutex::new(Some(initial_exit_receiver)));
+
+        let accepted_data = utp::InboundConnectData::new_mock();
+
+        // initial peer expectations
+        connector
+            .expect_outbound_connect_and_handshake()
+            .once()
+            .with(eq(initial_peer_addr), eq(true), mockall::predicate::always())
+            .returning(move |_, _, _deadline| async move { Ok(42) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Tcp), eq(42))
+            .returning(move |_, _, _| {
+                let receiver = initial_exit_receiver.clone();
+                async move {
+                    let receiver = receiver.lock().unwrap().take().unwrap();
+                    _ = receiver.await;
+                    Ok(())
+                }
+                .boxed()
+            });
+
+        // accepted peer expectations
+        connector
+            .expect_inbound_utp_connect_and_handshake()
+            .once()
+            .with(eq(accepted_addr), mockall::predicate::always(), eq(accepted_data.clone()))
+            .returning(move |_, _deadline, _stream| async move { Ok(43) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Listener), eq(TransportProto::Utp), eq(43))
+            .returning(|_, _, _| pending::<io::Result<()>>().boxed());
+
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
+
+        // initial peer
+        assert!(reporter.report_discovered(initial_peer_addr, PeerOrigin::Tracker).await);
+        task::yield_now().await;
+
+        // new discovered peer (should be ignored)
+        assert!(reporter.report_discovered(discovered_addr, PeerOrigin::Dht).await);
+        task::yield_now().await;
+
+        // accepted peer (should be prioritized)
+        assert!(reporter.report_accepted_utp(accepted_addr, accepted_data).await);
+        task::yield_now().await;
+
+        // signal initial peer to exit
+        initial_peer_exit.send(()).unwrap();
+        task::yield_now().await;
     }
 }
