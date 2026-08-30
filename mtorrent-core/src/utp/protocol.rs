@@ -447,7 +447,7 @@ mod tests {
         };
 
         skip_extensions(&mut data_with_ext, &header).unwrap();
-        assert_eq!(data_with_ext, &[b'm'][..]); // All extension bytes should be skipped
+        assert_eq!(data_with_ext, b"m"); // All extension bytes should be skipped
     }
 
     #[test]

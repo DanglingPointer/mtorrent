@@ -600,21 +600,19 @@ impl TryFrom<ResponseMsg> for AnnouncePeerResponse {
 
 fn serialize_nodes(nodes: impl ExactSizeIterator<Item = (U160, SocketAddrV4)>) -> Vec<u8> {
     let mut buffer = vec![0u8; nodes.len() * 26];
-    for ((id, addr), dst) in iter::zip(nodes, buffer.chunks_exact_mut(26)) {
-        unsafe {
-            dst.get_unchecked_mut(0..20).copy_from_slice(id.as_raw_slice());
-            dst.get_unchecked_mut(20..24).copy_from_slice(&addr.ip().octets());
-            dst.get_unchecked_mut(24..26).copy_from_slice(&addr.port().to_be_bytes());
-        }
+    for ((id, addr), dst) in iter::zip(nodes, buffer.as_chunks_mut::<26>().0) {
+        dst[0..20].copy_from_slice(id.as_raw_slice());
+        dst[20..24].copy_from_slice(&addr.ip().octets());
+        dst[24..26].copy_from_slice(&addr.port().to_be_bytes());
     }
     buffer
 }
 
 fn deserialize_nodes(data: &[u8]) -> impl Iterator<Item = (U160, SocketAddrV4)> + '_ {
-    data.chunks_exact(26).map(|chunk| unsafe {
-        let id_bytes: [u8; 20] = chunk.get_unchecked(0..20).try_into().unwrap_unchecked();
-        let ipv4_octets: [u8; 4] = chunk.get_unchecked(20..24).try_into().unwrap_unchecked();
-        let port = u16::from_be_bytes(chunk.get_unchecked(24..26).try_into().unwrap_unchecked());
+    data.as_chunks::<26>().0.iter().map(|chunk| unsafe {
+        let id_bytes: [u8; 20] = chunk[0..20].try_into().unwrap_unchecked();
+        let ipv4_octets: [u8; 4] = chunk[20..24].try_into().unwrap_unchecked();
+        let port = u16::from_be_bytes(chunk[24..26].try_into().unwrap_unchecked());
         (U160::from(id_bytes), SocketAddrV4::new(Ipv4Addr::from(ipv4_octets), port))
     })
 }

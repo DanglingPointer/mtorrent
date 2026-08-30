@@ -1,4 +1,4 @@
-FROM rust:1.96.0
+FROM rust:1.98.0
 
 RUN rustup component add clippy llvm-tools-preview
 RUN rustup component add --toolchain nightly rustfmt

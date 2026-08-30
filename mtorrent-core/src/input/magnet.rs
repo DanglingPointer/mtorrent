@@ -45,7 +45,7 @@ impl str::FromStr for MagnetLink {
                     Some(hex_str) if hex_str.len() == 40 => {
                         let mut bytes = [0u8; 20];
                         for (src, dest) in
-                            iter::zip(hex_str.as_bytes().chunks_exact(2), bytes.iter_mut())
+                            iter::zip(hex_str.as_bytes().as_chunks::<2>().0, bytes.iter_mut())
                         {
                             let src_str = str::from_utf8(src)
                                 .map_err(|e| ParseError::InvalidInfoHash(Box::new(e)))?;

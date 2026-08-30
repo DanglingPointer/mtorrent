@@ -395,8 +395,8 @@ impl TryFrom<&[u8]> for ScrapeResponse {
     type Error = ParseError;
 
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
-        fn to_scrape_entry(mut src: &[u8]) -> ScrapeResponseEntry {
-            assert!(src.remaining() == 12);
+        fn to_scrape_entry(src: &[u8; 12]) -> ScrapeResponseEntry {
+            let mut src = &src[..];
             let seeders = src.get_u32();
             let completed = src.get_u32();
             let leechers = src.get_u32();
@@ -406,7 +406,7 @@ impl TryFrom<&[u8]> for ScrapeResponse {
                 leechers,
             }
         }
-        Ok(ScrapeResponse(src.chunks_exact(12).map(to_scrape_entry).collect()))
+        Ok(ScrapeResponse(src.as_chunks::<12>().0.iter().map(to_scrape_entry).collect()))
     }
 }
 
@@ -665,7 +665,7 @@ mod tests {
             client_socket
                 .connect(&tracker_addr)
                 .await
-                .unwrap_or_else(|e| panic!("Failed to connect to {}: {}", &tracker_addr, e));
+                .unwrap_or_else(|e| panic!("Failed to connect to {tracker_addr}: {e}"));
 
             let mut client = TrackerConnection::from_connected_socket(client_socket).await.unwrap();
 

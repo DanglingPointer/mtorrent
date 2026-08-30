@@ -18,7 +18,7 @@ impl str::FromStr for U160 {
             return Err(format!("input length is {}, expected 40", hex_str.len()));
         }
         let mut bytes = [0u8; 20];
-        for (src, dest) in iter::zip(hex_str.as_bytes().chunks_exact(2), bytes.iter_mut()) {
+        for (src, dest) in iter::zip(hex_str.as_bytes().as_chunks::<2>().0, bytes.iter_mut()) {
             let src_str = str::from_utf8(src).map_err(|e| e.to_string())?;
             *dest = u8::from_str_radix(src_str, 16).map_err(|e| e.to_string())?;
         }
