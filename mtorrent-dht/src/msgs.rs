@@ -609,12 +609,19 @@ fn serialize_nodes(nodes: impl ExactSizeIterator<Item = (U160, SocketAddrV4)>) -
 }
 
 fn deserialize_nodes(data: &[u8]) -> impl Iterator<Item = (U160, SocketAddrV4)> + '_ {
-    data.as_chunks::<26>().0.iter().map(|chunk| unsafe {
-        let id_bytes: [u8; 20] = chunk[0..20].try_into().unwrap_unchecked();
-        let ipv4_octets: [u8; 4] = chunk[20..24].try_into().unwrap_unchecked();
-        let port = u16::from_be_bytes(chunk[24..26].try_into().unwrap_unchecked());
-        (U160::from(id_bytes), SocketAddrV4::new(Ipv4Addr::from(ipv4_octets), port))
-    })
+    fn parse_chunk(chunk: &[u8; 26]) -> (U160, SocketAddrV4) {
+        let Some((id, addr)) = chunk.split_last_chunk::<6>() else { unreachable!() };
+
+        let mut id_bytes = [0u8; 20];
+        id_bytes.copy_from_slice(id);
+
+        let [o3, o2, o1, o0, p1, p0] = *addr;
+        let ipv4_addr = Ipv4Addr::new(o3, o2, o1, o0);
+        let port = u16::from_be_bytes([p1, p0]);
+
+        (U160::from(id_bytes), SocketAddrV4::new(ipv4_addr, port))
+    }
+    data.as_chunks::<26>().0.iter().map(parse_chunk)
 }
 
 fn to_text_dictionary(data: benc::Element) -> Result<BTreeMap<String, benc::Element>, Error> {

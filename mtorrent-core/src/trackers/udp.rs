@@ -396,17 +396,15 @@ impl TryFrom<&[u8]> for ScrapeResponse {
 
     fn try_from(src: &[u8]) -> Result<Self, Self::Error> {
         fn to_scrape_entry(src: &[u8; 12]) -> ScrapeResponseEntry {
-            let mut src = &src[..];
-            let seeders = src.get_u32();
-            let completed = src.get_u32();
-            let leechers = src.get_u32();
+            let [s3, s2, s1, s0, c3, c2, c1, c0, l3, l2, l1, l0] = *src;
             ScrapeResponseEntry {
-                seeders,
-                completed,
-                leechers,
+                seeders: u32::from_be_bytes([s3, s2, s1, s0]),
+                completed: u32::from_be_bytes([c3, c2, c1, c0]),
+                leechers: u32::from_be_bytes([l3, l2, l1, l0]),
             }
         }
-        Ok(ScrapeResponse(src.as_chunks::<12>().0.iter().map(to_scrape_entry).collect()))
+        let (chunks, _) = src.as_chunks::<12>();
+        Ok(ScrapeResponse(chunks.iter().map(to_scrape_entry).collect()))
     }
 }
 

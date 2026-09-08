@@ -43,16 +43,15 @@ impl str::FromStr for MagnetLink {
             match key.as_ref() {
                 "xt" => match value.strip_prefix("urn:btih:") {
                     Some(hex_str) if hex_str.len() == 40 => {
-                        let mut bytes = [0u8; 20];
-                        for (src, dest) in
-                            iter::zip(hex_str.as_bytes().as_chunks::<2>().0, bytes.iter_mut())
-                        {
+                        let (hex_bytes, _) = hex_str.as_bytes().as_chunks::<2>();
+                        let mut bin_bytes = [0u8; 20];
+                        for (src, dest) in iter::zip(hex_bytes, bin_bytes.iter_mut()) {
                             let src_str = str::from_utf8(src)
                                 .map_err(|e| ParseError::InvalidInfoHash(Box::new(e)))?;
                             *dest = u8::from_str_radix(src_str, 16)
                                 .map_err(|e| ParseError::InvalidInfoHash(Box::new(e)))?;
                         }
-                        info_hash = Some(bytes);
+                        info_hash = Some(bin_bytes);
                     }
                     _ => return Err(ParseError::InvalidInfoHash(format!("{value}").into())),
                 },
