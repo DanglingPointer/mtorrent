@@ -3,6 +3,7 @@ use local_async_utils::prelude::*;
 use mtorrent_core::pwp::{PeerOrigin, TransportProto};
 use mtorrent_core::utp;
 use mtorrent_utils::connect_recorder::{ConnectRecord, ConnectRecorder};
+use mtorrent_utils::task_scope::TaskScope;
 use rand::RngExt;
 use std::cell::Cell;
 use std::net::SocketAddr;
@@ -10,10 +11,9 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, io};
 use tokio::net::TcpStream;
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{self, Instant};
-use tokio::{select, task};
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 struct OutboundConnect {
@@ -146,7 +146,7 @@ pub fn connect_control<C: PeerConnector + 'static>(
             recorder: ConnectRecorder::new(512),
             capacity: local_semaphore::Semaphore::new(connector.max_connections()),
             connector: Rc::new(connector),
-            canceller: CancellationToken::new(),
+            child_tasks: TaskScope::new(),
         },
     )
 }
@@ -158,7 +158,7 @@ pub struct ConnectControl<C: PeerConnector> {
     connector: Rc<C>,
     recorder: ConnectRecorder,
     capacity: local_semaphore::Semaphore,
-    canceller: CancellationToken,
+    child_tasks: TaskScope,
 }
 
 macro_rules! log {
@@ -174,7 +174,6 @@ macro_rules! log {
 
 impl<C: PeerConnector + 'static> ConnectControl<C> {
     pub async fn run(mut self) {
-        let _auto_cancel = self.canceller.clone().drop_guard();
         loop {
             let slot = self.capacity.acquire_permit().await;
 
@@ -200,19 +199,12 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
         if let Some(record) = self.recorder.create_record(outbound.addr, outbound.attempt > 0) {
             let peer_addr = outbound.addr;
             let connector = self.connector.clone();
-            let canceller = self.canceller.clone();
             let reconnect_reporter = self.reconnect_reporter.clone();
-            task::spawn_local(async move {
-                let result = canceller
-                    .run_until_cancelled(outgoing_pwp_connection(
-                        outbound,
-                        &*connector,
-                        slot,
-                        record,
-                        reconnect_reporter,
-                    ))
-                    .await;
-                if let Some(Err(e)) = result {
+            self.child_tasks.spawn_local(async move {
+                if let Err(e) =
+                    outgoing_pwp_connection(outbound, &*connector, slot, record, reconnect_reporter)
+                        .await
+                {
                     log!(e, "Outgoing peer connection to {peer_addr} failed: {e}");
                 }
             });
@@ -223,19 +215,12 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
         if let Some(record) = self.recorder.create_record(inbound.addr, true) {
             let peer_addr = inbound.addr;
             let connector = self.connector.clone();
-            let canceller = self.canceller.clone();
             let reconnect_reporter = self.reconnect_reporter.clone();
-            task::spawn_local(async move {
-                let result = canceller
-                    .run_until_cancelled(incoming_pwp_connection(
-                        inbound,
-                        &*connector,
-                        slot,
-                        record,
-                        reconnect_reporter,
-                    ))
-                    .await;
-                if let Some(Err(e)) = result {
+            self.child_tasks.spawn_local(async move {
+                if let Err(e) =
+                    incoming_pwp_connection(inbound, &*connector, slot, record, reconnect_reporter)
+                        .await
+                {
                     log!(e, "Incoming peer connection from {peer_addr} failed: {e}");
                 }
             });
@@ -465,6 +450,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
+    use tokio::task;
     use tokio::time::{sleep, sleep_until};
 
     fn addr(i: u16) -> SocketAddr {
@@ -977,15 +963,15 @@ mod tests {
                 .boxed()
             });
 
-        let canceller = CancellationToken::new();
+        let mut canceller = task::JoinSet::new();
         let (reporter, ctrl) = connect_control(move |_| connector);
-        task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
+        canceller.spawn_local(ctrl.run());
 
         assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
         task::yield_now().await;
         assert_eq!(Arc::strong_count(&token), 2);
 
-        canceller.cancel();
+        canceller.abort_all();
         task::yield_now().await;
         assert_eq!(Arc::strong_count(&token), 1);
     }
@@ -1063,15 +1049,15 @@ mod tests {
                 .boxed()
             });
 
-        let canceller = CancellationToken::new();
+        let mut canceller = task::JoinSet::new();
         let (reporter, ctrl) = connect_control(move |_| connector);
-        task::spawn_local(canceller.clone().run_until_cancelled_owned(ctrl.run()));
+        canceller.spawn_local(ctrl.run());
 
         assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
         task::yield_now().await;
         assert_eq!(Arc::strong_count(&token), 2);
 
-        canceller.cancel();
+        canceller.abort_all();
         task::yield_now().await;
         assert_eq!(Arc::strong_count(&token), 1);
     }

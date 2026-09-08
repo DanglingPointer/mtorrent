@@ -18,7 +18,6 @@ log = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 local_async_utils = { workspace = true }
-tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }

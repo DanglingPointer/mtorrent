@@ -35,3 +35,6 @@ pub mod worker;
 
 /// Connect recorder for tracking connected and known peers.
 pub mod connect_recorder;
+
+#[doc(hidden)]
+pub mod task_scope;

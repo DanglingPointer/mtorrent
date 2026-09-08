@@ -10,6 +10,7 @@ use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
+use mtorrent_utils::task_scope::TaskScope;
 use mtorrent_utils::{info_stopwatch, warn_stopwatch};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -20,8 +21,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::{select, task, time};
-use tokio_util::sync::CancellationToken;
+use tokio::{select, time};
 
 type RoutingTable = kademlia::RoutingTable<16>;
 
@@ -41,7 +41,7 @@ pub struct Processor {
 
     config: Config,
     config_dir: PathBuf,
-    canceller: CancellationToken,
+    child_tasks: TaskScope,
 }
 
 impl Processor {
@@ -72,7 +72,7 @@ impl Processor {
             node_table,
             known_nodes: HashSet::with_capacity(512),
             search_callbacks: HashMap::new(),
-            canceller: CancellationToken::new(),
+            child_tasks: TaskScope::new(),
         }
     }
 
@@ -126,11 +126,7 @@ impl Processor {
 
             for addr in bootstrapping_nodes {
                 if self.known_nodes.insert(addr) {
-                    task::spawn_local(
-                        self.canceller
-                            .clone()
-                            .run_until_cancelled_owned(probe_node(addr, self.task_ctx.clone())),
-                    );
+                    self.child_tasks.spawn_local(probe_node(addr, self.task_ctx.clone()));
                 }
             }
 
@@ -151,22 +147,12 @@ impl Processor {
         match event {
             NodeEvent::Discovered(node) => {
                 if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
-                    task::spawn_local(
-                        self.canceller.clone().run_until_cancelled_owned(probe_node(
-                            node.addr,
-                            self.task_ctx.clone(),
-                        )),
-                    );
+                    self.child_tasks.spawn_local(probe_node(node.addr, self.task_ctx.clone()));
                 }
             }
             NodeEvent::Connected(node) => {
                 if self.node_table.insert_node(&node.id, &node.addr) {
-                    task::spawn_local(
-                        self.canceller.clone().run_until_cancelled_owned(keep_alive_node(
-                            node,
-                            self.task_ctx.clone(),
-                        )),
-                    );
+                    self.child_tasks.spawn_local(keep_alive_node(node, self.task_ctx.clone()));
                 } else {
                     self.known_nodes.remove(&node.addr);
                 }
@@ -286,11 +272,7 @@ impl Processor {
         }
 
         if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
-            task::spawn_local(
-                self.canceller
-                    .clone()
-                    .run_until_cancelled_owned(probe_node(node.addr, self.task_ctx.clone())),
-            );
+            self.child_tasks.spawn_local(probe_node(node.addr, self.task_ctx.clone()));
         }
     }
 
@@ -299,11 +281,7 @@ impl Processor {
         match cmd {
             Command::AddNode { addr } => {
                 if self.known_nodes.insert(addr) {
-                    task::spawn_local(
-                        self.canceller
-                            .clone()
-                            .run_until_cancelled_owned(probe_node(addr, self.task_ctx.clone())),
-                    );
+                    self.child_tasks.spawn_local(probe_node(addr, self.task_ctx.clone()));
                 }
                 Continue(())
             }
@@ -333,11 +311,8 @@ impl Processor {
                     if !initial_nodes.is_empty() {
                         self.search_callbacks.insert(search_data.target, callback);
                         self.search_callbacks.retain(|_, cb| !cb.is_closed());
-                        task::spawn_local(run_search(
-                            search_data,
-                            self.canceller.child_token(),
-                            initial_nodes.into_iter(),
-                        ));
+                        self.child_tasks
+                            .spawn_local(run_search(search_data, initial_nodes.into_iter()));
                     } else {
                         log::warn!("Search can't proceed - no initial nodes");
                     }
@@ -365,7 +340,5 @@ impl Drop for Processor {
         if let Err(e) = self.config.save(&self.config_dir) {
             log::error!("Failed to save config: {e}");
         }
-
-        self.canceller.cancel();
     }
 }

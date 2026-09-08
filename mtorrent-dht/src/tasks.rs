@@ -6,14 +6,14 @@ use crate::kademlia::Node;
 use local_async_utils::prelude::*;
 use mtorrent_utils::fifo_set::BoundedFifoSet;
 use mtorrent_utils::info_stopwatch;
+use mtorrent_utils::task_scope::TaskScope;
 use rand::RngExt;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio::{select, task, time};
-use tokio_util::sync::CancellationToken;
+use tokio::{select, time};
 
 const PING_INTERVAL: Duration = min!(1);
 const PING_JITTER: Duration = sec!(5);
@@ -221,11 +221,12 @@ pub struct SearchTaskData {
 
 pub async fn run_search(
     data: SearchTaskData,
-    canceller: CancellationToken, // should be child canceller
     initial_nodes: impl ExactSizeIterator<Item = Node>,
 ) -> Result<()> {
     assert_ne!(initial_nodes.len(), 0, "can't start DHT search without initial nodes");
     let _sw = info_stopwatch!("Search for peers with target {}", data.target);
+
+    let mut subtasks = TaskScope::new();
 
     let (peer_sender, mut peer_receiver) = mpsc::channel(1);
     let (node_sender, mut node_receiver) = mpsc::channel(1);
@@ -237,14 +238,14 @@ pub async fn run_search(
     queried_nodes.extend(initial_nodes);
 
     for node in &queried_nodes {
-        task::spawn_local(canceller.clone().run_until_cancelled_owned(query_node_for_peers(
+        subtasks.spawn_local(query_node_for_peers(
             node.clone(),
             data.target,
             data.local_peer_port,
             data.ctx.clone(),
             node_sender.clone(),
             peer_sender.clone(),
-        )));
+        ));
     }
 
     loop {
@@ -252,7 +253,7 @@ pub async fn run_search(
             biased;
             _ = data.cmd_result_sender.closed() => {
                 // this search has been terminated. Stop all subtasks and try insert nodes in the routing table
-                canceller.cancel();
+                subtasks.abort_all();
                 log::info!(
                     "Search for peers with target {} queried {} nodes and discovered {} peers",
                     data.target,
@@ -264,10 +265,6 @@ pub async fn run_search(
                 }
                 break;
             }
-            _ = canceller.cancelled() => {
-                // DHT shutting down
-                break;
-            }
             Some(peer_addr) = peer_receiver.recv() => {
                 if discovered_peers.insert_or_replace(peer_addr) {
                     log::debug!("Discovered new peer {peer_addr} for target {}", data.target);
@@ -277,15 +274,13 @@ pub async fn run_search(
             }
             Some(node) = node_receiver.recv() => {
                 if queried_nodes.insert_or_replace(node.clone()) {
-                    task::spawn_local(canceller.clone().run_until_cancelled_owned(
-                        query_node_for_peers(
-                            node,
-                            data.target,
-                            data.local_peer_port,
-                            data.ctx.clone(),
-                            node_sender.clone(),
-                            peer_sender.clone(),
-                        ),
+                    subtasks.spawn_local(query_node_for_peers(
+                        node,
+                        data.target,
+                        data.local_peer_port,
+                        data.ctx.clone(),
+                        node_sender.clone(),
+                        peer_sender.clone(),
                     ));
                 }
             }

@@ -5,14 +5,13 @@ mod url;
 use local_async_utils::sec;
 use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_scope::TaskScope;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use std::{io, iter};
 use tokio::net::lookup_host;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task;
-use tokio_util::sync::CancellationToken;
 
 pub use url::TrackerUrl;
 
@@ -174,13 +173,7 @@ pub struct Manager {
 
 impl Manager {
     pub async fn run(mut self) {
-        let mut canceller = CancellationToken::new();
-
-        macro_rules! spawn_child_task {
-            ($fut:expr) => {{
-                task::spawn(canceller.clone().run_until_cancelled_owned($fut));
-            }};
-        }
+        let mut child_tasks = TaskScope::new();
 
         let interface = self.config.bind_interface.as_deref();
         let local_ipv4 = net::get_bind_addr_v4(interface);
@@ -194,7 +187,7 @@ impl Manager {
                 Command::Announce(request) => match request.url {
                     TrackerUrl::Http(url) => {
                         if let Some(client) = http_client.clone() {
-                            spawn_child_task!(async move {
+                            child_tasks.spawn(async move {
                                 let result = do_http_announce(&client, &url, request.data).await;
                                 _ = request.responder.send(result).inspect_err(|_| {
                                     log::warn!("Failed to send back http announce result")
@@ -207,7 +200,7 @@ impl Manager {
                     }
                     TrackerUrl::Udp(addr) => {
                         let interface = self.config.bind_interface.clone();
-                        spawn_child_task!(async move {
+                        child_tasks.spawn(async move {
                             let result = do_udp_announce(
                                 &addr,
                                 request.data,
@@ -225,7 +218,7 @@ impl Manager {
                 Command::Scrape(request) => match request.url {
                     TrackerUrl::Http(url) => {
                         if let Some(client) = http_client.clone() {
-                            spawn_child_task!(async move {
+                            child_tasks.spawn(async move {
                                 let result = do_http_scrape(&client, &url, request.data).await;
                                 _ = request.responder.send(result).inspect_err(|_| {
                                     log::warn!("Failed to send back http scrape result")
@@ -238,7 +231,7 @@ impl Manager {
                     }
                     TrackerUrl::Udp(addr) => {
                         let interface = self.config.bind_interface.clone();
-                        spawn_child_task!(async move {
+                        child_tasks.spawn(async move {
                             let result = do_udp_scrape(
                                 &addr,
                                 request.data,
@@ -255,12 +248,10 @@ impl Manager {
                 },
                 Command::AbortAll => {
                     log::info!("Aborting all operations");
-                    canceller.cancel();
-                    canceller = CancellationToken::new();
+                    child_tasks.abort_all();
                 }
             }
         }
-        canceller.cancel();
     }
 }
 
@@ -421,7 +412,7 @@ async fn do_udp_scrape(
 mod tests {
     use super::*;
     use tokio::net::UdpSocket;
-    use tokio::time;
+    use tokio::{task, time};
 
     fn init_loopback() -> (Client, Manager) {
         let iface = if cfg!(target_os = "windows") {
