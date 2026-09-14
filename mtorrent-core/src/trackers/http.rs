@@ -59,13 +59,45 @@ fn set_interface(builder: ClientBuilder, interface: Option<&str>) -> ClientBuild
     }
 }
 
+/// Drops the resolved addresses that a tracker is not allowed at.
+struct Resolver;
+
+impl reqwest::dns::Resolve for Resolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|addr| super::url::is_allowed_ip(addr.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err(format!("no allowed address for {}", name.as_str()).into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            attempt.error("too many redirects")
+        } else if attempt.url().host_str().is_some_and(|host| !super::url::is_allowed_host(host)) {
+            attempt.error("redirect to an address that a tracker can't be at")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
 impl TrackerClient {
     pub fn new(local_addr: IpAddr, interface: Option<&str>) -> Result<Self, Error> {
         let builder = reqwest::Client::builder()
             .gzip(true)
             .user_agent(APP_USER_AGENT)
             .local_address(local_addr)
-            .timeout(sec!(30));
+            .timeout(sec!(30))
+            .dns_resolver(Resolver)
+            .redirect(redirect_policy());
 
         let inner = set_interface(builder, interface).build()?;
         Ok(TrackerClient(inner))
@@ -557,5 +589,38 @@ mod tests {
             let leechers = response.incomplete().unwrap();
             assert!(peer_count <= seeders + leechers);
         }
+    }
+
+    #[tokio::test]
+    async fn test_resolver_leaves_out_local_network_addresses() {
+        use reqwest::dns::Resolve;
+
+        let addrs = Resolver.resolve("localhost".parse().unwrap()).await.unwrap();
+        assert_ne!(addrs.count(), 0);
+
+        let result = Resolver.resolve("169.254.169.254".parse().unwrap()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_no_redirect_to_local_network_address() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/announce")
+            .match_query(mockito::Matcher::Any)
+            .with_status(302)
+            .with_header("location", "http://169.254.169.254/announce")
+            .create_async()
+            .await;
+
+        let client = TrackerClient::new(Ipv4Addr::UNSPECIFIED.into(), None).unwrap();
+        let tracker_url = format!("{}/announce", server.url());
+        let request = TrackerRequestBuilder::try_from(tracker_url.as_str()).unwrap();
+        let err = tokio::time::timeout(sec!(5), client.announce(request))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(&err, Error::Http(e) if e.is_redirect()), "{err}");
+        mock.assert_async().await;
     }
 }

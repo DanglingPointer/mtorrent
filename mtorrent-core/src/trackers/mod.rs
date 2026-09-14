@@ -336,7 +336,10 @@ async fn new_udp_client(
         udp::TrackerConnection::from_connected_socket(socket).await
     }
 
-    for tracker_addr in lookup_host(tracker_addr_str).await? {
+    for tracker_addr in lookup_host(tracker_addr_str)
+        .await?
+        .filter(|addr| url::is_allowed_ip(addr.ip()))
+    {
         let local_ip = match &tracker_addr {
             SocketAddr::V4(_) => local_ipv4.into(),
             SocketAddr::V6(_) => local_ipv6.into(),
@@ -636,6 +639,22 @@ mod tests {
                 "192.168.0.1:6888".parse().unwrap()
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_udp_tracker_at_local_network_address_is_not_contacted() {
+        let result = time::timeout(
+            sec!(1),
+            new_udp_client(
+                "169.254.169.254:6969",
+                None,
+                Ipv4Addr::UNSPECIFIED,
+                Ipv6Addr::UNSPECIFIED,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(e) if e.kind() == io::ErrorKind::ConnectionRefused));
     }
 
     #[tokio::test]
