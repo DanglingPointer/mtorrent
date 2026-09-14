@@ -53,6 +53,7 @@ impl From<LeechingPeer> for Peer {
 }
 
 pub struct AvailabilityReporter {
+    handle: CtxHandle,
     tx: pwp::UploadTxChannel,
     piece_downloaded_channel: broadcast::Receiver<usize>,
     reported_pieces: pwp::Bitfield,
@@ -62,30 +63,30 @@ impl AvailabilityReporter {
     pub async fn run(mut self) -> io::Result<()> {
         loop {
             match self.piece_downloaded_channel.recv().await {
-                Ok(downloaded_piece) => {
-                    let mut reported = self
-                        .reported_pieces
-                        .get_mut(downloaded_piece)
-                        .expect("Piece count mismatch");
-                    if reported == false {
-                        reported.set(true);
-                        self.tx
-                            .send_message(pwp::UploaderMessage::Have {
-                                piece_index: downloaded_piece,
-                            })
-                            .await?;
-                    }
-                }
+                Ok(downloaded_piece) => self.report(downloaded_piece).await?,
                 Err(RecvError::Lagged(skipped)) => {
-                    log::warn!(
-                        "Failed to notify {} about {} downloaded pieces",
-                        self.tx.remote_ip(),
-                        skipped
+                    // peer is slower than downloading, catch up from the bitfield
+                    log::debug!(
+                        "Missed {} downloaded pieces for {}, reporting from bitfield",
+                        skipped,
+                        self.tx.remote_ip()
                     );
-                    debug_assert!(false, "AvailabilityReporter overflow");
+                    let bitfield = self.handle.with(|ctx| ctx.accountant.generate_bitfield());
+                    for piece_index in bitfield.iter_ones() {
+                        self.report(piece_index).await?;
+                    }
                 }
                 Err(RecvError::Closed) => break,
             }
+        }
+        Ok(())
+    }
+
+    async fn report(&mut self, piece_index: usize) -> io::Result<()> {
+        let mut reported = self.reported_pieces.get_mut(piece_index).expect("Piece count mismatch");
+        if reported == false {
+            reported.set(true);
+            self.tx.send_message(pwp::UploaderMessage::Have { piece_index }).await?;
         }
         Ok(())
     }
@@ -154,6 +155,7 @@ pub async fn new_peer(
     }
     update_ctx!(inner);
     let reporter = AvailabilityReporter {
+        handle: inner.handle.clone(),
         tx: inner.tx.clone(),
         piece_downloaded_channel,
         reported_pieces: bitfield,

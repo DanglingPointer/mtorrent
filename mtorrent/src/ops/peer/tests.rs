@@ -536,6 +536,38 @@ async fn test_block_request_extra_retry_when_peer_has_seeded() {
 }
 
 #[tokio::test(start_paused = true, flavor = "local")]
+async fn test_report_all_pieces_when_availability_reporter_lags() {
+    setup(true);
+    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(2));
+    let (mut sock, farend_sock) = io::duplex(17 * 1024);
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(farend_sock)
+        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
+        .build_main();
+
+    let _ = join!(peer_future, async move {
+        // download more pieces than the channel can hold
+        for piece_index in 0..4 {
+            ctx.with(|ctx| assert!(ctx.accountant.submit_piece(piece_index)));
+            piece_downloaded_channel.send(piece_index).unwrap();
+        }
+
+        let expected = msgs![
+            pwp::UploaderMessage::Have { piece_index: 0 },
+            pwp::UploaderMessage::Have { piece_index: 1 },
+            pwp::UploaderMessage::Have { piece_index: 2 },
+            pwp::UploaderMessage::Have { piece_index: 3 }
+        ];
+        let mut buf = vec![0u8; expected.len()];
+        sock.read_exact(&mut buf).await.unwrap();
+        assert_eq!(buf, expected);
+
+        let result = time::timeout(sec!(1), sock.read(&mut buf)).await;
+        assert!(matches!(result, Err(_timeout)));
+    });
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
 async fn test_respect_peer_reqq() {
     setup(true);
     let metainfo_filepath = "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent"; // piece size > 16K

@@ -82,6 +82,7 @@ pub struct PeerBuilder {
     content_path: Option<PathBuf>,
     extensions_enabled: bool,
     has_all_pieces: bool,
+    piece_downloaded_channel: Option<Rc<broadcast::Sender<usize>>>,
 }
 
 impl PeerBuilder {
@@ -128,6 +129,10 @@ impl PeerBuilder {
     }
     pub fn with_all_pieces(mut self) -> Self {
         self.has_all_pieces = true;
+        self
+    }
+    pub fn with_piece_downloaded_channel(mut self, channel: Rc<broadcast::Sender<usize>>) -> Self {
+        self.piece_downloaded_channel = Some(channel);
         self
     }
     #[must_use]
@@ -200,7 +205,9 @@ impl PeerBuilder {
                 ctx_handle: ctx_handle.clone(),
                 pwp_worker_handle: tokio::runtime::Handle::current(),
                 peer_reporter: PeerReporter::new_mock(),
-                piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+                piece_downloaded_channel: self
+                    .piece_downloaded_channel
+                    .unwrap_or_else(|| Rc::new(broadcast::Sender::new(1024))),
                 utp_handle: UtpHandle::new_mock(),
             };
             super::run_peer_connection(
