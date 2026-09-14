@@ -1,6 +1,7 @@
 use derive_more::{Debug, Deref};
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize, Serializer};
+use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Parsed tracker address.
@@ -41,6 +42,14 @@ impl<'de> Deserialize<'de> for TrackerUrl {
 
         let text_url = String::deserialize(deserializer)?;
         let parsed_url = url::Url::parse(&text_url).map_err(Error::custom)?;
+        if let Some(host) = parsed_url.host_str()
+            && !is_allowed_host(host)
+        {
+            return Err(Error::invalid_value(
+                Unexpected::Str(&text_url),
+                &"address that isn't link-local, unspecified or broadcast",
+            ));
+        }
         match parsed_url.scheme() {
             "http" | "https" => Ok(TrackerUrl::Http(Http(text_url))),
             "udp" => Ok(TrackerUrl::Udp(Udp(format!(
@@ -55,6 +64,20 @@ impl<'de> Deserialize<'de> for TrackerUrl {
             scheme => Err(Error::invalid_value(Unexpected::Str(scheme), &"supported scheme")),
         }
     }
+}
+
+/// Refuses link-local (e.g. 169.254.169.254), unspecified and broadcast addresses.
+pub(super) fn is_allowed_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => !(ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()),
+        IpAddr::V6(ip) => !(ip.is_unicast_link_local() || ip.is_unspecified()),
+    }
+}
+
+/// Host names are checked once they are resolved.
+pub(super) fn is_allowed_host(host: &str) -> bool {
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    host.parse().map_or(true, is_allowed_ip)
 }
 
 impl FromStr for TrackerUrl {
@@ -124,5 +147,35 @@ mod tests {
 
         let err = "ssh://open.stealth.si:80/announce".parse::<TrackerUrl>().unwrap_err();
         assert!(err.to_string().contains("expected supported scheme"), "{err}");
+    }
+
+    #[test]
+    fn test_refuse_trackers_at_local_network_addresses() {
+        let refused = [
+            "http://169.254.169.254/announce",
+            "http://2852039166/announce",
+            "http://[::ffff:169.254.169.254]/announce",
+            "http://0.0.0.0/announce",
+            "http://255.255.255.255/announce",
+            "udp://169.254.1.1:6969/announce",
+            "udp://[fe80::1]:6969/announce",
+            "udp://[::]:6969/announce",
+        ];
+        for tracker in refused {
+            let err = tracker.parse::<TrackerUrl>().unwrap_err();
+            assert!(err.to_string().contains("isn't link-local"), "{tracker}: {err}");
+        }
+
+        let allowed = [
+            "http://127.0.0.1:8000/announce",
+            "http://[::1]:8000/announce",
+            "http://192.168.1.10/announce",
+            "udp://8.8.8.8:6969/announce",
+            "udp://[2001:db8::1]:6969/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+        ];
+        for tracker in allowed {
+            assert!(tracker.parse::<TrackerUrl>().is_ok(), "{tracker}");
+        }
     }
 }
