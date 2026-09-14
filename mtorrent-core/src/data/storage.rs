@@ -1,19 +1,20 @@
 use crate::data::Error;
 use crate::pwp;
 use mtorrent_utils::warn_stopwatch;
+use normalize_path::NormalizePath;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{cmp, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
 /// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory
 /// `parent_dir`. If the files don't exist, new files with the specified size will be created.
-pub fn new_async_storage(
+pub fn new_async_storage<P: AsRef<Path>>(
     parent_dir: impl AsRef<Path>,
-    length_path_it: impl Iterator<Item = (usize, PathBuf)>,
+    length_path_it: impl Iterator<Item = (usize, P)>,
 ) -> Result<(StorageClient, StorageServer), Error> {
-    let storage = Storage::new(parent_dir, length_path_it)?;
+    let storage = Storage::new(parent_dir.as_ref(), length_path_it)?;
     let (client, server) = async_generic_storage(storage);
     Ok((client, StorageServer(server)))
 }
@@ -258,12 +259,19 @@ pub(super) struct GenericStorage<F: RandomAccessReadWrite> {
 }
 
 impl Storage {
-    pub(super) fn new<I: Iterator<Item = (usize, PathBuf)>, P: AsRef<Path>>(
-        parent_dir: P,
-        length_path_it: I,
+    pub(super) fn new<P: AsRef<Path>>(
+        parent_dir: &Path,
+        length_path_it: impl Iterator<Item = (usize, P)>,
     ) -> Result<Self, Error> {
-        let open_file = |(length, path): (usize, PathBuf)| -> io::Result<(usize, fs::File)> {
-            let path = parent_dir.as_ref().join(path);
+        let open_file = |(length, path): (usize, P)| -> io::Result<(usize, fs::File)> {
+            let path = path.as_ref();
+            if !path.is_normalized() || !path.is_relative() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Path {path:?} is not normalized or relative"),
+                ));
+            }
+            let path = parent_dir.join(path);
             if let Some(prefix) = path.parent() {
                 fs::create_dir_all(prefix)?;
             }
@@ -605,5 +613,32 @@ mod tests {
                 assert!(!verify_success);
             })
             .await;
+    }
+
+    #[test]
+    fn test_validate_file_path() {
+        let parent_dir = Path::new("test_storage_validates_file_path");
+        fs::create_dir_all(parent_dir).unwrap();
+
+        let good_file_path = Path::new("subdir/inside.txt");
+        let result = Storage::new(parent_dir, iter::once((1024, good_file_path)));
+        assert!(result.is_ok(), "Expected Ok, but got Err: {:?}", result.err());
+
+        let bad_file_path = Path::new("../outside.txt");
+        let result = Storage::new(parent_dir, iter::once((1024, bad_file_path)));
+        let Err(err) = result else {
+            panic!("Expected error, but got Ok");
+        };
+        assert!(matches!(err, Error::IOError(_)), "Unexpected error: {err:?}");
+
+        let absolute_path =
+            std::env::current_dir().unwrap().canonicalize().unwrap().join("absolute.txt");
+        let result = Storage::new(parent_dir, iter::once((1024, absolute_path)));
+        let Err(err) = result else {
+            panic!("Expected error, but got Ok");
+        };
+        assert!(matches!(err, Error::IOError(_)), "Unexpected error: {err:?}");
+
+        fs::remove_dir_all(parent_dir).unwrap();
     }
 }

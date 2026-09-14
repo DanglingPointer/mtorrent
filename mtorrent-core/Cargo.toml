@@ -33,6 +33,7 @@ form_urlencoded = { workspace = true }
 crypto-bigint = { workspace = true }
 rc4 = { workspace = true }
 pin-project-lite = { workspace = true }
+normalize-path = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
