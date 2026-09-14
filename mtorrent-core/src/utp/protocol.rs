@@ -271,7 +271,7 @@ impl ConnectionState {
             self.last_remote_seq = received_header.seq_nr - seq(1);
         }
         if received_header.timestamp_us != 0 {
-            self.reply_micro = current_timestamp_us() - received_header.timestamp_us;
+            self.reply_micro = current_timestamp_us().wrapping_sub(received_header.timestamp_us);
         }
     }
 
@@ -453,6 +453,26 @@ mod tests {
     #[test]
     fn test_current_timestamp() {
         assert_ne!(current_timestamp_us(), 0);
+    }
+
+    #[test]
+    fn test_reply_delay_when_remote_timestamp_is_ahead() {
+        let mut state = ConnectionState::new_outbound(0x1234);
+        let header = Header {
+            type_ver: TypeVer::State,
+            extension: 0,
+            connection_id: state.conn_id_recv,
+            timestamp_us: 200,
+            timestamp_diff_us: 0,
+            wnd_size: 2048,
+            seq_nr: Seq::from(42),
+            ack_nr: Seq::ZERO,
+        };
+
+        // remote clock is ahead of ours
+        FAKE_CURRENT_TIMESTAMP_US.set(Some(100));
+        state.process_header(&header);
+        assert_eq!(state.reply_micro, 100u32.wrapping_sub(200));
     }
 
     #[test]
