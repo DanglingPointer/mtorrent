@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::{iter, net, str};
 use thiserror::Error;
 
@@ -55,7 +56,11 @@ impl str::FromStr for MagnetLink {
                     }
                     _ => return Err(ParseError::InvalidInfoHash(format!("{value}").into())),
                 },
-                "dn" => name = Some(value.to_string()),
+                "dn" => {
+                    name = Path::new(value.as_ref())
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                }
                 "tr" => trackers.push(value.to_string()),
                 "x.pe" => peers.push(value.parse()?),
                 _ => (),
@@ -145,5 +150,12 @@ mod tests {
 
         let link = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C99"; // too many characters
         assert!(matches!(link.parse::<MagnetLink>(), Err(ParseError::InvalidInfoHash(_))));
+    }
+
+    #[test]
+    fn parse_magnet_link_with_bad_name() {
+        let link = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9&dn=..%2F..%2Fetc%2Fpasswd";
+        let magnet = link.parse::<MagnetLink>().unwrap();
+        assert_eq!(Some("passwd"), magnet.name());
     }
 }
