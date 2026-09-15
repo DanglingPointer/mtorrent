@@ -987,7 +987,7 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     let tracker_port = 9000u16;
     let port = 15002;
 
-    let seeder_ips = (50000u16..50050u16)
+    let seeder_ips = (50150u16..50200u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
