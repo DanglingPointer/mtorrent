@@ -6,7 +6,10 @@
 # mtorrent
 Lightweight Bittorrent engine in Rust. Blazingly fast, incredibly robust and very impressive in general. This is a high-level library crate, for executables see below:
 - CLI version: [`mtorrent-cli`](https://crates.io/crates/mtorrent-cli).
-- GUI version: [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui) or [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui).
+- GUI versions:
+    - [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui)
+    - [`rill`](https://github.com/sachesi/rill) by [@sachesi](https://github.com/sachesi)
+    - [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui) by [@michael-eddy](https://github.com/michael-eddy)
 
 For low-level library components, see [`mtorrent-core`](https://crates.io/crates/mtorrent-core), [`mtorrent-dht`](https://crates.io/crates/mtorrent-dht) and [`mtorrent-utils`](https://crates.io/crates/mtorrent-utils).
 
@@ -15,7 +18,7 @@ Download the latest pre-compiled executable for Linux or Windows here:
 - CLI version: https://github.com/DanglingPointer/mtorrent/releases/latest
 - GUI version: https://github.com/DanglingPointer/mtorrent-gui/releases/latest
 
-Alternatively, compile [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui) locally from source.
+Alternatively, compile [`rill`](https://github.com/sachesi/rill) or [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui) locally from source.
 
 ## Features
 - Peer Wire Protocol over IPv4 and IPv6
@@ -25,3 +28,4 @@ Alternatively, compile [`mtorrent-egui`](https://github.com/DanglingPointer/mtor
 - DHT
 - Protocol Encryption (MSE/PE)
 - uTP
+- sequential download vs rarest-piece-first
