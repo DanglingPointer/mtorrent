@@ -1,6 +1,7 @@
 use super::ctx;
+use crate::app::main::DownloadStrategy;
 use local_async_utils::prelude::*;
-use mtorrent_core::{input, pwp};
+use mtorrent_core::{data, input, pwp};
 use mtorrent_utils::benc;
 use std::collections::BTreeMap;
 use std::io;
@@ -47,21 +48,43 @@ pub fn next_piece_to_request(peer_addr: &SocketAddr, ctx: &ctx::MainCtx) -> Opti
     let (piece_tracker, accountant, pending_requests) =
         (&ctx.piece_tracker, &ctx.accountant, &ctx.pending_requests);
 
-    let not_requested_from_peer =
-        |piece: &usize| !pending_requests.is_piece_requested_from(peer_addr, *piece);
-
-    let not_requested_from_anyone = |piece: &usize| !pending_requests.is_piece_requested(*piece);
-
     // piece_tracker returns not verified pieces while accountant returns not downloaded pieces
-    let missing_pieces_owned_by_peer = || {
+    let rarest_missing_pieces_owned_by_peer = || {
         piece_tracker.missing_pieces_rarest_first().filter(|&piece| {
             piece_tracker.has_peer_piece(peer_addr, piece) && !accountant.has_piece(piece)
         })
     };
 
-    missing_pieces_owned_by_peer()
-        .find(not_requested_from_anyone)
-        .or_else(|| missing_pieces_owned_by_peer().find(not_requested_from_peer))
+    let earliest_missing_pieces_owned_by_peer = || {
+        (0..ctx.pieces.piece_count()).filter(|&piece| {
+            piece_tracker.has_peer_piece(peer_addr, piece) && !accountant.has_piece(piece)
+        })
+    };
+
+    fn find_not_requested<I: Iterator<Item = usize>>(
+        iterator_factory: impl Fn() -> I,
+        pending_requests: &data::PendingRequests,
+        peer_addr: &SocketAddr,
+    ) -> Option<usize> {
+        let not_requested_from_peer =
+            |piece: &usize| !pending_requests.is_piece_requested_from(peer_addr, *piece);
+
+        let not_requested_from_anyone =
+            |piece: &usize| !pending_requests.is_piece_requested(*piece);
+
+        iterator_factory()
+            .find(not_requested_from_anyone)
+            .or_else(|| iterator_factory().find(not_requested_from_peer))
+    }
+
+    match ctx.const_data.download_strategy() {
+        DownloadStrategy::RarestFirst => {
+            find_not_requested(rarest_missing_pieces_owned_by_peer, pending_requests, peer_addr)
+        }
+        DownloadStrategy::Sequential => {
+            find_not_requested(earliest_missing_pieces_owned_by_peer, pending_requests, peer_addr)
+        }
+    }
 }
 
 pub enum IdleDownloadAction {
@@ -699,6 +722,7 @@ mod tests {
             Ipv4Addr::LOCALHOST,
             Ipv6Addr::LOCALHOST,
             None,
+            DownloadStrategy::RarestFirst,
         )
         .unwrap();
         define_with_ctx!(handle);
@@ -710,7 +734,46 @@ mod tests {
             ctx.piece_tracker.add_single_record(&ip(2), 0);
             ctx.piece_tracker.add_single_record(&ip(2), 1);
 
-            ctx.piece_tracker.add_single_record(&ip(3), 1);
+            ctx.piece_tracker.add_single_record(&ip(3), 0);
+
+            assert_eq!(next_piece_to_request(&ip(2), ctx), Some(1));
+            ctx.pending_requests.add(1, &ip(2));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), Some(0));
+            ctx.pending_requests.add(0, &ip(1));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), Some(1));
+            ctx.pending_requests.add(1, &ip(1));
+
+            assert_eq!(next_piece_to_request(&ip(1), ctx), None);
+        });
+    }
+
+    #[test]
+    fn test_request_earliest_piece_not_already_requested() {
+        let metainfo =
+            startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        let handle = MainCtx::new(
+            metainfo,
+            [0u8; 20].into(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+            DownloadStrategy::Sequential,
+        )
+        .unwrap();
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            ctx.piece_tracker.add_single_record(&ip(1), 0);
+            ctx.piece_tracker.add_single_record(&ip(1), 1);
+
+            ctx.piece_tracker.add_single_record(&ip(2), 0);
+            ctx.piece_tracker.add_single_record(&ip(2), 1);
+
+            ctx.piece_tracker.add_single_record(&ip(3), 0);
 
             assert_eq!(next_piece_to_request(&ip(2), ctx), Some(0));
             ctx.pending_requests.add(0, &ip(2));

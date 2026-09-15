@@ -147,6 +147,7 @@ fn main() -> io::Result<()> {
                 use_upnp: !cli.no_upnp,
                 pwp_port: cli.port,
                 bind_interface: cli.interface,
+                download_strategy: Default::default(),
             },
             app::main::Context {
                 dht_handle: dht_cmds,

@@ -1,4 +1,5 @@
 use super::ctrl;
+use crate::app::main::DownloadStrategy;
 use crate::utils::config;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
@@ -60,6 +61,7 @@ pub(super) struct ConstData {
     local_ip_v6: Ipv6Addr,
     bind_interface: Option<String>,
     outbound_pwp_mode: PwpMode,
+    download_strategy: DownloadStrategy,
 }
 
 impl ConstData {
@@ -86,6 +88,9 @@ impl ConstData {
     }
     pub(super) fn pwp_outbound_utp_allowed(&self) -> bool {
         matches!(self.outbound_pwp_mode, PwpMode::Any | PwpMode::UtpOnly)
+    }
+    pub(super) fn download_strategy(&self) -> DownloadStrategy {
+        self.download_strategy
     }
 }
 
@@ -122,6 +127,7 @@ impl PreliminaryCtx {
                 local_ip_v6,
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
+                download_strategy: Default::default(), // unused
             },
         })
     }
@@ -138,6 +144,7 @@ pub struct MainCtx {
 }
 
 impl MainCtx {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         metainfo: input::Metainfo,
         local_peer_id: PeerId,
@@ -146,6 +153,7 @@ impl MainCtx {
         local_ip_v4: Ipv4Addr,
         local_ip_v6: Ipv6Addr,
         bind_interface: Option<String>,
+        download_strategy: DownloadStrategy,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
@@ -175,6 +183,7 @@ impl MainCtx {
                 local_ip_v6,
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
+                download_strategy,
             },
         };
         Ok(Handle::new(ctx))
@@ -312,6 +321,7 @@ impl ConstData {
             local_ip_v6: Ipv6Addr::LOCALHOST,
             bind_interface: None,
             outbound_pwp_mode: PwpMode::Any,
+            download_strategy: Default::default(),
         }
     }
 }

@@ -12,6 +12,17 @@ use std::rc::Rc;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task};
 
+/// Algorithm for selecting which pieces to download next.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum DownloadStrategy {
+    /// Download pieces in the order of rarity, i.e. pieces that are available from the fewest peers
+    /// will be downloaded first.
+    #[default]
+    RarestFirst,
+    /// Download pieces in the order they appear in the torrent.
+    Sequential,
+}
+
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -26,6 +37,8 @@ pub struct Config {
     pub pwp_port: Option<u16>,
     /// Network interface to bind all sockets to.
     pub bind_interface: Option<String>,
+    /// Strategy for downloading pieces.
+    pub download_strategy: DownloadStrategy,
 }
 
 /// Context for a single torrent download.
@@ -58,6 +71,7 @@ struct Params {
     local_ip_v4: Ipv4Addr,
     local_ip_v6: Ipv6Addr,
     bind_interface: Option<String>,
+    download_strategy: DownloadStrategy,
 }
 
 async fn start_upnp(
@@ -157,6 +171,7 @@ pub async fn single_torrent(
         local_ip_v4: local_addr_v4,
         local_ip_v6: local_addr_v6,
         bind_interface: cfg.bind_interface,
+        download_strategy: cfg.download_strategy,
     };
 
     if Path::new(metainfo_uri.as_ref()).is_file() {
@@ -325,6 +340,7 @@ async fn main_stage(
         params.local_ip_v4,
         params.local_ip_v6,
         params.bind_interface.clone(),
+        params.download_strategy,
     )?;
 
     let mut tasks = task::JoinSet::new();
