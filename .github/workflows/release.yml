@@ -17,23 +17,33 @@ jobs:
       matrix:
         platform:
         - os: ubuntu-latest
+          target: linux-x86_64
+          ext: ""
+        - os: macos-latest
+          target: macos-aarch64
           ext: ""
         - os: windows-latest
+          target: windows-x86_64
           ext: ".exe"
+        binary:
+        - mtorrent-cli
+        - dht_node
     runs-on: ${{ matrix.platform.os }}
     steps:
     - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - name: Build executables
-      run: cargo build --release --bin mtorrent-cli --bin dht_node
+      run: cargo build --release --bin ${{ matrix.binary }}
+    - name: Rename binary
+      shell: bash
+      run: mv target/release/${{ matrix.binary }}${{ matrix.platform.ext }} target/release/${{ matrix.binary }}-${{ matrix.platform.target }}${{ matrix.platform.ext }}
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
         name: binaries-${{ matrix.platform.os }}
         path: |
-          target/release/mtorrent-cli${{ matrix.platform.ext }}
-          target/release/dht_node${{ matrix.platform.ext }}
+          target/release/${{ matrix.binary }}-${{ matrix.platform.target }}${{ matrix.platform.ext }}
 
   create-release:
     runs-on: ubuntu-latest
