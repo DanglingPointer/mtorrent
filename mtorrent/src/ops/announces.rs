@@ -109,7 +109,7 @@ async fn announce_periodically(
                     // BrokenPipe means TrackerManager is shutting down
                     log::warn!("Announce to {url:?} failed: {e}. Removing tracker from config");
                     _ = config::remove_tracker(config_dir, &url)
-                        .inspect_err(|e| log::error!("Failed to remove tracker from config: {e}"));
+                        .inspect_err(|e| log::warn!("Failed to remove tracker from config: {e}"));
                 }
                 return;
             }

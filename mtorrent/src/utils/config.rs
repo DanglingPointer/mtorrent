@@ -73,17 +73,12 @@ pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io:
         .open(config_dir.as_ref().join(FILENAME_TRACKERS))?;
 
     let mut saved_trackers: Trackers = serde_json::from_reader(io::BufReader::new(&file))?;
-    if !saved_trackers.trackers.remove(tracker) {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("tracker {tracker:?} not found in config"),
-        ));
+    if saved_trackers.trackers.remove(tracker) {
+        // overwrite the file
+        file.seek(io::SeekFrom::Start(0))?;
+        file.set_len(0)?;
+        serde_json::to_writer_pretty(io::BufWriter::new(&file), &saved_trackers)?;
     }
-
-    // overwrite the file
-    file.seek(io::SeekFrom::Start(0))?;
-    file.set_len(0)?;
-    serde_json::to_writer_pretty(io::BufWriter::new(&file), &saved_trackers)?;
     Ok(())
 }
 
@@ -281,12 +276,17 @@ mod tests {
         );
 
         // remove old trackers
-        for tracker in initial_trackers {
+        for tracker in initial_trackers.clone() {
             remove_tracker(dir, &tracker).unwrap();
         }
 
         let loaded_trackers = load_trackers(dir).unwrap();
         assert_eq!(new_trackers.collect::<BTreeSet<_>>(), loaded_trackers.collect::<BTreeSet<_>>(),);
+
+        // remove non-existing trackers
+        for tracker in initial_trackers {
+            remove_tracker(dir, &tracker).unwrap();
+        }
 
         fs::remove_dir_all(dir).unwrap();
     }
