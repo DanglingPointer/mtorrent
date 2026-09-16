@@ -1,5 +1,6 @@
 use crate::ops;
-use crate::utils::{listener, startup};
+use crate::utils::{join_all_with_timeout, listener, startup};
+use local_async_utils::prelude::*;
 use mtorrent_core::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
@@ -144,17 +145,19 @@ pub async fn single_torrent(
         internal_pwp_port
     };
 
-    let utp_handle = ops::launch_utp(
-        &ctx.pwp_runtime,
+    let mut tasks = task::JoinSet::new();
+
+    let (utp_handle, utp_actor) = ops::init_utp(
         SocketAddrV4::new(local_addr_v4, internal_pwp_port),
         SocketAddrV6::new(local_addr_v6, internal_pwp_port, 0, 0),
         cfg.bind_interface.clone(),
     );
+    tasks.spawn_on(utp_actor.run(), &ctx.pwp_runtime);
 
     let (tracker_client, trackers_mgr) = trackers::init(trackers::Config {
         bind_interface: cfg.bind_interface.clone(),
     });
-    ctx.pwp_runtime.spawn(trackers_mgr.run());
+    tasks.spawn_on(trackers_mgr.run(), &ctx.pwp_runtime);
 
     let handles = Handles {
         dht: ctx.dht_handle.as_ref(),
@@ -207,6 +210,8 @@ pub async fn single_torrent(
         )
         .await?;
     }
+
+    join_all_with_timeout!(tasks, sec!(5));
     Ok(())
 }
 
