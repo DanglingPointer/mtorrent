@@ -1,21 +1,26 @@
 use futures_util::{StreamExt, future};
 use local_async_utils::prelude::*;
-use mtorrent::utils::startup;
+use mtorrent::app;
+use mtorrent::app::main::{Config, Context};
+use mtorrent::utils::{listener, startup};
 use mtorrent_core::input::Metainfo;
 use mtorrent_core::{data, input, pe, pwp, utp};
 use mtorrent_utils::benc;
+use mtorrent_utils::peer_id::PeerId;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 use std::{cmp, fs, io, iter, process};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
-use tokio::{join, task, time};
+use tokio::{join, runtime, task, time};
 
 trait Peer {
     const NEEDS_INPUT_DATA: bool;
@@ -221,7 +226,7 @@ impl Seeder {
                 }
             }
         }
-        println!("Seeder uploaded metainfo successfully");
+        println!("Seeder {index} uploaded metainfo successfully");
     }
 
     async fn seed_content(
@@ -264,14 +269,14 @@ impl Seeder {
                                 requested_block.block_length,
                             )
                             .unwrap_or_else(|_| {
-                                panic!("Seeder received invalid request {requested_block}");
+                                panic!("Seeder {index} received invalid request {requested_block}");
                             });
                         let data = content_storage
                             .read_block(global_offset, requested_block.block_length)
                             .await
                             .unwrap_or_else(|e| {
                                 panic!(
-                                    "Couldn't read {} bytes at offset {}: {}",
+                                    "Seeder {index} couldn't read {} bytes at offset {}: {}",
                                     requested_block.block_length, global_offset, e
                                 )
                             });
@@ -297,6 +302,7 @@ impl Seeder {
                     _msg => (), //println!("Seeder {index} received {msg}"),
                 }
             }
+            println!("Seeder {index} exiting request handler");
         });
 
         let mut remote_pieces = pwp::Bitfield::repeat(false, piece_count);
@@ -380,6 +386,49 @@ impl Peer for Seeder {
                 pieces,
             )
             .await;
+        }
+    }
+}
+
+struct IdlePeer;
+
+impl Peer for IdlePeer {
+    const NEEDS_INPUT_DATA: bool = false;
+
+    async fn run(
+        index: u8,
+        _peer_count: usize,
+        mut download_chans: pwp::DownloadChannels,
+        mut upload_chans: pwp::UploadChannels,
+        ext_chans: Option<pwp::ExtendedChannels>,
+        _content_storage: data::StorageClient,
+        _meta_storage: data::StorageClient,
+        _metainfo: Rc<Metainfo>,
+    ) {
+        let download_fut = async move {
+            while let Ok(msg) = download_chans.1.receive_message().await {
+                println!("Idle peer {index} received message: {:?}", msg);
+            }
+        };
+        let upload_fut = async move {
+            while let Ok(msg) = upload_chans.1.receive_message().await {
+                println!("Idle peer {index} received message: {:?}", msg);
+            }
+        };
+        let extended_fut = async move {
+            if let Some(mut chans) = ext_chans {
+                while let Ok(msg) = chans.1.receive_message().await {
+                    println!("Idle peer {index} received extended message: {:?}", msg);
+                }
+            } else {
+                future::pending::<()>().await;
+            }
+        };
+
+        tokio::select! {
+            _ = download_fut => {},
+            _ = upload_fut => {},
+            _ = extended_fut => {},
         }
     }
 }
@@ -669,7 +718,9 @@ async fn launch_peers<P: Peer>(
 ) {
     let metainfo = Rc::new(input::Metainfo::from_file(metainfo_file).unwrap());
 
-    assert!(files_parentdir.as_ref().is_dir() == P::NEEDS_INPUT_DATA);
+    if P::NEEDS_INPUT_DATA {
+        assert!(files_parentdir.as_ref().is_dir());
+    }
 
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &files_parentdir).unwrap();
@@ -761,6 +812,7 @@ async fn start_tracker<'a>(
     port: u16,
     peers: impl Iterator<Item = &'a SocketAddr>,
     info_hash: &str,
+    expected_requests: usize,
 ) -> (mockito::Server, mockito::Mock) {
     fn get_peers_entry(addr: &SocketAddr) -> benc::Element {
         let ip_key = benc::Element::from("ip");
@@ -796,7 +848,7 @@ async fn start_tracker<'a>(
     let mock = server
         .mock("GET", "/announce")
         .match_query(mockito::Matcher::Regex(format!(".*info_hash={info_hash}.*")))
-        .expect(1)
+        .expect(expected_requests)
         .with_status(200)
         .with_body(response)
         .create_async()
@@ -885,6 +937,10 @@ const MULTIFILE_METAINFO_FILE_WITH_TRACKER: &str =
     "tests/assets/torrents_with_tracker/screenshots.torrent";
 const MULTIFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/screenshots.torrent";
 const MULTIFILE_TORRENT_NAME: &str = "screenshots";
+
+const MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881: &str =
+    "tests/assets/torrents_with_tracker/screenshots_6881.torrent";
+const MULTIFILE_TORRENT_NAME_6881: &str = "screenshots_6881";
 
 const MONOFILE_METAINFO_FILE_WITH_TRACKER: &str = "tests/assets/torrents_with_tracker/pcap.torrent";
 const MONOFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/pcap.torrent";
@@ -995,6 +1051,7 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
         tracker_port,
         seeder_ips.iter(),
         "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+        1,
     )
     .await;
 
@@ -1212,6 +1269,7 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
         tracker_port,
         seeder_ips.iter(),
         "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3",
+        1,
     )
     .await;
 
@@ -1350,6 +1408,7 @@ async fn test_download_torrent_from_magnet_link() {
         tracker_port,
         peer_ips.iter(),
         "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+        1,
     )
     .await;
 
@@ -1455,5 +1514,112 @@ async fn test_utp_download_torrent_from_magnet_link() {
     assert!(mtorrent_ecode.success());
 
     compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
+    fs::remove_dir_all(output_dir).unwrap();
+}
+
+#[tokio::test(flavor = "local")]
+async fn test_stop_resume_utp_download() {
+    _ = simple_logger::SimpleLogger::new()
+        .with_threads(false)
+        .with_level(log::LevelFilter::Off)
+        .with_module_level("mtorrent", log::LevelFilter::Info)
+        .init();
+
+    let output_dir = "test_stop_resume_utp_download";
+    let data_dir = "tests/assets/screenshots";
+    let port = 17002;
+
+    let tracker_port = 6881;
+    let peer_ips = (50120u16..50130u16)
+        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+        .collect::<Vec<_>>();
+
+    let (_server, tracker_mock) = start_tracker(
+        tracker_port,
+        peer_ips.iter(),
+        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
+        2,
+    )
+    .await;
+
+    struct Listener(ControlFlow<()>);
+    impl listener::StateListener for Listener {
+        const INTERVAL: Duration = sec!(1);
+        fn on_snapshot(&mut self, _snapshot: listener::StateSnapshot<'_>) -> ControlFlow<()> {
+            self.0
+        }
+    }
+    let config = Config {
+        local_peer_id: PeerId::generate_new(),
+        output_dir: output_dir.into(),
+        config_dir: output_dir.into(),
+        use_upnp: false,
+        pwp_port: Some(port),
+        bind_interface: Some(loopback_iface_name().into()),
+        download_strategy: Default::default(),
+    };
+    let context = Context {
+        dht_handle: None,
+        pwp_runtime: runtime::Handle::current(),
+        storage_runtime: runtime::Handle::current(),
+    };
+
+    let idle_then_seeder_peers = task::spawn_local(async move {
+        // idle peers before resume
+        launch_peers::<IdlePeer>(
+            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            data_dir,
+            ConnectionMode::IncomingUtp {
+                listen_addrs: peer_ips.clone(),
+            },
+            false,
+            port,
+        )
+        .await;
+        // seeders after resume
+        launch_peers::<Seeder>(
+            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            data_dir,
+            ConnectionMode::IncomingUtp {
+                listen_addrs: peer_ips.clone(),
+            },
+            false,
+            port,
+        )
+        .await;
+    });
+
+    let pause_then_resume_download = task::spawn_local(async move {
+        // start download then stop
+        app::main::single_torrent(
+            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            Listener(ControlFlow::Break(())),
+            config.clone(),
+            context.clone(),
+        )
+        .await
+        .unwrap();
+
+        app::main::single_torrent(
+            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            Listener(ControlFlow::Continue(())),
+            config.clone(),
+            context.clone(),
+        )
+        .await
+        .unwrap();
+    });
+
+    time::timeout(sec!(30), async move {
+        let (torrent_ret, peers_ret) = join!(pause_then_resume_download, idle_then_seeder_peers);
+        torrent_ret.expect("torrent task shouldn't panic");
+        peers_ret.expect("peers task shouldn't panic");
+    })
+    .await
+    .unwrap();
+
+    tracker_mock.assert_async().await;
+
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME_6881);
     fs::remove_dir_all(output_dir).unwrap();
 }

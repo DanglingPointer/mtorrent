@@ -11,7 +11,7 @@ mod tests;
 pub(super) mod testutils;
 
 pub use tcp::run_pwp_listener;
-pub use utp::{UtpHandle, launch_utp};
+pub use utp::{UtpActor, UtpHandle, init_utp};
 
 use super::connections::{PeerConnector, PeerReporter};
 use super::{ctrl, ctx};
