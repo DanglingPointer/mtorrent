@@ -14,7 +14,7 @@ use std::future::Future;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops::ControlFlow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, fs, io, iter, process};
@@ -523,7 +523,9 @@ async fn listening_utp_peer<P: Peer>(
 ) {
     let verify_remote_addr = !extensions_enabled;
 
-    let socket = UdpSocket::bind(listening_addr).await.unwrap();
+    let socket = UdpSocket::bind(listening_addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind to {listening_addr}: {e}"));
     let (endpoint, mut listener, udp) = utp::new_endpoint(socket);
     let driver_handle = task::spawn_local(udp.run());
 
@@ -809,7 +811,6 @@ async fn launch_peers<P: Peer>(
 }
 
 async fn start_tracker<'a>(
-    port: u16,
     peers: impl Iterator<Item = &'a SocketAddr>,
     info_hash: &str,
     expected_requests: usize,
@@ -838,11 +839,7 @@ async fn start_tracker<'a>(
         benc::Element::Dictionary(root).encode()
     };
 
-    let mut server = mockito::Server::new_with_opts_async(mockito::ServerOpts {
-        port,
-        ..Default::default()
-    })
-    .await;
+    let mut server = mockito::Server::new_with_opts_async(Default::default()).await;
 
     // respond 200 to the first request
     let mock = server
@@ -933,18 +930,44 @@ macro_rules! with_30s_timeout {
     };
 }
 
-const MULTIFILE_METAINFO_FILE_WITH_TRACKER: &str =
-    "tests/assets/torrents_with_tracker/screenshots.torrent";
-const MULTIFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/screenshots.torrent";
+const MULTIFILE_METAINFO_FILE: &str = "tests/assets/torrent_templates/screenshots.torrent";
 const MULTIFILE_TORRENT_NAME: &str = "screenshots";
 
-const MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881: &str =
-    "tests/assets/torrents_with_tracker/screenshots_6881.torrent";
-const MULTIFILE_TORRENT_NAME_6881: &str = "screenshots_6881";
-
-const MONOFILE_METAINFO_FILE_WITH_TRACKER: &str = "tests/assets/torrents_with_tracker/pcap.torrent";
-const MONOFILE_METAINFO_FILE: &str = "tests/assets/torrents_without_tracker/pcap.torrent";
+const MONOFILE_METAINFO_FILE: &str = "tests/assets/torrent_templates/pcap.torrent";
 const MONOFILE_TORRENT_NAME: &str = "pcap";
+
+fn create_torrent_file_from_template(
+    template_path: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
+    tracker_port: u16,
+) -> PathBuf {
+    _ = fs::create_dir_all(output_dir.as_ref());
+
+    let template_filename = template_path.as_ref().file_name().unwrap();
+    let template_content = fs::read(template_path.as_ref()).unwrap();
+
+    // find position of tracker URL:
+    const PLACEHOLDER: &[u8] = b"30:http://localhost:PORT/announce";
+    let ind = template_content
+        .windows(PLACEHOLDER.len())
+        .position(|window| window == PLACEHOLDER)
+        .expect("tracker URL not found in template");
+
+    // create the tracker URL based on the provided port
+    let tracker_url = format!("http://localhost:{tracker_port}/announce");
+    let tracker_url_len = tracker_url.len();
+    let tracker_url = format!("{tracker_url_len}:{tracker_url}").into_bytes();
+
+    // construct the new torrent file content with the tracker URL inserted
+    let mut torrent_file_content = Vec::from(&template_content[..ind]);
+    torrent_file_content.extend_from_slice(&tracker_url);
+    torrent_file_content.extend_from_slice(&template_content[ind + PLACEHOLDER.len()..]);
+
+    let torrent_file_path = output_dir.as_ref().join(template_filename);
+
+    fs::write(torrent_file_path.clone(), torrent_file_content).unwrap();
+    torrent_file_path
+}
 
 fn loopback_iface_name() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -1040,24 +1063,25 @@ async fn test_accept_50_utp_seeders_and_download_multifile_torrent() {
 async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
     let data_dir = "tests/assets/screenshots";
-    let tracker_port = 9000u16;
     let port = 15002;
 
     let seeder_ips = (50150u16..50200u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
-    let (_server, tracker_mock) = start_tracker(
-        tracker_port,
-        seeder_ips.iter(),
-        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
-        1,
-    )
-    .await;
+    let (server, tracker_mock) =
+        start_tracker(seeder_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 1)
+            .await;
+
+    let metainfo_file = create_torrent_file_from_template(
+        MULTIFILE_METAINFO_FILE,
+        output_dir,
+        server.socket_address().port(),
+    );
 
     let mtorrent = task::spawn(async move {
         process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(MULTIFILE_METAINFO_FILE_WITH_TRACKER)
+            .arg(&metainfo_file)
             .arg("-o")
             .arg(output_dir)
             .arg("--config-dir")
@@ -1073,7 +1097,7 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
 
     with_30s_timeout!(
         launch_peers::<Seeder>(
-            MULTIFILE_METAINFO_FILE_WITH_TRACKER,
+            MULTIFILE_METAINFO_FILE,
             data_dir,
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
@@ -1258,25 +1282,26 @@ async fn test_accept_50_utp_seeders_and_download_monofile_torrent() {
 async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
     let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
     let data_dir = "tests/assets/pcap";
-    let tracker_port = 8000u16;
     let port = 16002;
 
     let seeder_ips = (50050u16..50100u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
-    let (_server, tracker_mock) = start_tracker(
-        tracker_port,
-        seeder_ips.iter(),
-        "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3",
-        1,
-    )
-    .await;
+    let (server, tracker_mock) =
+        start_tracker(seeder_ips.iter(), "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3", 1)
+            .await;
+
+    let metainfo_file = create_torrent_file_from_template(
+        MONOFILE_METAINFO_FILE,
+        output_dir,
+        server.socket_address().port(),
+    );
 
     let mtorrent = task::spawn(async move {
         time::sleep(sec!(2)).await; // wait for listening peers to launch
         process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
-            .arg(MONOFILE_METAINFO_FILE_WITH_TRACKER)
+            .arg(&metainfo_file)
             .arg("-o")
             .arg(output_dir)
             .arg("--config-dir")
@@ -1293,7 +1318,7 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
 
     with_30s_timeout!(
         launch_peers::<Seeder>(
-            MONOFILE_METAINFO_FILE_WITH_TRACKER,
+            MONOFILE_METAINFO_FILE,
             data_dir,
             ConnectionMode::Incoming {
                 listen_addrs: seeder_ips,
@@ -1398,19 +1423,14 @@ async fn test_download_torrent_from_magnet_link() {
     let data_dir = "tests/assets/screenshots";
     fs::create_dir_all(output_dir).unwrap();
     let port = 17000;
-    let tracker_port = 10_000;
 
     let peer_ips = (50100u16..50110u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
-    let (server, tracker_mock) = start_tracker(
-        tracker_port,
-        peer_ips.iter(),
-        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
-        1,
-    )
-    .await;
+    let (server, tracker_mock) =
+        start_tracker(peer_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 1)
+            .await;
 
     let magnet_link = format!(
         "magnet:?xt=urn:btih:faa73597e79968e1946fcb223e274aa5bb7d2eda&dn=screenshots&tr={}/announce",
@@ -1529,18 +1549,19 @@ async fn test_stop_resume_utp_download() {
     let data_dir = "tests/assets/screenshots";
     let port = 17002;
 
-    let tracker_port = 6881;
     let peer_ips = (50120u16..50130u16)
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
         .collect::<Vec<_>>();
 
-    let (_server, tracker_mock) = start_tracker(
-        tracker_port,
-        peer_ips.iter(),
-        "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA",
-        2,
-    )
-    .await;
+    let (server, tracker_mock) =
+        start_tracker(peer_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 2)
+            .await;
+
+    let metainfo_file = create_torrent_file_from_template(
+        MULTIFILE_METAINFO_FILE,
+        output_dir,
+        server.socket_address().port(),
+    );
 
     struct Listener(ControlFlow<()>);
     impl listener::StateListener for Listener {
@@ -1567,7 +1588,7 @@ async fn test_stop_resume_utp_download() {
     let idle_then_seeder_peers = task::spawn_local(async move {
         // idle peers before resume
         launch_peers::<IdlePeer>(
-            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            MULTIFILE_METAINFO_FILE,
             data_dir,
             ConnectionMode::IncomingUtp {
                 listen_addrs: peer_ips.clone(),
@@ -1578,7 +1599,7 @@ async fn test_stop_resume_utp_download() {
         .await;
         // seeders after resume
         launch_peers::<Seeder>(
-            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            MULTIFILE_METAINFO_FILE,
             data_dir,
             ConnectionMode::IncomingUtp {
                 listen_addrs: peer_ips.clone(),
@@ -1590,9 +1611,11 @@ async fn test_stop_resume_utp_download() {
     });
 
     let pause_then_resume_download = task::spawn_local(async move {
+        let metainfo_file = metainfo_file.to_str().unwrap();
+
         // start download then stop
         app::main::single_torrent(
-            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            &metainfo_file,
             Listener(ControlFlow::Break(())),
             config.clone(),
             context.clone(),
@@ -1600,8 +1623,9 @@ async fn test_stop_resume_utp_download() {
         .await
         .unwrap();
 
+        // resume download
         app::main::single_torrent(
-            MULTIFILE_METAINFO_FILE_WITH_TRACKER_6881,
+            &metainfo_file,
             Listener(ControlFlow::Continue(())),
             config.clone(),
             context.clone(),
@@ -1620,6 +1644,6 @@ async fn test_stop_resume_utp_download() {
 
     tracker_mock.assert_async().await;
 
-    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME_6881);
+    compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
     fs::remove_dir_all(output_dir).unwrap();
 }
