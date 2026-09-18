@@ -450,7 +450,7 @@ impl IngressProcessor {
             if matches!(received, PeerMessage::KeepAlive) {
                 log::trace!("{} => {:?}", self.remote_ip, received);
             } else {
-                log::error!("{} => unknown message: {:?}", self.remote_ip, received)
+                log::warn!("{} => unknown message: {:?}", self.remote_ip, received)
             }
         }
     }
