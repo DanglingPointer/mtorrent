@@ -42,15 +42,15 @@ impl ConnectRecorder {
     }
 
     /// Creates a new connection record for the specified remote address. If the remote address is
-    /// already connected or it was recently seen and it's not a reconnect, it will be rejected and
-    /// `None` will be returned. Otherwise, it will be added to the connected set and a
+    /// already connected or it was recently seen and `allow_recent` is false, it will be rejected
+    /// and `None` will be returned. Otherwise, it will be added to the connected set and a
     /// [`ConnectRecord`] will be returned.
     pub fn create_record(
         &mut self,
         remote_addr: SocketAddr,
-        reconnect: bool,
+        allow_recent: bool,
     ) -> Option<ConnectRecord> {
-        if !self.recent_peers.insert_or_replace(remote_addr) && !reconnect {
+        if !self.recent_peers.insert_or_replace(remote_addr) && !allow_recent {
             log::debug!("No connect permit for {remote_addr}: recent address and not a reconnect");
             return None;
         }

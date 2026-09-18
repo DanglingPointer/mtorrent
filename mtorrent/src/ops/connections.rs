@@ -226,7 +226,11 @@ impl<C: PeerConnector + 'static> ConnectControl<C> {
             });
         } else {
             log::error!(
-                "Incoming peer connection from {} rejected: already connected",
+                "Incoming {} peer connection from {} rejected: already connected",
+                match inbound.data {
+                    InboundData::Tcp(_) => "TCP",
+                    InboundData::Utp(_) => "uTP",
+                },
                 inbound.addr
             );
         }
