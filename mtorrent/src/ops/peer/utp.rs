@@ -318,3 +318,76 @@ async fn handle_commands(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+    use tokio::net::UdpSocket;
+
+    #[tokio::test(flavor = "local")]
+    async fn test_stopping_utp_releases_port() {
+        _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Debug).init();
+
+        // find available port
+        let port = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let local_ipv4_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        let local_ipv6_addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+
+        // start uTP
+        let (handle, actor) = init_utp(local_ipv4_addr, local_ipv6_addr, None);
+        let task_handle = task::spawn_local(actor.run());
+        task::yield_now().await;
+
+        // verify that uTP is running and the port is in use
+        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        task::yield_now().await;
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
+
+        // stop uTP
+        drop(handle);
+        task_handle.await.unwrap();
+
+        // verify that the port is released
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "local")]
+    async fn test_aborting_utp_releases_port() {
+        _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Debug).init();
+
+        // find available port
+        let port = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let local_ipv4_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        let local_ipv6_addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+
+        // start uTP
+        let (handle, actor) = init_utp(local_ipv4_addr, local_ipv6_addr, None);
+        let task_handle = task::spawn_local(actor.run());
+        task::yield_now().await;
+
+        // verify that uTP is running and the port is in use
+        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        task::yield_now().await;
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
+
+        // abort the uTP task
+        task_handle.abort();
+        let _ = task_handle.await;
+
+        // verify that the port is released
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
+    }
+}
