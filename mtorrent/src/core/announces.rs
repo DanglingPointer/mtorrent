@@ -1,5 +1,5 @@
 use super::ctx;
-use crate::ops::PeerReporter;
+use crate::core::PeerReporter;
 use crate::utils::config;
 use futures_util::future;
 use local_async_utils::prelude::*;

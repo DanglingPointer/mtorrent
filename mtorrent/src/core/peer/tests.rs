@@ -1,5 +1,5 @@
 use super::testutils::*;
-use crate::ops::{PeerConnector, PeerReporter, UtpHandle, ctx};
+use crate::core::{PeerConnector, PeerReporter, UtpHandle, ctx};
 use crate::utils::startup;
 use local_async_utils::prelude::*;
 use mtorrent_base::pwp::{BlockInfo, MAX_BLOCK_SIZE};

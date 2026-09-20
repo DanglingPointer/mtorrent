@@ -445,7 +445,7 @@ impl PeerReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::peer::testutils::setup;
+    use crate::core::peer::testutils::setup;
     use futures_util::FutureExt;
     use mockall::predicate::eq;
     use rstest::rstest;

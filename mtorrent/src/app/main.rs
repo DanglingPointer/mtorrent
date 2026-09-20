@@ -1,4 +1,4 @@
-use crate::ops;
+use crate::core;
 use crate::utils::{join_all_with_timeout, listener, startup};
 use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
@@ -60,7 +60,7 @@ struct Handles<'h> {
     dht: Option<&'h dht::CommandSink>,
     pwp_runtime: &'h runtime::Handle,
     storage_runtime: &'h runtime::Handle,
-    utp: ops::UtpHandle,
+    utp: core::UtpHandle,
     trackers: trackers::Client,
 }
 
@@ -147,7 +147,7 @@ pub async fn single_torrent(
 
     let mut tasks = task::JoinSet::new();
 
-    let (utp_handle, utp_actor) = ops::init_utp(
+    let (utp_handle, utp_actor) = core::init_utp(
         SocketAddrV4::new(local_addr_v4, internal_pwp_port),
         SocketAddrV6::new(local_addr_v6, internal_pwp_port, 0, 0),
         cfg.bind_interface.clone(),
@@ -237,7 +237,7 @@ async fn preliminary_stage(
         .join(format!("{}.torrent", magnet_link.name().unwrap_or("unnamed")));
     let info_hash: [u8; 20] = *magnet_link.info_hash();
 
-    let ctx = ops::PreliminaryCtx::new(
+    let ctx = core::PreliminaryCtx::new(
         magnet_link,
         params.local_peer_id,
         params.external_pwp_port,
@@ -250,7 +250,7 @@ async fn preliminary_stage(
     let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::PreliminaryConnectionData {
+        core::connect_control(|peer_reporter| core::PreliminaryConnectionData {
             ctx_handle: ctx.clone(),
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
@@ -266,7 +266,7 @@ async fn preliminary_stage(
     }
 
     handles.dht.map(|dht_cmds| {
-        tasks.spawn_local(ops::run_dht_search(
+        tasks.spawn_local(core::run_dht_search(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
@@ -275,7 +275,7 @@ async fn preliminary_stage(
     });
 
     tasks.spawn_on(
-        ops::run_pwp_listener(
+        core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v4.into(), params.internal_pwp_port),
             params.bind_interface.clone(),
             peer_reporter.clone(),
@@ -284,7 +284,7 @@ async fn preliminary_stage(
     );
 
     tasks.spawn_on(
-        ops::run_pwp_listener(
+        core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v6.into(), params.internal_pwp_port),
             params.bind_interface,
             peer_reporter.clone(),
@@ -292,7 +292,7 @@ async fn preliminary_stage(
         handles.pwp_runtime,
     );
 
-    tasks.spawn_local(ops::make_preliminary_announces(
+    tasks.spawn_local(core::make_preliminary_announces(
         ctx.clone(),
         handles.trackers,
         peer_reporter.clone(),
@@ -305,7 +305,7 @@ async fn preliminary_stage(
         }
     });
 
-    let peers = ops::periodic_metadata_check(ctx, metainfo_filepath.clone(), listener).await?;
+    let peers = core::periodic_metadata_check(ctx, metainfo_filepath.clone(), listener).await?;
     tasks.shutdown().await;
     Ok((metainfo_filepath, peers))
 }
@@ -337,7 +337,7 @@ async fn main_stage(
 
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
-    let ctx: ops::Handle<_> = ops::MainCtx::new(
+    let ctx: core::Handle<_> = core::MainCtx::new(
         metainfo,
         params.local_peer_id,
         params.external_pwp_port,
@@ -351,7 +351,7 @@ async fn main_stage(
     let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
-        ops::connect_control(|peer_reporter| ops::MainConnectionData {
+        core::connect_control(|peer_reporter| core::MainConnectionData {
             content_storage,
             metainfo_storage,
             ctx_handle: ctx.clone(),
@@ -370,7 +370,7 @@ async fn main_stage(
     }
 
     handles.dht.map(|dht_cmds| {
-        tasks.spawn_local(ops::run_dht_search(
+        tasks.spawn_local(core::run_dht_search(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
@@ -379,7 +379,7 @@ async fn main_stage(
     });
 
     tasks.spawn_on(
-        ops::run_pwp_listener(
+        core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v4.into(), params.internal_pwp_port),
             params.bind_interface.clone(),
             peer_reporter.clone(),
@@ -388,7 +388,7 @@ async fn main_stage(
     );
 
     tasks.spawn_on(
-        ops::run_pwp_listener(
+        core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v6.into(), params.internal_pwp_port),
             params.bind_interface,
             peer_reporter.clone(),
@@ -396,7 +396,7 @@ async fn main_stage(
         handles.pwp_runtime,
     );
 
-    tasks.spawn_local(ops::make_periodic_announces(
+    tasks.spawn_local(core::make_periodic_announces(
         ctx.clone(),
         handles.trackers,
         peer_reporter.clone(),
@@ -410,7 +410,7 @@ async fn main_stage(
         }
     });
 
-    ops::periodic_state_dump(ctx, content_dir, listener).await;
+    core::periodic_state_dump(ctx, content_dir, listener).await;
     tasks.shutdown().await;
     Ok(())
 }

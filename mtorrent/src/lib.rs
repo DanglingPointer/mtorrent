@@ -16,4 +16,4 @@ pub mod app;
 /// Utility functions and types.
 pub mod utils;
 
-pub(crate) mod ops;
+pub(crate) mod core;
