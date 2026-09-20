@@ -1,14 +1,21 @@
 use std::mem;
 use tokio::{runtime, task};
 
+/// A collection of tokio task abort handles that aborts all still-running tasks on drop.
+///
+/// Finished handles are pruned each time a new task is spawned, so the scope does not
+/// accumulate memory for completed tasks.
 #[derive(Debug)]
 pub struct TaskScope(Vec<task::AbortHandle>);
 
 impl TaskScope {
+    /// Create an empty scope with no tracked tasks.
     pub fn new() -> Self {
         Self(Vec::new())
     }
 
+    /// Spawn a `!Send` future on the current [`LocalRuntime`](tokio::runtime::LocalRuntime) and
+    /// track its abort handle in this scope.
     pub fn spawn_local<F>(&mut self, future: F) -> task::JoinHandle<F::Output>
     where
         F: Future + 'static,
@@ -20,6 +27,7 @@ impl TaskScope {
         join_handle
     }
 
+    /// Spawn a future on the current tokio runtime and track its abort handle in this scope.
     pub fn spawn<F>(&mut self, future: F) -> task::JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -31,6 +39,8 @@ impl TaskScope {
         join_handle
     }
 
+    /// Spawn a future on the runtime referenced by `handle` and track its abort handle
+    /// in this scope.
     pub fn spawn_on<F>(
         &mut self,
         future: F,
@@ -46,6 +56,7 @@ impl TaskScope {
         join_handle
     }
 
+    /// Abort every tracked task and drop all handles emptying the scope.
     pub fn abort_all(&mut self) {
         for handle in mem::take(&mut self.0) {
             handle.abort();

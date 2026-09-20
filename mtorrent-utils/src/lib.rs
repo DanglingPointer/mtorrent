@@ -36,5 +36,5 @@ pub mod worker;
 /// Connect recorder for tracking connected and known peers.
 pub mod connect_recorder;
 
-#[doc(hidden)]
+/// Scoped task spawning that aborts outstanding tasks when the scope is dropped.
 pub mod task_scope;
