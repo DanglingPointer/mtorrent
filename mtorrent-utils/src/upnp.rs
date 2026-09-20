@@ -1,29 +1,307 @@
 use crate::net;
-use igd_next::{SearchOptions, aio};
+use igd_next;
 use local_async_utils::prelude::*;
 use std::mem;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use thiserror::Error;
+use tokio::sync::oneshot;
 use tokio::time::sleep;
+use tokio::{pin, select};
 
-type AsyncGateway = aio::Gateway<aio::tokio::Tokio>;
-type BlockingGateway = igd_next::Gateway;
+pub use igd_next::PortMappingProtocol;
 
-pub use igd_next::{Error, PortMappingProtocol};
+/// Errors returned by [`PortMapper`] and [`PortMapperHandle`].
+#[derive(Error, Debug, Clone)]
+pub enum Error {
+    /// An error reported by the underlying `igd_next` library.
+    #[error("{0}")]
+    IgdError(String),
+    /// The [`PortMapper`] task has exited (or never started).
+    #[error("UPnP task is not running")]
+    Stopped,
+}
+
+impl From<igd_next::Error> for Error {
+    fn from(e: igd_next::Error) -> Self {
+        Self::IgdError(e.to_string())
+    }
+}
+
+/// Create a [`PortMapper`] task and a matching [`PortMapperHandle`].
+///
+/// The returned [`PortMapper`] must be driven via [`PortMapper::run`] to actually
+/// create and maintain the port mapping on the local UPnP gateway. Dropping the
+/// [`PortMapperHandle`] signals the task to remove the mapping and exit.
+///
+/// * `proto` — TCP or UDP mapping.
+/// * `internal_port` — the local port that traffic should be forwarded to.
+/// * `desired_external_port` — a specific external port to request, or `None` to let the gateway
+///   pick one.
+/// * `interface` — the local network interface to bind to, or `None` to use the default one.
+pub fn init(
+    proto: PortMappingProtocol,
+    internal_port: u16,
+    desired_external_port: Option<u16>,
+    interface: Option<String>,
+) -> (PortMapperHandle, PortMapper) {
+    let (get_addr_tx, get_addr_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+
+    (
+        PortMapperHandle {
+            get_external_addr: GetExternalAddrStatus::InProgress(get_addr_rx),
+            _canceller: cancel_tx,
+        },
+        PortMapper {
+            proto,
+            internal_port,
+            desired_external_port,
+            interface,
+            get_external_addr_tx: get_addr_tx,
+            canceller: cancel_rx,
+        },
+    )
+}
+
+/// A handle to a running [`PortMapper`] task.
+///
+/// Use it to query the external address assigned by the gateway. Dropping the
+/// handle asks the task to remove the port mapping and exit.
+pub struct PortMapperHandle {
+    get_external_addr: GetExternalAddrStatus,
+    _canceller: oneshot::Sender<()>,
+}
+
+/// The background task that creates the UPnP port mapping and renews it
+/// periodically until its [`PortMapperHandle`] is dropped.
+///
+/// Obtained from [`init`]; call [`PortMapper::run`] to execute it.
+pub struct PortMapper {
+    proto: PortMappingProtocol,
+    internal_port: u16,
+    desired_external_port: Option<u16>,
+    interface: Option<String>,
+
+    get_external_addr_tx: oneshot::Sender<Result<SocketAddr, Error>>,
+    canceller: oneshot::Receiver<()>,
+}
+
+enum GetExternalAddrStatus {
+    InProgress(oneshot::Receiver<Result<SocketAddr, Error>>),
+    Finished(Result<SocketAddr, Error>),
+}
+
+impl PortMapperHandle {
+    /// Return the external `SocketAddr` assigned by the gateway. Will block forever if the
+    /// [`PortMapper`] task hasn't been launched.
+    ///
+    /// Awaits the initial mapping to be created on the first call, then caches the result so
+    /// subsequent calls return the same value immediately. If the [`PortMapper`] fails to create
+    /// the mapping or has been dropped, returns the corresponding [`Error`](enum@Error).
+    pub async fn get_external_addr(&mut self) -> Result<SocketAddr, Error> {
+        let status = mem::replace(
+            &mut self.get_external_addr,
+            GetExternalAddrStatus::Finished(Err(Error::Stopped)),
+        );
+        let result = match status {
+            GetExternalAddrStatus::InProgress(receiver) => match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(Error::Stopped),
+            },
+            GetExternalAddrStatus::Finished(result) => result,
+        };
+        self.get_external_addr = GetExternalAddrStatus::Finished(result.clone());
+        result
+    }
+}
+
+impl PortMapper {
+    /// Create the port mapping on the local UPnP gateway and keep renewing it
+    /// until the matching [`PortMapperHandle`] is dropped, at which point the
+    /// mapping is removed and this future resolves.
+    ///
+    /// Returns an [`Error`](enum@Error) if the initial mapping cannot be created or if a
+    /// later renewal fails.
+    pub async fn run(self) -> Result<(), Error> {
+        self.run_impl(IgdNextGatewayFactory).await
+    }
+
+    async fn run_impl<G: GatewayFactory>(self, gateway_factory: G) -> Result<(), Error> {
+        /// Recommended lease duration from <https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf>.
+        pub const PORT_LEASE_DURATION_SEC: u32 = 3600;
+
+        let Self {
+            proto,
+            internal_port,
+            desired_external_port,
+            interface,
+            get_external_addr_tx,
+            canceller,
+        } = self;
+
+        let port_opener = match PortOpener::new(
+            proto,
+            internal_port,
+            desired_external_port,
+            interface.as_deref(),
+            PORT_LEASE_DURATION_SEC,
+            gateway_factory,
+        )
+        .await
+        .map_err(Error::from)
+        {
+            Ok(opener) => {
+                let external_addr = opener.external_addr;
+                log::info!("UPnP: {proto:?} port mapping succeeded, public addr: {external_addr}");
+                _ = get_external_addr_tx.send(Ok(external_addr));
+                opener
+            }
+            Err(e) => {
+                log::error!("UPnP: {proto:?} port mapping failed: {e}");
+                _ = get_external_addr_tx.send(Err(e.clone()));
+                return Err(e);
+            }
+        };
+
+        // renewal interval must be slightly higher than the lease duration because renewing a
+        // mapping that hasn't expired yet has no effect
+        let renewal_interval = sec!(PORT_LEASE_DURATION_SEC as u64) + millisec!(500);
+
+        // Continuously renew the port mapping every `PORT_LEASE_DURATION_SEC` seconds, until the
+        // handle is dropped
+        pin!(canceller);
+        loop {
+            select! {
+                biased;
+                _ = &mut canceller => {
+                    port_opener.remove_mapping().await;
+                    break;
+                }
+                _ = sleep(renewal_interval) => {
+                    port_opener.renew_mapping(PORT_LEASE_DURATION_SEC).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg_attr(test, mockall::automock(type Gateway = MockGateway;))]
+trait GatewayFactory {
+    type Gateway: Gateway;
+
+    fn search(
+        &self,
+        opts: igd_next::SearchOptions,
+    ) -> impl Future<Output = Result<Self::Gateway, igd_next::SearchError>>;
+}
+
+#[cfg_attr(test, mockall::automock)]
+trait Gateway {
+    fn get_external_ip(&self)
+    -> impl Future<Output = Result<IpAddr, igd_next::GetExternalIpError>>;
+
+    fn add_port(
+        &self,
+        proto: PortMappingProtocol,
+        external_port: u16,
+        local_addr: SocketAddr,
+        lease_duration_sec: u32,
+        description: &str,
+    ) -> impl Future<Output = Result<(), igd_next::AddPortError>>;
+
+    fn add_any_port(
+        &self,
+        proto: PortMappingProtocol,
+        local_addr: SocketAddr,
+        lease_duration_sec: u32,
+        description: &str,
+    ) -> impl Future<Output = Result<u16, igd_next::AddAnyPortError>>;
+
+    fn remove_port(
+        &self,
+        proto: PortMappingProtocol,
+        external_port: u16,
+    ) -> impl Future<Output = Result<(), igd_next::RemovePortError>>;
+}
+
+struct IgdNextGatewayFactory;
+
+type IgdNextGateway = igd_next::aio::Gateway<igd_next::aio::tokio::Tokio>;
+
+impl GatewayFactory for IgdNextGatewayFactory {
+    type Gateway = IgdNextGateway;
+
+    async fn search(
+        &self,
+        opts: igd_next::SearchOptions,
+    ) -> Result<Self::Gateway, igd_next::SearchError> {
+        igd_next::aio::tokio::search_gateway(opts).await
+    }
+}
+
+impl Gateway for IgdNextGateway {
+    async fn get_external_ip(&self) -> Result<IpAddr, igd_next::GetExternalIpError> {
+        igd_next::aio::Gateway::get_external_ip(self).await
+    }
+
+    async fn add_port(
+        &self,
+        proto: PortMappingProtocol,
+        external_port: u16,
+        local_addr: SocketAddr,
+        lease_duration_sec: u32,
+        description: &str,
+    ) -> Result<(), igd_next::AddPortError> {
+        igd_next::aio::Gateway::add_port(
+            self,
+            proto,
+            external_port,
+            local_addr,
+            lease_duration_sec,
+            description,
+        )
+        .await
+    }
+
+    async fn add_any_port(
+        &self,
+        proto: PortMappingProtocol,
+        local_addr: SocketAddr,
+        lease_duration_sec: u32,
+        description: &str,
+    ) -> Result<u16, igd_next::AddAnyPortError> {
+        igd_next::aio::Gateway::add_any_port(
+            self,
+            proto,
+            local_addr,
+            lease_duration_sec,
+            description,
+        )
+        .await
+    }
+
+    async fn remove_port(
+        &self,
+        proto: PortMappingProtocol,
+        external_port: u16,
+    ) -> Result<(), igd_next::RemovePortError> {
+        igd_next::aio::Gateway::remove_port(self, proto, external_port).await
+    }
+}
 
 /// Utility for creating and maintaining a port mapping on the local gateway via UPnP. The mapping
 /// is valid for `PORT_LEASE_DURATION_SEC` seconds, but automatic renewal can be enabled by calling
 /// `run_continuous_renewal()`. The mapping is removed when the `PortOpener` is dropped.
-pub struct PortOpener {
-    gateway: AsyncGateway,
+struct PortOpener<G: GatewayFactory> {
+    gateway: G::Gateway,
     internal_addr: SocketAddr,
     external_addr: SocketAddr,
     proto: PortMappingProtocol,
 }
 
-impl PortOpener {
-    /// Recommended lease duration from <https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf>.
-    pub const PORT_LEASE_DURATION_SEC: u32 = 3600;
-
+impl<G: GatewayFactory> PortOpener<G> {
     /// Create a TCP or UDP port mapping that will be valid for
     /// `PORT_LEASE_DURATION_SEC` seconds and return a `PortOpener` that maintains it.
     ///
@@ -31,12 +309,14 @@ impl PortOpener {
     /// port number.
     /// If `interface` is not specified, the first active network adapter with a non-loopback IPv4
     /// address will be used.
-    pub async fn new(
+    async fn new(
         proto: PortMappingProtocol,
         internal_port: u16,
         desired_external_port: Option<u16>,
         interface: Option<&str>,
-    ) -> Result<Self, Error> {
+        lease_duration_sec: u32,
+        gateway_factory: G,
+    ) -> Result<Self, igd_next::Error> {
         // get our IP on the local network
         let internal_ip = if let Some(iface) = interface {
             net::get_bind_addr_v4(Some(iface)).into()
@@ -49,28 +329,26 @@ impl PortOpener {
         let internal_addr = SocketAddr::new(internal_ip, internal_port);
 
         // see if the gateway supports UPnP
-        let gateway = aio::tokio::search_gateway(SearchOptions {
-            timeout: Some(sec!(5)),
-            bind_addr: (internal_ip, 0).into(),
-            ..Default::default()
-        })
-        .await?;
+        let gateway = gateway_factory
+            .search(igd_next::SearchOptions {
+                timeout: Some(sec!(5)),
+                bind_addr: (internal_ip, 0).into(),
+                ..Default::default()
+            })
+            .await?;
 
         // create port mapping and get our external IP and port
         let public_ip = gateway.get_external_ip().await?;
         let public_port = if let Some(desired_port) = desired_external_port {
             gateway
-                .add_port(proto, desired_port, internal_addr, Self::PORT_LEASE_DURATION_SEC, "")
+                .add_port(proto, desired_port, internal_addr, lease_duration_sec, "")
                 .await?;
             desired_port
         } else {
-            gateway
-                .add_any_port(proto, internal_addr, Self::PORT_LEASE_DURATION_SEC, "")
-                .await?
+            gateway.add_any_port(proto, internal_addr, lease_duration_sec, "").await?
         };
         let external_addr = SocketAddr::new(public_ip, public_port);
 
-        log::debug!("UPnP: port mapping created ({}:{})", proto, external_addr.port());
         Ok(Self {
             gateway,
             internal_addr,
@@ -79,71 +357,211 @@ impl PortOpener {
         })
     }
 
-    /// Get the external socket address that was mapped to the internal port.
-    pub fn external_addr(&self) -> SocketAddr {
-        self.external_addr
-    }
-
-    /// Continuously renew the port mapping every `PORT_LEASE_DURATION_SEC` seconds. This function
-    /// never returns unless an error occurs.
-    pub async fn run_continuous_renewal(&mut self) -> igd_next::Result<()> {
-        // renewal interval must be slightly higher than the lease duration because renewing a
-        // mapping that hasn't expired yet has no effect
-        let renewal_interval = sec!(Self::PORT_LEASE_DURATION_SEC as u64) + millisec!(500);
-        loop {
-            sleep(renewal_interval).await;
-
-            self.gateway
-                .add_port(
-                    self.proto,
-                    self.external_addr.port(),
-                    self.internal_addr,
-                    Self::PORT_LEASE_DURATION_SEC,
-                    "",
-                )
-                .await?;
-
-            log::debug!(
-                "UPnP: port mapping renewed ({}:{})",
-                self.proto,
-                self.external_addr.port()
-            );
+    async fn remove_mapping(&self) {
+        let proto = self.proto;
+        let external_port = self.external_addr.port();
+        match self.gateway.remove_port(proto, external_port).await {
+            Ok(()) => {
+                log::info!("UPnP: port mapping deleted ({proto}:{external_port})");
+            }
+            Err(e) => {
+                log::warn!("UPnP: failed to delete port mapping ({proto}:{external_port}): {e}");
+            }
         }
     }
-}
 
-impl Drop for PortOpener {
-    /// Remove the port mapping when the `PortOpener` is dropped. Note that this is a blocking
-    /// operation since [`AsyncDrop`](https://doc.rust-lang.org/std/future/trait.AsyncDrop.html) is still experimental.
-    fn drop(&mut self) {
-        let gateway = BlockingGateway {
-            addr: self.gateway.addr,
-            root_url: mem::take(&mut self.gateway.root_url),
-            control_url: mem::take(&mut self.gateway.control_url),
-            control_schema_url: mem::take(&mut self.gateway.control_schema_url),
-            control_schema: mem::take(&mut self.gateway.control_schema),
-        };
-        match gateway.remove_port(self.proto, self.external_addr.port()) {
-            Ok(()) => log::info!(
-                "UPnP: port mapping deleted ({}:{})",
-                self.proto,
-                self.external_addr.port()
-            ),
-            Err(e) => log::warn!(
-                "UPnP: failed to delete port mapping ({}:{}): {}",
-                self.proto,
-                self.external_addr.port(),
-                e
-            ),
+    async fn renew_mapping(&self, lease_duration_sec: u32) -> igd_next::Result<()> {
+        let proto = self.proto;
+        let external_port = self.external_addr.port();
+        let result = self
+            .gateway
+            .add_port(proto, external_port, self.internal_addr, lease_duration_sec, "")
+            .await;
+
+        match &result {
+            Ok(()) => {
+                log::info!("UPnP: port mapping renewed ({proto}:{external_port})");
+            }
+            Err(e) => {
+                log::error!("UPnP: failed to renew port mapping ({proto}:{external_port}): {e}")
+            }
         }
+        result.map_err(Into::into)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
     use log::Level;
-    use tokio::time;
+    use mockall::predicate::{always, eq};
+    use std::net::Ipv4Addr;
+    use tokio::{task, time};
+
+    fn make_gateway_with_ip(ip: IpAddr) -> MockGateway {
+        let mut gw = MockGateway::new();
+        gw.expect_get_external_ip()
+            .returning(move || async move { Ok(ip) }.boxed_local());
+        gw
+    }
+
+    fn make_factory_returning(gw: impl FnOnce() -> MockGateway + 'static) -> MockGatewayFactory {
+        let mut factory = MockGatewayFactory::new();
+        let mut gw_slot = Some(gw());
+        factory.expect_search().once().returning(move |_opts| {
+            let gw = gw_slot.take().expect("search called more than once");
+            async move { Ok(gw) }.boxed_local()
+        });
+        factory
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_creates_mapping_with_desired_port_and_removes_on_cancel() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let internal_port = 12345u16;
+        let desired_external_port = 54321u16;
+        let external_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 1).into();
+
+        let factory = make_factory_returning(move || {
+            let mut gw = make_gateway_with_ip(external_ip);
+            gw.expect_add_port()
+                .once()
+                .with(
+                    eq(PortMappingProtocol::TCP),
+                    eq(desired_external_port),
+                    always(),
+                    always(),
+                    always(),
+                )
+                .returning(|_, _, _, _, _| async { Ok(()) }.boxed_local());
+            gw.expect_remove_port()
+                .once()
+                .with(eq(PortMappingProtocol::TCP), eq(desired_external_port))
+                .returning(|_, _| async { Ok(()) }.boxed_local());
+            gw
+        });
+
+        let (mut handle, mapper) =
+            init(PortMappingProtocol::TCP, internal_port, Some(desired_external_port), None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+        // Repeated calls must keep returning the same address, not `Err(Stopped)`.
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+
+        drop(handle);
+
+        task::yield_now().await;
+        run_task.now_or_never().unwrap().unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_creates_mapping_with_any_port() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let internal_port = 12345u16;
+        let assigned_port = 40000u16;
+        let external_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 2).into();
+
+        let factory = make_factory_returning(move || {
+            let mut gw = make_gateway_with_ip(external_ip);
+            gw.expect_add_any_port()
+                .once()
+                .with(eq(PortMappingProtocol::UDP), always(), always(), always())
+                .returning(move |_, _, _, _| async move { Ok(assigned_port) }.boxed_local());
+            gw.expect_remove_port()
+                .once()
+                .with(eq(PortMappingProtocol::UDP), eq(assigned_port))
+                .returning(|_, _| async { Ok(()) }.boxed_local());
+            gw
+        });
+
+        let (mut handle, mapper) = init(PortMappingProtocol::UDP, internal_port, None, None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, assigned_port));
+
+        drop(handle);
+
+        task::yield_now().await;
+        run_task.now_or_never().unwrap().unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_search_failure_is_reported_via_handle() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let mut factory = MockGatewayFactory::new();
+        factory
+            .expect_search()
+            .once()
+            .returning(|_opts| async { Err(igd_next::SearchError::InvalidResponse) }.boxed_local());
+
+        let (mut handle, mapper) = init(PortMappingProtocol::TCP, 12345, None, None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let result = handle.get_external_addr().await;
+        assert!(matches!(result, Err(Error::IgdError(_))));
+        // Repeated calls must keep returning the same error, not `Err(Stopped)`.
+        let result = handle.get_external_addr().await;
+        assert!(matches!(result, Err(Error::IgdError(_))));
+        let result = handle.get_external_addr().await;
+        assert!(matches!(result, Err(Error::IgdError(_))));
+
+        assert!(run_task.now_or_never().unwrap().unwrap().is_err());
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_mapping_is_renewed_periodically() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let internal_port = 12345u16;
+        let desired_external_port = 54321u16;
+        let external_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 3).into();
+
+        let factory = make_factory_returning(move || {
+            let mut gw = make_gateway_with_ip(external_ip);
+            // initial add_port + 2 renewals
+            gw.expect_add_port()
+                .times(3)
+                .with(
+                    eq(PortMappingProtocol::TCP),
+                    eq(desired_external_port),
+                    always(),
+                    always(),
+                    always(),
+                )
+                .returning(|_, _, _, _, _| async { Ok(()) }.boxed_local());
+            gw.expect_remove_port().once().returning(|_, _| async { Ok(()) }.boxed_local());
+            gw
+        });
+
+        let (mut handle, mapper) =
+            init(PortMappingProtocol::TCP, internal_port, Some(desired_external_port), None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+
+        // renewal interval is 3600s + 500ms; advance past two renewals
+        time::sleep(sec!(3601)).await;
+        time::sleep(sec!(3601)).await;
+
+        drop(handle);
+        task::yield_now().await;
+        run_task.now_or_never().unwrap().unwrap().unwrap();
+    }
 
     #[ignore]
     #[tokio::test]
@@ -151,12 +569,20 @@ mod tests {
         simple_logger::init_with_level(Level::Debug).unwrap();
 
         let internal_port = 12345;
-        let port_opener = PortOpener::new(PortMappingProtocol::TCP, internal_port, None, None)
-            .await
-            .unwrap_or_else(|e| panic!("Failed to create PortOpener: {e}"));
-        log::info!("port opener created, external ip: {}", port_opener.external_addr());
+        let port_opener = PortOpener::<IgdNextGatewayFactory>::new(
+            PortMappingProtocol::TCP,
+            internal_port,
+            None,
+            None,
+            60,
+            IgdNextGatewayFactory,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("Failed to create PortOpener: {e}"));
+        log::info!("port opener created, external ip: {}", port_opener.external_addr);
         time::sleep(sec!(1)).await;
         drop(port_opener);
         log::info!("port opener dropped");
+        time::sleep(sec!(1)).await;
     }
 }

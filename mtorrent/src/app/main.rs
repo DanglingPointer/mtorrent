@@ -1,18 +1,17 @@
 use crate::core;
-use crate::utils::startup::run_upnp;
 use crate::utils::{join_all_with_timeout, listener, startup};
+use futures_util::FutureExt;
 use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::task_scope::TaskScope;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast;
 use tokio::{join, runtime, task};
 
 /// Algorithm for selecting which pieces to download next.
@@ -100,45 +99,39 @@ pub async fn single_torrent(
     let local_addr_v4 = net::get_bind_addr_v4(cfg.bind_interface.as_deref());
     let local_addr_v6 = net::get_bind_addr_v6(cfg.bind_interface.as_deref());
 
-    let mut tasks_to_cancel = TaskScope::new();
     let mut tasks_to_join = task::JoinSet::new();
 
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
-    let external_pwp_port = if cfg.use_upnp {
-        let (tcp_tx, tcp_rx) = oneshot::channel();
-        tasks_to_cancel.spawn_on(
-            run_upnp(
-                internal_pwp_port,
-                cfg.pwp_port,
-                upnp::PortMappingProtocol::TCP,
-                cfg.bind_interface.clone(),
-                tcp_tx,
-            ),
-            &ctx.pwp_runtime,
+    let (external_pwp_port, upnp_handles) = if cfg.use_upnp {
+        let (mut tcp_handle, tcp_mapper) = upnp::init(
+            upnp::PortMappingProtocol::TCP,
+            internal_pwp_port,
+            cfg.pwp_port,
+            cfg.bind_interface.clone(),
         );
+        tasks_to_join.spawn_on(tcp_mapper.run().map(|_| ()), &ctx.pwp_runtime);
 
-        let (utp_tx, utp_rx) = oneshot::channel();
-        tasks_to_cancel.spawn_on(
-            run_upnp(
-                internal_pwp_port,
-                cfg.pwp_port,
-                upnp::PortMappingProtocol::UDP,
-                cfg.bind_interface.clone(),
-                utp_tx,
-            ),
-            &ctx.pwp_runtime,
+        let (mut utp_handle, utp_mapper) = upnp::init(
+            upnp::PortMappingProtocol::UDP,
+            internal_pwp_port,
+            cfg.pwp_port,
+            cfg.bind_interface.clone(),
         );
+        tasks_to_join.spawn_on(utp_mapper.run().map(|_| ()), &ctx.pwp_runtime);
 
         // prioritise uTP port mapping because incoming UDP packets are less likely to be blocked by
         // firewalls than incoming TCP connections
-        match join!(tcp_rx, utp_rx) {
-            (_, Ok(Ok(external_udp_port))) => external_udp_port,
-            (Ok(Ok(external_tcp_port)), _) => external_tcp_port,
-            (_, _) => internal_pwp_port,
-        }
+        let external_port =
+            match join!(tcp_handle.get_external_addr(), utp_handle.get_external_addr()) {
+                (_, Ok(external_udp_addr)) => external_udp_addr.port(),
+                (Ok(external_tcp_addr), _) => external_tcp_addr.port(),
+                (_, _) => internal_pwp_port,
+            };
+
+        (external_port, Some((tcp_handle, utp_handle)))
     } else {
-        internal_pwp_port
+        (internal_pwp_port, None)
     };
 
     let (utp_handle, utp_actor) = core::init_utp(
@@ -205,7 +198,7 @@ pub async fn single_torrent(
         .await?;
     }
 
-    drop(tasks_to_cancel);
+    drop(upnp_handles);
     join_all_with_timeout!(tasks_to_join, sec!(5));
     Ok(())
 }

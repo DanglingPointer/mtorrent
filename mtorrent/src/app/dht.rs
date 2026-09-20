@@ -51,27 +51,28 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, d
     Ok((worker_handle, cmd_sender))
 }
 
-async fn start_upnp(local_port: u16, interface: Option<&str>) -> io::Result<()> {
+async fn start_upnp(
+    local_port: u16,
+    interface: Option<String>,
+) -> io::Result<upnp::PortMapperHandle> {
     // try create a port mapping with the same port number
-    let mut port_opener = upnp::PortOpener::new(
-        upnp::PortMappingProtocol::UDP,
-        local_port,
-        Some(local_port),
-        interface,
-    )
-    .await
-    .map_err(io::Error::other)?;
+    let (mut handle, port_mapper) =
+        upnp::init(upnp::PortMappingProtocol::UDP, local_port, Some(local_port), interface);
 
-    log::info!("UPnP for DHT succeeded, public ip: {}", port_opener.external_addr());
+    // start periodic renewal of the port mapping. It will stop automatically when the handle is
+    // dropped
+    task::spawn(port_mapper.run());
 
-    // start periodic renewal of port mapping. It will stop and remove the mapping
-    // automatically once the DHT runtime shuts down
-    task::spawn_local(async move {
-        if let Err(e) = port_opener.run_continuous_renewal().await {
-            log::error!("UPnP port renewal for DHT failed: {e}");
+    match handle.get_external_addr().await {
+        Ok(external_addr) => {
+            log::info!("UPnP for DHT succeeded, public ip: {}", external_addr);
         }
-    });
-    Ok(())
+        Err(e) => {
+            log::error!("UPnP for DHT failed: {e}");
+        }
+    }
+
+    Ok(handle)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -97,9 +98,12 @@ async fn dht_main(
             Ok(socket) => socket,
         };
 
-    if use_upnp && let Err(e) = start_upnp(local_port, bind_interface.as_deref()).await {
-        log::error!("UPnP for DHT failed: {e}");
-    }
+    // launch UPnP and keep its handle alive until DHT exits
+    let _upnp_handle = if use_upnp {
+        Some(start_upnp(local_port, bind_interface).await)
+    } else {
+        None
+    };
 
     let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
 

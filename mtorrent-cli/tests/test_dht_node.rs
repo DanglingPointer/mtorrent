@@ -89,7 +89,7 @@ fn test_two_dht_nodes_discover_and_announce() {
         bind_interface: Some(loopback_iface_name().to_string()),
         max_concurrent_queries: None,
         config_dir: working_dir1.to_owned(),
-        use_upnp: false,
+        use_upnp: true,
         bootstrap_nodes_override: Some(Vec::new()),
         query_timeout: None,
     })
@@ -100,14 +100,14 @@ fn test_two_dht_nodes_discover_and_announce() {
         bind_interface: Some(loopback_iface_name().to_string()),
         max_concurrent_queries: None,
         config_dir: working_dir2.to_owned(),
-        use_upnp: false,
+        use_upnp: true,
         bootstrap_nodes_override: Some(Vec::new()),
         query_timeout: None,
     })
     .unwrap();
 
-    // wait for both nodes to start up and bind to their ports
-    std::thread::sleep(sec!(1));
+    // wait for both nodes to create port mappings and bind to their ports
+    std::thread::sleep(sec!(6));
 
     node1_cmds.blocking_send(Command::AddNode { addr: node2_addr }).unwrap();
     node2_cmds.blocking_send(Command::AddNode { addr: node1_addr }).unwrap();

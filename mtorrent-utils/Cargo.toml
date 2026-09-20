@@ -36,6 +36,8 @@ ipconfig = "0.3"
 static_assertions = { workspace = true }
 tokio-test = { workspace = true }
 simple_logger = { workspace = true }
+mockall = { workspace = true }
+futures-util = { workspace = true }
 
 [lints]
 workspace = true
