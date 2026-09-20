@@ -8,7 +8,10 @@ use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::signal;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -41,14 +44,23 @@ struct Cli {
     no_dht: bool,
 }
 
-struct SnapshotLogger;
+struct SnapshotLogger {
+    stop_flag: Arc<AtomicBool>,
+    ticks: u64,
+}
 
 impl listener::StateListener for SnapshotLogger {
-    const INTERVAL: Duration = sec!(10);
+    const INTERVAL: Duration = sec!(1);
 
     fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) -> ControlFlow<()> {
-        log::info!("Periodic state dump:\n{snapshot}");
-        ControlFlow::Continue(())
+        if self.ticks.is_multiple_of(10) {
+            log::info!("Periodic state dump:\n{snapshot}");
+        }
+        self.ticks = self.ticks.wrapping_add(1);
+        match self.stop_flag.load(Ordering::Relaxed) {
+            true => ControlFlow::Break(()),
+            false => ControlFlow::Continue(()),
+        }
     }
 }
 
@@ -116,6 +128,16 @@ fn main() -> io::Result<()> {
         ..Default::default()
     })?;
 
+    // spawn ctrl+c handler on pwp runtime because it requires I/O
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    pwp_worker.runtime_handle().spawn({
+        let flag = stop_flag.clone();
+        async move {
+            _ = signal::ctrl_c().await;
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
+
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
         let (dht_worker, dht_cmds) = dht::launch_dht_node_runtime(dht::Config {
             local_port: 6881,
@@ -139,7 +161,10 @@ fn main() -> io::Result<()> {
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
             cli.metainfo_uri,
-            &mut SnapshotLogger,
+            &mut SnapshotLogger {
+                stop_flag,
+                ticks: 0,
+            },
             app::main::Config {
                 local_peer_id: peer_id,
                 config_dir: local_data_dir,
