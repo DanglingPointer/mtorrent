@@ -1,5 +1,5 @@
 use std::mem;
-use tokio::task;
+use tokio::{runtime, task};
 
 #[derive(Debug)]
 pub struct TaskScope(Vec<task::AbortHandle>);
@@ -27,6 +27,21 @@ impl TaskScope {
     {
         self.0.retain(|handle| !handle.is_finished());
         let join_handle = task::spawn(future);
+        self.0.push(join_handle.abort_handle());
+        join_handle
+    }
+
+    pub fn spawn_on<F>(
+        &mut self,
+        future: F,
+        handle: &runtime::Handle,
+    ) -> task::JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.0.retain(|handle| !handle.is_finished());
+        let join_handle = handle.spawn(future);
         self.0.push(join_handle.abort_handle());
         join_handle
     }

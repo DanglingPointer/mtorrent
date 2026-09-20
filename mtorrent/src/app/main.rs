@@ -1,16 +1,18 @@
 use crate::core;
+use crate::utils::startup::run_upnp;
 use crate::utils::{join_all_with_timeout, listener, startup};
 use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_scope::TaskScope;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tokio::{join, runtime, task};
 
 /// Algorithm for selecting which pieces to download next.
@@ -75,31 +77,6 @@ struct Params {
     download_strategy: DownloadStrategy,
 }
 
-async fn start_upnp(
-    internal_port: u16,
-    desired_external_port: Option<u16>,
-    proto: upnp::PortMappingProtocol,
-    interface: Option<String>,
-) -> u16 {
-    let Ok(mut port_opener) =
-        upnp::PortOpener::new(proto, internal_port, desired_external_port, interface.as_deref())
-            .await
-            .inspect_err(|e| log::error!("UPnP: {proto:?} port mapping failed: {e}"))
-    else {
-        return internal_port;
-    };
-
-    let external_addr = port_opener.external_addr();
-    log::info!("UPnP: {proto:?} port mapping succeeded, public addr: {external_addr}");
-
-    task::spawn(async move {
-        if let Err(e) = port_opener.run_continuous_renewal().await {
-            log::error!("UPnP: {proto:?} port renewal for PWP failed: {e}");
-        }
-    });
-    external_addr.port()
-}
-
 /// Download a single torrent given a magnet link or a path to its metainfo file.
 /// This function will exit once the download is complete or a fatal error has occurred.
 pub async fn single_torrent(
@@ -123,41 +100,58 @@ pub async fn single_torrent(
     let local_addr_v4 = net::get_bind_addr_v4(cfg.bind_interface.as_deref());
     let local_addr_v6 = net::get_bind_addr_v6(cfg.bind_interface.as_deref());
 
+    let mut tasks_to_cancel = TaskScope::new();
+    let mut tasks_to_join = task::JoinSet::new();
+
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
     let external_pwp_port = if cfg.use_upnp {
-        // UPnP tasks must be spawned on the pwp runtime
-        let tcp_task = ctx.pwp_runtime.spawn(start_upnp(
-            internal_pwp_port,
-            cfg.pwp_port,
-            upnp::PortMappingProtocol::TCP,
-            cfg.bind_interface.clone(),
-        ));
-        let utp_task = ctx.pwp_runtime.spawn(start_upnp(
-            internal_pwp_port,
-            cfg.pwp_port,
-            upnp::PortMappingProtocol::UDP,
-            cfg.bind_interface.clone(),
-        ));
-        let (_external_tcp_port, external_udp_port) = join!(tcp_task, utp_task);
-        external_udp_port.unwrap_or(internal_pwp_port)
+        let (tcp_tx, tcp_rx) = oneshot::channel();
+        tasks_to_cancel.spawn_on(
+            run_upnp(
+                internal_pwp_port,
+                cfg.pwp_port,
+                upnp::PortMappingProtocol::TCP,
+                cfg.bind_interface.clone(),
+                tcp_tx,
+            ),
+            &ctx.pwp_runtime,
+        );
+
+        let (utp_tx, utp_rx) = oneshot::channel();
+        tasks_to_cancel.spawn_on(
+            run_upnp(
+                internal_pwp_port,
+                cfg.pwp_port,
+                upnp::PortMappingProtocol::UDP,
+                cfg.bind_interface.clone(),
+                utp_tx,
+            ),
+            &ctx.pwp_runtime,
+        );
+
+        // prioritise uTP port mapping because incoming UDP packets are less likely to be blocked by
+        // firewalls than incoming TCP connections
+        match join!(tcp_rx, utp_rx) {
+            (_, Ok(Ok(external_udp_port))) => external_udp_port,
+            (Ok(Ok(external_tcp_port)), _) => external_tcp_port,
+            (_, _) => internal_pwp_port,
+        }
     } else {
         internal_pwp_port
     };
-
-    let mut tasks = task::JoinSet::new();
 
     let (utp_handle, utp_actor) = core::init_utp(
         SocketAddrV4::new(local_addr_v4, internal_pwp_port),
         SocketAddrV6::new(local_addr_v6, internal_pwp_port, 0, 0),
         cfg.bind_interface.clone(),
     );
-    tasks.spawn_on(utp_actor.run(), &ctx.pwp_runtime);
+    tasks_to_join.spawn_on(utp_actor.run(), &ctx.pwp_runtime);
 
     let (tracker_client, trackers_mgr) = trackers::init(trackers::Config {
         bind_interface: cfg.bind_interface.clone(),
     });
-    tasks.spawn_on(trackers_mgr.run(), &ctx.pwp_runtime);
+    tasks_to_join.spawn_on(trackers_mgr.run(), &ctx.pwp_runtime);
 
     let handles = Handles {
         dht: ctx.dht_handle.as_ref(),
@@ -211,7 +205,8 @@ pub async fn single_torrent(
         .await?;
     }
 
-    join_all_with_timeout!(tasks, sec!(5));
+    drop(tasks_to_cancel);
+    join_all_with_timeout!(tasks_to_join, sec!(5));
     Ok(())
 }
 

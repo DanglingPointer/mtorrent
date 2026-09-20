@@ -8,7 +8,7 @@ use tokio::time::sleep;
 type AsyncGateway = aio::Gateway<aio::tokio::Tokio>;
 type BlockingGateway = igd_next::Gateway;
 
-pub use igd_next::PortMappingProtocol;
+pub use igd_next::{Error, PortMappingProtocol};
 
 /// Utility for creating and maintaining a port mapping on the local gateway via UPnP. The mapping
 /// is valid for `PORT_LEASE_DURATION_SEC` seconds, but automatic renewal can be enabled by calling
@@ -36,7 +36,7 @@ impl PortOpener {
         internal_port: u16,
         desired_external_port: Option<u16>,
         interface: Option<&str>,
-    ) -> igd_next::Result<Self> {
+    ) -> Result<Self, Error> {
         // get our IP on the local network
         let internal_ip = if let Some(iface) = interface {
             net::get_bind_addr_v4(Some(iface)).into()

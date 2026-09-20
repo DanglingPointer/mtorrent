@@ -1,12 +1,47 @@
 use mtorrent_base::{data, input};
+use mtorrent_utils::upnp;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io, iter};
+use tokio::sync::oneshot;
 
 pub(crate) fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<input::Metainfo> {
     log::info!("Input metainfo file: {}", metainfo_filepath.as_ref().to_string_lossy());
     let metainfo = input::Metainfo::from_file(metainfo_filepath)?;
     Ok(metainfo)
+}
+
+pub(crate) async fn run_upnp(
+    internal_port: u16,
+    desired_external_port: Option<u16>,
+    proto: upnp::PortMappingProtocol,
+    interface: Option<String>,
+    mapped_port_sender: oneshot::Sender<Result<u16, upnp::Error>>,
+) {
+    let mut port_opener = match upnp::PortOpener::new(
+        proto,
+        internal_port,
+        desired_external_port,
+        interface.as_deref(),
+    )
+    .await
+    {
+        Ok(port_opener) => {
+            let external_addr = port_opener.external_addr();
+            log::info!("UPnP: {proto:?} port mapping succeeded, public addr: {external_addr}");
+            _ = mapped_port_sender.send(Ok(external_addr.port()));
+            port_opener
+        }
+        Err(e) => {
+            log::error!("UPnP: {proto:?} port mapping failed: {e}");
+            _ = mapped_port_sender.send(Err(e));
+            return;
+        }
+    };
+
+    if let Err(e) = port_opener.run_continuous_renewal().await {
+        log::error!("UPnP: {proto:?} port renewal for PWP failed: {e}");
+    }
 }
 
 #[doc(hidden)]
