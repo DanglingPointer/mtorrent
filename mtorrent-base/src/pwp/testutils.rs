@@ -38,8 +38,8 @@ impl AnyMessage {
 }
 
 /// ```no_run
-/// # use mtorrent_core::msgs;
-/// # use mtorrent_core::pwp::*;
+/// # use mtorrent_base::msgs;
+/// # use mtorrent_base::pwp::*;
 /// msgs![DownloaderMessage::Interested, DownloaderMessage::NotInterested];
 /// ```
 #[doc(hidden)]

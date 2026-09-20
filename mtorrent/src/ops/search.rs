@@ -1,6 +1,6 @@
 use super::connections::PeerReporter;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::PeerOrigin;
+use mtorrent_base::pwp::PeerOrigin;
 use mtorrent_dht as dht;
 use mtorrent_utils::info_stopwatch;
 use std::time::Duration;

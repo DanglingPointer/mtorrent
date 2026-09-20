@@ -1,7 +1,7 @@
 use super::super::{PeerReporter, ctx};
 use super::CLIENT_NAME;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::{self, PeerExchangeData};
+use mtorrent_base::pwp::{self, PeerExchangeData};
 use std::{cmp, io};
 use tokio::time::Instant;
 

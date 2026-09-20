@@ -11,7 +11,7 @@ use tokio::{join, task};
 async fn test_exchange_data_between_2_peers() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent_core::utp", log::LevelFilter::Trace)
+        .with_module_level("mtorrent_base::utp", log::LevelFilter::Trace)
         .init();
 
     let socket1 = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
@@ -73,7 +73,7 @@ async fn test_exchange_data_between_2_peers() {
 async fn test_outbound_connection_timeout() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent_core::utp", log::LevelFilter::Trace)
+        .with_module_level("mtorrent_base::utp", log::LevelFilter::Trace)
         .init();
 
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
@@ -136,7 +136,7 @@ async fn test_outbound_syn_doesnt_change_across_reconnects() {
 async fn test_pipe_data_from_one_peer_to_another() {
     // let _ = simple_logger::SimpleLogger::new()
     //     .with_level(log::LevelFilter::Off)
-    //     .with_module_level("mtorrent_core::utp::connection", log::LevelFilter::Trace)
+    //     .with_module_level("mtorrent_base::utp::connection", log::LevelFilter::Trace)
     //     .init();
 
     let socket1 = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();

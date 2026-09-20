@@ -1,6 +1,6 @@
 [package]
 name = "mtorrent-core"
-description = "Fundamentals for building asynchronous BitTorrent clients"
+description = "Deprecated: renamed to mtorrent-base"
 categories = ["asynchronous", "network-programming", "parser-implementations"]
 keywords = ["bittorrent", "torrent", "protocol", "tracker", "p2p"]
 version.workspace = true
@@ -11,34 +11,10 @@ license.workspace = true
 
 [features]
 default = []
-mocks = []
+mocks = ["mtorrent-base/mocks"]
 
 [dependencies]
-mtorrent-utils = { workspace = true }
-futures-channel = { workspace = true }
-futures-util = { workspace = true }
-local_async_utils = { workspace = true }
-tokio = { workspace = true }
-log = { workspace = true }
-bitvec = { workspace = true }
-derive_more = { workspace = true }
-serde = { workspace = true }
-bytes = { workspace = true }
-sha1_smol = { workspace = true }
-thiserror = { workspace = true }
-rand = { workspace = true }
-url = { workspace = true }
-reqwest = { workspace = true }
-form_urlencoded = { workspace = true }
-crypto-bigint = { workspace = true }
-rc4 = { workspace = true }
-pin-project-lite = { workspace = true }
-normalize-path = { workspace = true }
-
-[dev-dependencies]
-tokio-test = { workspace = true }
-mockito = { workspace = true }
-simple_logger = { workspace = true }
+mtorrent-base = { workspace = true }
 
 [lints]
 workspace = true

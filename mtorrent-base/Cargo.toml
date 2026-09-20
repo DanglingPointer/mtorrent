@@ -1,0 +1,48 @@
+[package]
+name = "mtorrent-base"
+description = "Fundamentals for building asynchronous BitTorrent clients"
+categories = ["asynchronous", "network-programming", "parser-implementations"]
+keywords = ["bittorrent", "torrent", "protocol", "tracker", "p2p"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[features]
+default = []
+mocks = []
+
+[dependencies]
+mtorrent-utils = { workspace = true }
+futures-channel = { workspace = true }
+futures-util = { workspace = true }
+local_async_utils = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+bitvec = { workspace = true }
+derive_more = { workspace = true }
+serde = { workspace = true }
+bytes = { workspace = true }
+sha1_smol = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+url = { workspace = true }
+reqwest = { workspace = true }
+form_urlencoded = { workspace = true }
+crypto-bigint = { workspace = true }
+rc4 = { workspace = true }
+pin-project-lite = { workspace = true }
+normalize-path = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+mockito = { workspace = true }
+simple_logger = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

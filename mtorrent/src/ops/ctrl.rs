@@ -1,7 +1,7 @@
 use super::ctx;
 use crate::app::main::DownloadStrategy;
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, input, pwp};
+use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::benc;
 use std::collections::BTreeMap;
 use std::io;

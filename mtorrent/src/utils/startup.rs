@@ -1,4 +1,4 @@
-use mtorrent_core::{data, input};
+use mtorrent_base::{data, input};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io, iter};

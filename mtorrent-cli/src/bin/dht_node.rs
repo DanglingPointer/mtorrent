@@ -1,6 +1,6 @@
 use clap::Parser;
 use mtorrent::app;
-use mtorrent_core::input::MagnetLink;
+use mtorrent_base::input::MagnetLink;
 use mtorrent_dht as dht;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;

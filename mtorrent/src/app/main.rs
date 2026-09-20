@@ -1,7 +1,7 @@
 use crate::ops;
 use crate::utils::{join_all_with_timeout, listener, startup};
 use local_async_utils::prelude::*;
-use mtorrent_core::{input, pwp, trackers};
+use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, net, upnp};

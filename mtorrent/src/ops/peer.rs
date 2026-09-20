@@ -16,7 +16,7 @@ pub use utp::{UtpActor, UtpHandle, init_utp};
 use super::connections::{PeerConnector, PeerReporter};
 use super::{ctrl, ctx};
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, pwp};
+use mtorrent_base::{data, pwp};
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -296,7 +296,7 @@ impl PeerConnector for MainConnectionData {
         &self,
         peer_addr: SocketAddr,
         deadline: Instant,
-        data: mtorrent_core::utp::InboundConnectData,
+        data: mtorrent_base::utp::InboundConnectData,
     ) -> io::Result<Self::PeerConnection> {
         define_with_ctx!(self.ctx_handle);
 
@@ -513,7 +513,7 @@ impl PeerConnector for PreliminaryConnectionData {
         &self,
         peer_addr: SocketAddr,
         deadline: Instant,
-        data: mtorrent_core::utp::InboundConnectData,
+        data: mtorrent_base::utp::InboundConnectData,
     ) -> io::Result<Self::PeerConnection> {
         define_with_ctx!(self.ctx_handle);
 

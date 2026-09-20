@@ -11,7 +11,7 @@ Lightweight Bittorrent engine in Rust. Blazingly fast, incredibly robust and ver
     - [`rill`](https://github.com/sachesi/rill) by [@sachesi](https://github.com/sachesi)
     - [`mtorrent-egui`](https://github.com/DanglingPointer/mtorrent-egui) by [@michael-eddy](https://github.com/michael-eddy)
 
-For low-level library components, see [`mtorrent-core`](https://crates.io/crates/mtorrent-core), [`mtorrent-dht`](https://crates.io/crates/mtorrent-dht) and [`mtorrent-utils`](https://crates.io/crates/mtorrent-utils).
+For low-level library components, see [`mtorrent-base`](https://crates.io/crates/mtorrent-base) (previously published as the now-deprecated [`mtorrent-core`](https://crates.io/crates/mtorrent-core)), [`mtorrent-dht`](https://crates.io/crates/mtorrent-dht) and [`mtorrent-utils`](https://crates.io/crates/mtorrent-utils).
 
 ## Installation
 Download the latest pre-compiled executable for Linux or Windows here:

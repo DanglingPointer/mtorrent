@@ -1,7 +1,7 @@
 use derive_more::Debug;
 use local_async_utils::prelude::*;
-use mtorrent_core::pwp::{PeerOrigin, TransportProto};
-use mtorrent_core::utp;
+use mtorrent_base::pwp::{PeerOrigin, TransportProto};
+use mtorrent_base::utp;
 use mtorrent_utils::connect_recorder::{ConnectRecord, ConnectRecorder};
 use mtorrent_utils::task_scope::TaskScope;
 use rand::RngExt;
