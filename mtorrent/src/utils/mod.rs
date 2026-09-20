@@ -16,7 +16,7 @@ macro_rules! join_all_with_timeout {
             .await
             .is_err()
         {
-            log::warn!("Failed to join all tasks within {:?}", $timeout);
+            log::warn!("Failed to join all tasks in {:?}", $timeout);
         }
     }};
 }

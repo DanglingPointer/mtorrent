@@ -171,7 +171,10 @@ fn create_endpoint(
 ) -> io::Result<(utp::EndpointHandle, utp::InboundListener)> {
     let socket = net::bound_udp_socket(local_addr, interface)?;
     let (endpoint, listener, driver) = utp::new_endpoint(socket);
-    join_set.spawn_local(driver.run());
+    join_set.spawn_local(async move {
+        let _sw = info_stopwatch!(sec!(0), "uTP driver on {local_addr}");
+        driver.run().await;
+    });
     Ok((endpoint, listener))
 }
 
@@ -233,18 +236,20 @@ async fn handle_commands(
     endpoint_v6: utp::EndpointHandle,
     reporter_sender: local_unbounded::Sender<PeerReporter>,
 ) {
+    let mut child_tasks = TaskScope::new();
+
     while let Some(cmd) = cmd_receiver.recv().await {
         match cmd {
             Command::Restart { reporter } => {
                 _ = reporter_sender.send(reporter);
-                join!(endpoint_v4.reset_connections(), endpoint_v6.reset_connections(),);
+                join!(endpoint_v4.reset_connections(), endpoint_v6.reset_connections());
             }
             Command::OutboundConnect { args, resp } => {
                 let endpoint = match args.peer_addr {
                     SocketAddr::V4(_) => endpoint_v4.clone(),
                     SocketAddr::V6(_) => endpoint_v6.clone(),
                 };
-                task::spawn_local(async move {
+                child_tasks.spawn_local(async move {
                     let ret = time::timeout_at(args.deadline, async {
                         let mut stream = endpoint.add_outbound_connection(args.peer_addr).await?;
                         let crypto = if args.protocol_encryption_enabled {
@@ -273,7 +278,7 @@ async fn handle_commands(
                     SocketAddr::V4(_) => endpoint_v4.clone(),
                     SocketAddr::V6(_) => endpoint_v6.clone(),
                 };
-                task::spawn_local(async move {
+                child_tasks.spawn_local(async move {
                     let ret = time::timeout_at(args.deadline, async {
                         let stream =
                             endpoint.add_inbound_connection(args.peer_addr, args.data).await?;
@@ -322,6 +327,7 @@ async fn handle_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
     use tokio::net::UdpSocket;
 
@@ -386,6 +392,56 @@ mod tests {
         // abort the uTP task
         task_handle.abort();
         let _ = task_handle.await;
+
+        // verify that the port is released
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "local")]
+    async fn test_stopping_utp_with_pending_connects_releases_port() {
+        _ = simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Debug).init();
+
+        // find available port
+        let port = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let local_ipv4_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        let local_ipv6_addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+
+        // start uTP
+        let (handle, actor) = init_utp(local_ipv4_addr, local_ipv6_addr, None);
+        let actor_task = task::spawn_local(actor.run());
+        task::yield_now().await;
+
+        // verify that uTP is running and the port is in use
+        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        task::yield_now().await;
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
+
+        // start an oubound connection
+        let connect_task = task::spawn(async move {
+            let connect_result = handle
+                .outbound_connect(OutboundConnectArgs {
+                    local_peer_id: PeerId::generate_new(),
+                    info_hash: [0u8; 20],
+                    extension_protocol_enabled: false,
+                    protocol_encryption_enabled: false,
+                    peer_addr: (Ipv4Addr::LOCALHOST, 6789).into(),
+                    deadline: Instant::now() + min!(5),
+                })
+                .await;
+            connect_result.unwrap();
+        });
+        task::yield_now().await;
+
+        // drop uTP handle by aborting the connect task
+        connect_task.abort();
+        task::yield_now().await;
+        actor_task.now_or_never().unwrap().unwrap();
 
         // verify that the port is released
         assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
