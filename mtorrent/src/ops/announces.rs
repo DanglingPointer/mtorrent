@@ -3,9 +3,9 @@ use crate::ops::PeerReporter;
 use crate::utils::config;
 use futures_util::future;
 use local_async_utils::prelude::*;
-use mtorrent_core::input::Metainfo;
-use mtorrent_core::pwp::PeerOrigin;
-use mtorrent_core::trackers::*;
+use mtorrent_base::input::Metainfo;
+use mtorrent_base::pwp::PeerOrigin;
+use mtorrent_base::trackers::*;
 use std::path::Path;
 use std::{io, iter};
 use tokio::time::{self, Instant};
@@ -195,7 +195,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mtorrent_core::input::MagnetLink;
+    use mtorrent_base::input::MagnetLink;
     use mtorrent_utils::peer_id::PeerId;
     use std::collections::HashSet;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};

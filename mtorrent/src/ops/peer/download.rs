@@ -1,7 +1,7 @@
 use crate::ops::{ctrl, ctx};
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, pwp};
+use mtorrent_base::{data, pwp};
 use mtorrent_utils::{bandwidth, debug_stopwatch, trace_stopwatch};
 use std::net::SocketAddr;
 use std::rc::Rc;

@@ -5,7 +5,7 @@ use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
 };
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, input, pwp};
+use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use serde::Deserialize;
 use std::collections::HashSet;

@@ -3,7 +3,7 @@ use super::LOCAL_REQQ;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use local_async_utils::sync::error::TrySendError;
-use mtorrent_core::{data, pwp};
+use mtorrent_base::{data, pwp};
 use mtorrent_utils::{bandwidth, debug_stopwatch, info_stopwatch};
 use std::io;
 use std::time::Duration;

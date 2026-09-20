@@ -57,14 +57,14 @@ fn main() -> io::Result<()> {
         .with_threads(false)
         .with_level(log::LevelFilter::Off)
         .with_module_level("mtorrent", log::LevelFilter::Info)
-        .with_module_level("mtorrent_core", log::LevelFilter::Info)
+        .with_module_level("mtorrent_base", log::LevelFilter::Info)
         .with_module_level("mtorrent_utils", log::LevelFilter::Info)
         .with_module_level("mtorrent_dht", log::LevelFilter::Info)
-        // .with_module_level("mtorrent_core::utp", log::LevelFilter::Debug)
+        // .with_module_level("mtorrent_base::utp", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::connections", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::metadata", log::LevelFilter::Debug)
         // .with_module_level("mtorrent::ops::peer::extensions", log::LevelFilter::Debug)
-        // .with_module_level("mtorrent_core::pwp", log::LevelFilter::Trace)
+        // .with_module_level("mtorrent_base::pwp", log::LevelFilter::Trace)
         .init()
         .map_err(io::Error::other)?;
 

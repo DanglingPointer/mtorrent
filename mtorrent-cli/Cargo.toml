@@ -20,7 +20,7 @@ default-run = "mtorrent-cli"
 mtorrent = { workspace = true }
 mtorrent-dht = { workspace = true }
 mtorrent-utils = { workspace = true }
-mtorrent-core = { workspace = true }  # for dht_node binary
+mtorrent-base = { workspace = true }  # for dht_node binary
 
 log = { workspace = true }
 local_async_utils = { workspace = true }

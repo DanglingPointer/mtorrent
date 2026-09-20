@@ -1,7 +1,7 @@
 use super::super::{PeerReporter, ctrl, ctx};
 use super::{CLIENT_NAME, LOCAL_REQQ};
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, pwp};
+use mtorrent_base::{data, pwp};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::Duration;

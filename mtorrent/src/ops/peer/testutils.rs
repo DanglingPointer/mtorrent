@@ -2,7 +2,7 @@ use crate::ops::{PeerReporter, UtpHandle, ctx};
 use crate::utils::startup;
 use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
-use mtorrent_core::{data, input, pwp};
+use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
 use std::fmt::Debug;
 use std::io::Read;

@@ -1,4 +1,4 @@
-use mtorrent_core::pwp::{PeerOrigin, PeerState, TransportProto};
+use mtorrent_base::pwp::{PeerOrigin, PeerState, TransportProto};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;

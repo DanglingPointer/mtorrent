@@ -3,7 +3,7 @@ use crate::utils::join_all_with_timeout;
 use bytes::BytesMut;
 use futures_util::{Stream, StreamExt, stream};
 use local_async_utils::prelude::*;
-use mtorrent_core::{pe, pwp, utp};
+use mtorrent_base::{pe, pwp, utp};
 use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::task_scope::TaskScope;

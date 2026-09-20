@@ -554,7 +554,7 @@ mod tests {
     async fn test_dont_exit_on_receive_error() {
         let _ = simple_logger::SimpleLogger::new()
             .with_level(log::LevelFilter::Off)
-            .with_module_level("mtorrent_core::utp", log::LevelFilter::Trace)
+            .with_module_level("mtorrent_base::utp", log::LevelFilter::Trace)
             .init();
         let peer_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 0u16).into();
 
@@ -681,7 +681,7 @@ mod tests {
     async fn test_drop_received_packet_when_ingress_full() {
         // let _ = simple_logger::SimpleLogger::new()
         //     .with_level(log::LevelFilter::Off)
-        //     .with_module_level("mtorrent_core::utp", log::LevelFilter::Trace)
+        //     .with_module_level("mtorrent_base::utp", log::LevelFilter::Trace)
         //     .init();
         let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0u16)).await.unwrap();
         let peer_addr = peer_socket.local_addr().unwrap();

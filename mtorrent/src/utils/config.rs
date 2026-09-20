@@ -11,8 +11,8 @@
 //!     <info hash>: <bitfield>
 //! }
 //! ```
-use mtorrent_core::pwp::Bitfield;
-use mtorrent_core::trackers::TrackerUrl;
+use mtorrent_base::pwp::Bitfield;
+use mtorrent_base::trackers::TrackerUrl;
 use mtorrent_utils::benc::Element;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
