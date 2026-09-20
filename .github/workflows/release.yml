@@ -69,4 +69,4 @@ jobs:
       run: |-
         echo "${{ secrets.CARGO_TOKEN }}" | cargo login
     - name: Publish to crates.io
-      run: cargo publish --workspace
+      run: cargo publish --workspace --exclude=mtorrent-core
