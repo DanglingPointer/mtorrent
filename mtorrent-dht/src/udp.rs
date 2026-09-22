@@ -1,6 +1,6 @@
 use super::error::Error as DhtError;
 use super::msgs::Message;
-use mtorrent_utils::benc;
+use mtorrent_utils::{benc, debug_stopwatch};
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -11,7 +11,6 @@ use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::time::Instant;
 
 pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
 pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
@@ -39,8 +38,7 @@ pub struct IoDriver {
 
 impl IoDriver {
     pub async fn run(self) {
-        log::debug!("UDP IoDriver started");
-        let start_time = Instant::now();
+        let _sw = debug_stopwatch!("DHT IoDriver");
 
         let mut ingress_stats = IngressStats::default();
         let mut egress_stats = EgressStats::default();
@@ -62,11 +60,6 @@ impl IoDriver {
             _ = egress => (),
             _ = ingress => (),
         }
-
-        log::debug!(
-            "UDP IoDriver finished in {:?}, {ingress_stats:?}, {egress_stats:?}",
-            start_time.elapsed()
-        );
     }
 }
 
@@ -75,12 +68,28 @@ struct IngressStats {
     dropped_packets: u64,
     parse_errors: u64,
     receive_errors: u64,
+    total_bytes: u64,
+    packets: u64,
 }
 
 #[derive(Debug, Default)]
 struct EgressStats {
     send_errors: u64,
     incomplete_sends: u64,
+    total_bytes: u64,
+    packets: u64,
+}
+
+impl Drop for IngressStats {
+    fn drop(&mut self) {
+        log::info!("DHT {self:?}");
+    }
+}
+
+impl Drop for EgressStats {
+    fn drop(&mut self) {
+        log::info!("DHT {self:?}");
+    }
 }
 
 const RX_BUFFER_SIZE: usize = 64 * 1024;
@@ -135,6 +144,8 @@ impl<'s> Future for Ingress<'s> {
                 }
                 Ok(addr) => addr,
             };
+            stats.packets += 1;
+            stats.total_bytes += buffer.filled().len() as u64;
             let message = match parse_msg(buffer.filled()) {
                 Err(_e) => {
                     stats.parse_errors += 1;
@@ -187,7 +198,10 @@ impl<'s> Future for Egress<'s> {
                         Ok(bytes_sent) if bytes_sent != data_len => {
                             stats.incomplete_sends += 1;
                         }
-                        Ok(_) => (),
+                        Ok(_) => {
+                            stats.packets += 1;
+                            stats.total_bytes += data_len as u64;
+                        }
                     }
                     *pending = None;
                 }
