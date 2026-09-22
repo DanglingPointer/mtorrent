@@ -102,11 +102,11 @@ impl EndpointHandle {
 
         let (notifier, receiver) = local_condvar::condvar();
         task::spawn_local(connection.run(receiver).inspect(move |result| match result {
-            Ok(()) => {
-                log::debug!("Outbound connection to {remote_addr} closed");
-            }
-            Err(e) => {
+            Err(e) if e.kind() != io::ErrorKind::Interrupted => {
                 log::error!("Outbound connection to {remote_addr} exited with error: {e}");
+            }
+            _ => {
+                log::debug!("Outbound connection to {remote_addr} closed");
             }
         }));
         Ok(DataStream {
@@ -141,11 +141,11 @@ impl EndpointHandle {
 
         let (notifier, receiver) = local_condvar::condvar();
         task::spawn_local(connection.run(receiver).inspect(move |result| match result {
-            Ok(()) => {
-                log::debug!("Inbound connection from {remote_addr} closed");
-            }
-            Err(e) => {
+            Err(e) if e.kind() != io::ErrorKind::Interrupted => {
                 log::error!("Inbound connection from {remote_addr} exited with error: {e}");
+            }
+            _ => {
+                log::debug!("Inbound connection from {remote_addr} closed");
             }
         }));
         Ok(DataStream {
