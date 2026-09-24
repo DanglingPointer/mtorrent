@@ -350,7 +350,7 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
         }
     };
 
-    log::debug!("{connect:?} succeeded");
+    log::debug!("Outbound {transport:?} connect to {} succeeded", connect.addr);
     let connected_time = Instant::now();
 
     let run_result = connector.run_connection(connect.origin, transport, connection).await;
@@ -403,7 +403,7 @@ async fn incoming_pwp_connection<C: PeerConnector>(
         ),
     };
 
-    log::debug!("Inbound connection from {} succeeded", connect.addr);
+    log::debug!("Inbound {transport:?} connection from {} succeeded", connect.addr);
 
     let run_result = connector.run_connection(PeerOrigin::Listener, transport, connection).await;
 
