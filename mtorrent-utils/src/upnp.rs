@@ -3,10 +3,12 @@ use igd_next;
 use local_async_utils::prelude::*;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::oneshot;
-use tokio::time::sleep;
-use tokio::{pin, select};
+use tokio::time::Instant;
+use tokio::time::error::Elapsed;
+use tokio::{pin, select, time};
 
 pub use igd_next::PortMappingProtocol;
 
@@ -19,11 +21,20 @@ pub enum Error {
     /// The [`PortMapper`] task has exited (or never started).
     #[error("UPnP task is not running")]
     Stopped,
+    /// UPnP request didn't complete within a timeout.
+    #[error("request timed out")]
+    Timeout,
 }
 
 impl From<igd_next::Error> for Error {
     fn from(e: igd_next::Error) -> Self {
         Self::IgdError(e.to_string())
+    }
+}
+
+impl From<Elapsed> for Error {
+    fn from(_: Elapsed) -> Self {
+        Self::Timeout
     }
 }
 
@@ -163,12 +174,11 @@ impl PortMapper {
             }
         };
 
-        // renewal interval must be slightly higher than the lease duration because renewing a
-        // mapping that hasn't expired yet has no effect
-        let renewal_interval = sec!(PORT_LEASE_DURATION_SEC as u64) + millisec!(500);
+        let renewal_period = sec!(PORT_LEASE_DURATION_SEC as u64);
+        let mut renewal_timer = time::interval_at(Instant::now() + renewal_period, renewal_period);
+        renewal_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
-        // Continuously renew the port mapping every `PORT_LEASE_DURATION_SEC` seconds, until the
-        // handle is dropped
+        // Continuously renew the port mapping until the handle is dropped
         pin!(canceller);
         loop {
             select! {
@@ -177,7 +187,7 @@ impl PortMapper {
                     port_opener.remove_mapping().await;
                     break;
                 }
-                _ = sleep(renewal_interval) => {
+                _ = renewal_timer.tick() => {
                     port_opener.renew_mapping(PORT_LEASE_DURATION_SEC).await?;
                 }
             }
@@ -358,7 +368,7 @@ impl<G: GatewayFactory> PortOpener<G> {
     async fn remove_mapping(&self) {
         let proto = self.proto;
         let external_port = self.external_addr.port();
-        match self.gateway.remove_port(proto, external_port).await {
+        match Self::with_timeout(sec!(1), self.gateway.remove_port(proto, external_port)).await {
             Ok(()) => {
                 log::info!("UPnP: port mapping deleted ({proto}:{external_port})");
             }
@@ -368,13 +378,32 @@ impl<G: GatewayFactory> PortOpener<G> {
         }
     }
 
-    async fn renew_mapping(&self, lease_duration_sec: u32) -> igd_next::Result<()> {
+    async fn renew_mapping(&self, lease_duration_sec: u32) -> Result<(), Error> {
         let proto = self.proto;
         let external_port = self.external_addr.port();
-        let result = self
-            .gateway
-            .add_port(proto, external_port, self.internal_addr, lease_duration_sec, "")
+
+        let mut attempts_left = 5;
+
+        let result = loop {
+            let result = Self::with_timeout(
+                sec!(1),
+                self.gateway.add_port(
+                    proto,
+                    external_port,
+                    self.internal_addr,
+                    lease_duration_sec,
+                    "",
+                ),
+            )
             .await;
+            attempts_left -= 1;
+            if attempts_left == 0 || result.is_ok() {
+                break result;
+            }
+            // Sometimes renewal fails because previous lease hasn't expired yet. Wait a bit and try
+            // again
+            time::sleep(millisec!(100)).await;
+        };
 
         match &result {
             Ok(()) => {
@@ -384,7 +413,16 @@ impl<G: GatewayFactory> PortOpener<G> {
                 log::error!("UPnP: failed to renew port mapping ({proto}:{external_port}): {e}")
             }
         }
-        result.map_err(Into::into)
+
+        result
+    }
+
+    async fn with_timeout<E: Into<igd_next::Error>>(
+        timeout: Duration,
+        f: impl Future<Output = Result<(), E>>,
+    ) -> Result<(), Error> {
+        time::timeout(timeout, f).await?.map_err(Into::into)?;
+        Ok(())
     }
 }
 
@@ -552,13 +590,109 @@ mod tests {
         let external_addr = handle.get_external_addr().await.unwrap();
         assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
 
-        // renewal interval is 3600s + 500ms; advance past two renewals
+        // renewal interval is 3600s; advance past two renewals
         time::sleep(sec!(3601)).await;
         time::sleep(sec!(3601)).await;
 
         drop(handle);
         task::yield_now().await;
         run_task.now_or_never().unwrap().unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_renewal_retries_after_100ms() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let internal_port = 12345u16;
+        let desired_external_port = 54321u16;
+        let external_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 4).into();
+
+        // Reference point for asserting when each renewal attempt happens. The renewal timer fires
+        // one period (3600s) after the mapper starts, then each retry adds a 100ms backoff.
+        let start = Instant::now();
+
+        let factory = make_factory_returning(move || {
+            let mut gw = make_gateway_with_ip(external_ip);
+
+            // Expectations are matched in the order they are added. The initial mapping succeeds,
+            // then the first two renewal attempts fail and the third succeeds.
+            gw.expect_add_port()
+                .once()
+                .returning(|_, _, _, _, _| async { Ok(()) }.boxed_local());
+
+            gw.expect_add_port().once().returning(move |_, _, _, _, _| {
+                assert_eq!(Instant::now() - start, sec!(3600));
+                async { Err(igd_next::AddPortError::PortInUse) }.boxed_local()
+            });
+
+            gw.expect_add_port().once().returning(move |_, _, _, _, _| {
+                assert_eq!(Instant::now() - start, sec!(3600) + millisec!(100));
+                async { Err(igd_next::AddPortError::PortInUse) }.boxed_local()
+            });
+
+            gw.expect_add_port().once().returning(move |_, _, _, _, _| {
+                assert_eq!(Instant::now() - start, sec!(3600) + millisec!(200));
+                async { Ok(()) }.boxed_local()
+            });
+
+            gw.expect_remove_port().once().returning(|_, _| async { Ok(()) }.boxed_local());
+            gw
+        });
+
+        let (mut handle, mapper) =
+            init(PortMappingProtocol::TCP, internal_port, Some(desired_external_port), None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+
+        // advance past one renewal, which internally retries add_port with 100ms backoffs
+        time::sleep(sec!(3601)).await;
+
+        drop(handle);
+        task::yield_now().await;
+        run_task.now_or_never().unwrap().unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_renewal_gives_up_after_5_attempts() {
+        _ = simple_logger::init_with_level(Level::Debug);
+
+        let internal_port = 12345u16;
+        let desired_external_port = 54321u16;
+        let external_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 5).into();
+
+        let factory = make_factory_returning(move || {
+            let mut gw = make_gateway_with_ip(external_ip);
+
+            // initial mapping succeeds
+            gw.expect_add_port()
+                .once()
+                .returning(|_, _, _, _, _| async { Ok(()) }.boxed_local());
+            // all 5 renewal attempts fail
+            gw.expect_add_port().times(5).returning(|_, _, _, _, _| {
+                async { Err(igd_next::AddPortError::PortInUse) }.boxed_local()
+            });
+            gw
+        });
+
+        let (mut handle, mapper) =
+            init(PortMappingProtocol::TCP, internal_port, Some(desired_external_port), None);
+
+        let run_task = task::spawn_local(mapper.run_impl(factory));
+
+        let external_addr = handle.get_external_addr().await.unwrap();
+        assert_eq!(external_addr, SocketAddr::new(external_ip, desired_external_port));
+
+        // advance past one renewal; all attempts fail so run_impl returns an error
+        time::sleep(sec!(3601)).await;
+
+        task::yield_now().await;
+        let result = run_task.now_or_never().unwrap().unwrap();
+        assert!(matches!(result, Err(Error::IgdError(_))));
+
+        drop(handle);
     }
 
     #[ignore]
