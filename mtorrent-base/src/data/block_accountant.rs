@@ -82,10 +82,8 @@ impl BlockAccountant {
         if bitfield.len() < self.pieces.piece_count() {
             return false;
         }
-        for (piece_index, is_piece_present) in bitfield.iter().enumerate() {
-            if *is_piece_present {
-                self.submit_piece(piece_index);
-            }
+        for piece_index in bitfield.iter_ones() {
+            self.submit_piece(piece_index);
         }
         true
     }

@@ -1,6 +1,6 @@
 use super::ctx;
 use crate::core::PeerReporter;
-use crate::utils::config;
+use crate::utils::disk;
 use futures_util::future;
 use local_async_utils::prelude::*;
 use mtorrent_base::input::Metainfo;
@@ -44,7 +44,7 @@ fn update_tracker_urls<'a>(
         .filter_map(|s| s.parse::<TrackerUrl>().ok())
         .collect();
 
-    match config::load_trackers(&config_dir) {
+    match disk::load_trackers(&config_dir) {
         Ok(loaded_trackers) => {
             for tracker in loaded_trackers {
                 if !all_trackers.contains(&tracker) {
@@ -58,7 +58,7 @@ fn update_tracker_urls<'a>(
     }
 
     // note that when saving trackers below, the '/announce' suffix disappears for udp urls
-    match config::save_trackers(&config_dir, all_trackers.clone()) {
+    match disk::save_trackers(&config_dir, all_trackers.clone()) {
         Ok(()) => (),
         Err(e) => log::warn!("Failed to save trackers to file: {e}"),
     }
@@ -108,7 +108,7 @@ async fn announce_periodically(
                 if e.kind() != io::ErrorKind::BrokenPipe {
                     // BrokenPipe means TrackerManager is shutting down
                     log::warn!("Announce to {url:?} failed: {e}. Removing tracker from config");
-                    _ = config::remove_tracker(config_dir, &url)
+                    _ = disk::remove_tracker(config_dir, &url)
                         .inspect_err(|e| log::warn!("Failed to remove tracker from config: {e}"));
                 }
                 return;

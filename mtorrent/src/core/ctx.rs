@@ -1,6 +1,6 @@
 use super::ctrl;
 use crate::app::main::DownloadStrategy;
-use crate::utils::config;
+use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
 };
@@ -221,23 +221,21 @@ pub async fn periodic_state_dump<L: StateListener>(
 ) {
     define_with_ctx!(ctx_handle);
 
-    let mut progress_file = config::open_progress_file(&outputdir)
+    let mut progress_file = disk::ProgressFile::open(&outputdir)
         .inspect_err(|e| log::error!("Failed to open progress file: {e}"))
         .ok();
 
     if let Some(file) = progress_file.as_mut() {
-        with_ctx!(|ctx| match config::load_progress(file, ctx.metainfo.info_hash()) {
+        with_ctx!(|ctx| match file.load_progress(ctx.metainfo.info_hash()) {
             Ok(mut state) => {
                 state.resize(ctx.pieces.piece_count(), false);
                 ctx.accountant.submit_bitfield(&state);
-                for (piece_index, is_present) in state.iter().enumerate() {
-                    if *is_present {
-                        ctx.piece_tracker.forget_piece(piece_index);
-                    }
+                for piece_index in state.iter_ones() {
+                    ctx.piece_tracker.forget_piece(piece_index);
                 }
             }
             Err(e) => {
-                log::warn!("Failed to load saved progress: {e}");
+                log::info!("Couldn't load saved progress: {e}");
             }
         });
     }
@@ -254,12 +252,10 @@ pub async fn periodic_state_dump<L: StateListener>(
         if let Some(file) = progress_file.as_mut()
             && last_write_time.elapsed() >= MIN_WRITE_INTERVAL
         {
-            if let Err(e) = config::save_progress(
-                file,
-                ctx.metainfo.info_hash(),
-                ctx.accountant.generate_bitfield(),
-            ) {
-                log::warn!("Failed to save progress to file: {e}");
+            if let Err(e) =
+                file.save_progress(ctx.metainfo.info_hash(), ctx.accountant.generate_bitfield())
+            {
+                log::error!("Failed to save progress to file: {e}");
             }
             last_write_time = Instant::now();
         }
