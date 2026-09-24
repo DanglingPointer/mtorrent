@@ -1,7 +1,7 @@
 use derive_more::{Debug, Deref};
+use mtorrent_utils::net;
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize, Serializer};
-use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Parsed tracker address.
@@ -66,18 +66,10 @@ impl<'de> Deserialize<'de> for TrackerUrl {
     }
 }
 
-/// Refuses link-local (e.g. 169.254.169.254), unspecified and broadcast addresses.
-pub(super) fn is_allowed_ip(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
-        IpAddr::V4(ip) => !(ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()),
-        IpAddr::V6(ip) => !(ip.is_unicast_link_local() || ip.is_unspecified()),
-    }
-}
-
 /// Host names are checked once they are resolved.
 pub(super) fn is_allowed_host(host: &str) -> bool {
     let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
-    host.parse().map_or(true, is_allowed_ip)
+    host.parse().map_or(true, net::is_allowed_remote_ip)
 }
 
 impl FromStr for TrackerUrl {

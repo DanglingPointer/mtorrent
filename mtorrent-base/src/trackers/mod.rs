@@ -338,7 +338,7 @@ async fn new_udp_client(
 
     for tracker_addr in lookup_host(tracker_addr_str)
         .await?
-        .filter(|addr| url::is_allowed_ip(addr.ip()))
+        .filter(|addr| net::is_allowed_remote_ip(addr.ip()))
     {
         let local_ip = match &tracker_addr {
             SocketAddr::V4(_) => local_ipv4.into(),

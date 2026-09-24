@@ -67,7 +67,7 @@ impl reqwest::dns::Resolve for Resolver {
         Box::pin(async move {
             let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
                 .await?
-                .filter(|addr| super::url::is_allowed_ip(addr.ip()))
+                .filter(|addr| net::is_allowed_remote_ip(addr.ip()))
                 .collect();
             if addrs.is_empty() {
                 return Err(format!("no allowed address for {}", name.as_str()).into());

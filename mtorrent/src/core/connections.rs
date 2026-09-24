@@ -3,6 +3,7 @@ use local_async_utils::prelude::*;
 use mtorrent_base::pwp::{PeerOrigin, TransportProto};
 use mtorrent_base::utp;
 use mtorrent_utils::connect_recorder::{ConnectRecord, ConnectRecorder};
+use mtorrent_utils::net;
 use mtorrent_utils::task_scope::TaskScope;
 use rand::RngExt;
 use std::cell::Cell;
@@ -42,7 +43,7 @@ pub struct PeerReporter {
 
 impl PeerReporter {
     pub async fn report_discovered(&self, addr: SocketAddr, origin: PeerOrigin) -> bool {
-        if addr.ip().is_unspecified() || matches!(addr.port(), 0..1024) {
+        if !net::is_allowed_remote_ip(addr.ip()) || matches!(addr.port(), 0..1024) {
             // invalid address, ignore it
             !self.discovered_reporter.is_closed()
         } else {
@@ -1234,7 +1235,11 @@ mod tests {
         let (reporter, ctrl) = connect_control(move |_| connector);
         task::spawn_local(ctrl.run());
 
-        let invalid_ip_addrs = [SocketAddr::from(([0, 0, 0, 0], 6881))];
+        let invalid_ip_addrs = [
+            SocketAddr::from(([0, 0, 0, 0], 6881)),
+            SocketAddr::from(([169, 254, 169, 254], 6881)),
+            SocketAddr::from(([255, 255, 255, 255], 6881)),
+        ];
         let invalid_port_addrs = (0..1024).map(|port| SocketAddr::from(([1, 2, 3, 4], port)));
 
         for peer_addr in invalid_ip_addrs {

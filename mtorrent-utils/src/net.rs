@@ -29,6 +29,17 @@ pub(crate) fn get_local_addr(predicate: impl FnMut(&IpAddr) -> bool) -> Option<I
 
 // ------------------------------------------------------------------------------------------------
 
+/// Checks whether `ip` is a valid remote IP address for trackers or peers.
+/// Refuses link-local (e.g. 169.254.169.254), unspecified and broadcast addresses.
+pub fn is_allowed_remote_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => !(ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()),
+        IpAddr::V6(ip) => !(ip.is_unicast_link_local() || ip.is_unspecified()),
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
 #[cfg(windows)]
 fn get_adapter_addrs<'a>(
     adapters: impl IntoIterator<Item = &'a ipconfig::Adapter>,
@@ -320,6 +331,28 @@ mod tests {
         } else {
             "lo"
         }
+    }
+
+    #[test]
+    fn test_is_allowed_remote_ip() {
+        // allowed
+        assert!(is_allowed_remote_ip("1.2.3.4".parse().unwrap()));
+        assert!(is_allowed_remote_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_allowed_remote_ip("2001:db8::1".parse().unwrap()));
+        assert!(is_allowed_remote_ip("::1".parse().unwrap()));
+        // IPv4-mapped IPv6 of an allowed v4 address (canonicalization)
+        assert!(is_allowed_remote_ip("::ffff:1.2.3.4".parse().unwrap()));
+
+        // rejected IPv4
+        assert!(!is_allowed_remote_ip("0.0.0.0".parse().unwrap()));
+        assert!(!is_allowed_remote_ip("169.254.169.254".parse().unwrap()));
+        assert!(!is_allowed_remote_ip("255.255.255.255".parse().unwrap()));
+
+        // rejected IPv6
+        assert!(!is_allowed_remote_ip("::".parse().unwrap()));
+        assert!(!is_allowed_remote_ip("fe80::1".parse().unwrap()));
+        // IPv4-mapped link-local (canonicalization applies to rejection too)
+        assert!(!is_allowed_remote_ip("::ffff:169.254.169.254".parse().unwrap()));
     }
 
     #[test]
