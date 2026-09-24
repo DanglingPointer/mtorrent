@@ -364,10 +364,11 @@ async fn outgoing_pwp_connection<C: PeerConnector>(
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         drop(slot);
+        drop(record);
+
         // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
 
-        drop(record);
         _ = reconnect_reporter
             .send(OutboundConnect {
                 attempt: 1,
@@ -413,10 +414,11 @@ async fn incoming_pwp_connection<C: PeerConnector>(
     {
         log::warn!("Peer {} disconnected: {e}. Reconnecting in 1s...", connect.addr);
         drop(slot);
+        drop(record);
+
         // wait 1 sec for the pwp/utp actor to stop and the remote to receive our RST
         time::sleep(sec!(1)).await;
 
-        drop(record);
         _ = reconnect_reporter
             .send(OutboundConnect {
                 addr: connect.addr,
@@ -450,7 +452,7 @@ mod tests {
     use mockall::predicate::eq;
     use rstest::rstest;
     use rstest_reuse::{self, *};
-    use std::future::pending;
+    use std::future::{pending, ready};
     use std::net::Ipv4Addr;
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
@@ -848,6 +850,116 @@ mod tests {
         assert!(reporter.report_discovered(peer_addr, PeerOrigin::Dht).await);
         sleep(sec!(1)).await;
         assert!(reporter.report_discovered(peer_addr, PeerOrigin::Pex).await);
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_inbound_utp_accepted_during_outbound_post_disconnect_sleep() {
+        setup(false);
+
+        let peer_addr = addr(1);
+        let accepted_data = utp::InboundConnectData::new_mock();
+
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_retry_interval().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+
+        // TCP loses the select! race so uTP is chosen for the initial outbound connection
+        connector.expect_outbound_connect_and_handshake().returning(move |_, _, _| {
+            std::future::ready(Err(io::Error::from(io::ErrorKind::BrokenPipe))).boxed()
+        });
+        connector
+            .expect_outbound_utp_connect_and_handshake()
+            .once()
+            .with(eq(peer_addr), eq(true), mockall::predicate::always())
+            .returning(move |_, _, _| async move { Ok(42) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Tracker), eq(TransportProto::Utp), eq(42))
+            .returning(move |_, _, _| {
+                async move {
+                    sleep(sec!(6)).await;
+                    Err(io::Error::from(io::ErrorKind::UnexpectedEof))
+                }
+                .boxed()
+            });
+
+        // The inbound uTP `run_connection` being invoked proves the reconnect was accepted.
+        connector
+            .expect_inbound_utp_connect_and_handshake()
+            .once()
+            .with(eq(peer_addr), mockall::predicate::always(), eq(accepted_data.clone()))
+            .returning(move |_, _, _| async move { Ok(43) }.boxed());
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Listener), eq(TransportProto::Utp), eq(43))
+            .returning(|_, _, _| pending::<io::Result<()>>().boxed());
+
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
+
+        // Initial outbound (uTP) connection
+        assert!(reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await);
+
+        // After 6s the outbound run_connection returns UnexpectedEof and the task enters
+        // the 1s post-disconnect sleep. Advance just past that point.
+        sleep(sec!(6) + millisec!(10)).await;
+
+        // A fresh inbound uTP SYN arrives from the same address during the 1s window.
+        assert!(reporter.report_accepted_utp(peer_addr, accepted_data).await);
+        task::yield_now().await;
+    }
+
+    #[tokio::test(flavor = "local", start_paused = true)]
+    async fn test_outbound_utp_accepted_during_inbound_post_disconnect_sleep() {
+        setup(false);
+
+        let peer_addr = addr(1);
+        let accepted_data = utp::InboundConnectData::new_mock();
+
+        let mut connector = MockPeerConnector::new();
+        connector.expect_max_connections().return_const(100usize);
+        connector.expect_connect_retry_interval().return_const(sec!(10));
+        connector.expect_max_connect_retries().return_const(2usize);
+        connector.expect_outbound_connect_and_handshake().never();
+
+        connector
+            .expect_inbound_utp_connect_and_handshake()
+            .times(2)
+            .with(eq(peer_addr), mockall::predicate::always(), eq(accepted_data.clone()))
+            .returning(move |_, _, _| async move { Ok(42) }.boxed());
+
+        // Initial inbound uTP connection; short-lived so it enters the 1s post-disconnect sleep.
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Listener), eq(TransportProto::Utp), eq(42))
+            .returning(move |_, _, _| {
+                ready(Err(io::Error::from(io::ErrorKind::UnexpectedEof))).boxed()
+            });
+
+        // Second inbound connection
+        connector
+            .expect_run_connection()
+            .once()
+            .with(eq(PeerOrigin::Listener), eq(TransportProto::Utp), eq(42))
+            .returning(|_, _, _| pending::<io::Result<()>>().boxed());
+
+        let (reporter, ctrl) = connect_control(move |_| connector);
+        task::spawn_local(ctrl.run());
+
+        // Initial inbound uTP connection
+        assert!(reporter.report_accepted_utp(peer_addr, accepted_data.clone()).await);
+
+        // After the inbound run_connection returns UnexpectedEof, the incoming task enters the 1s
+        // post-disconnect sleep. Advance just past that point.
+        sleep(millisec!(10)).await;
+
+        // A fresh inbound uTP SYN arrives from the same address during the 1s window.
+        assert!(reporter.report_accepted_utp(peer_addr, accepted_data).await);
+        task::yield_now().await;
     }
 
     #[tokio::test(flavor = "local", start_paused = true)]
