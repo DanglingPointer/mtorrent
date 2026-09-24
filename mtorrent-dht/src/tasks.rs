@@ -5,8 +5,8 @@ use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
 use mtorrent_utils::fifo_set::BoundedFifoSet;
-use mtorrent_utils::info_stopwatch;
 use mtorrent_utils::task_scope::TaskScope;
+use mtorrent_utils::{info_stopwatch, net};
 use rand::RngExt;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -26,7 +26,7 @@ macro_rules! is_port_valid {
 }
 
 fn validate_discovered_node(discovered: &Node, source: &Node, ctx: &Ctx) -> bool {
-    !discovered.addr.ip().is_unspecified()
+    net::is_allowed_remote_ip(discovered.addr.ip())
         && is_port_valid!(discovered.addr)
         && discovered.addr != source.addr
         && discovered.id != source.id
@@ -181,7 +181,7 @@ async fn query_node_for_peers(
             if peer_addr.ip().is_unspecified() || peer_addr.ip().is_loopback() {
                 peer_addr.set_ip(node.addr.ip());
             }
-            if is_port_valid!(peer_addr) {
+            if net::is_allowed_remote_ip(peer_addr.ip()) && is_port_valid!(peer_addr) {
                 peer_reporter.send(peer_addr).await?;
             }
         }
