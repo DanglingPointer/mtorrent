@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{io, thread};
 use tokio::runtime;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::oneshot;
 
 pub mod simple {
     use super::*;
@@ -82,22 +82,15 @@ pub mod rt {
     /// Handle to a worker thread running a Tokio runtime.
     /// Dropping the handle will signal the runtime to shut down, then block until the thread exits.
     pub struct Handle {
-        pub(super) stop_signal: Arc<Notify>,
         pub(super) rt_handle: runtime::Handle,
-        pub(super) _simple_handle: simple::Handle,
+        pub(super) _stop_guard: oneshot::Sender<()>,
+        pub(super) _join_guard: simple::Handle,
     }
 
     impl Handle {
         /// Get a reference to the Tokio runtime handle.
         pub fn runtime_handle(&self) -> &runtime::Handle {
             &self.rt_handle
-        }
-    }
-
-    impl Drop for Handle {
-        /// Sends shutdown signal to the Tokio runtime, then blocks until the worker thread exits.
-        fn drop(&mut self) {
-            self.stop_signal.notify_one();
         }
     }
 }
@@ -134,18 +127,17 @@ pub fn with_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let rt_handle = rt.handle().clone();
 
     let shutdown_timeout = config.shutdown_timeout;
-    let stop_signal = Arc::new(Notify::const_new());
-    let stop_notified = stop_signal.clone().notified_owned();
+    let (stop_sender, stop_receiver) = oneshot::channel();
 
     let simple_handle = without_runtime(From::from(config), move || {
-        rt.block_on(stop_notified);
+        _ = rt.block_on(stop_receiver);
         rt.shutdown_timeout(shutdown_timeout);
     })?;
 
     Ok(rt::Handle {
-        stop_signal,
         rt_handle,
-        _simple_handle: simple_handle,
+        _stop_guard: stop_sender,
+        _join_guard: simple_handle,
     })
 }
 
@@ -163,31 +155,26 @@ pub fn with_local_runtime(config: rt::Config) -> io::Result<rt::Handle> {
     let name = config.name.clone();
     let shutdown_timeout = config.shutdown_timeout;
 
-    let (handle_sender, handle_receiver) = oneshot::channel::<runtime::Handle>();
-    let stop_signal = Arc::new(Notify::const_new());
-    let stop_notified = stop_signal.clone().notified_owned();
+    let handle = Arc::new(OnceLock::new());
+    let (stop_sender, stop_receiver) = oneshot::channel();
 
+    let handle_cell = handle.clone();
     let simple_handle = without_runtime(From::from(config), move || {
         let rt = builder
             .build_local(Default::default())
             .unwrap_or_else(|_| panic!("Failed to build runtime '{name}'"));
+        _ = handle_cell.set(rt.handle().clone());
 
-        rt.block_on(async move {
-            let handle = runtime::Handle::current();
-            handle_sender.send(handle).unwrap_or_else(|_| unreachable!());
-            stop_notified.await;
-        });
+        _ = rt.block_on(stop_receiver);
         rt.shutdown_timeout(shutdown_timeout);
     })?;
 
-    let rt_handle = handle_receiver
-        .blocking_recv()
-        .map_err(|_| io::Error::other("failed to build runtime"))?;
+    let rt_handle = handle.wait().clone();
 
     Ok(rt::Handle {
-        stop_signal,
         rt_handle,
-        _simple_handle: simple_handle,
+        _stop_guard: stop_sender,
+        _join_guard: simple_handle,
     })
 }
 
