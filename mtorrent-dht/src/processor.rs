@@ -321,7 +321,6 @@ impl Processor {
                     .add_record(info_hash.into(), (Ipv4Addr::UNSPECIFIED, local_peer_port).into());
                 Continue(())
             }
-            Command::Shutdown => Break(()),
         }
     }
 }
