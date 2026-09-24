@@ -5,17 +5,18 @@ use mtorrent::app::main::{Config, Context};
 use mtorrent::utils::{listener, startup};
 use mtorrent_base::input::Metainfo;
 use mtorrent_base::{data, input, pe, pwp, utp};
-use mtorrent_utils::benc;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::{benc, net};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use std::{cmp, fs, io, iter, process};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -979,6 +980,38 @@ fn loopback_iface_name() -> &'static str {
     }
 }
 
+fn allocate_local_udp_addrs(count: usize) -> Vec<SocketAddr> {
+    static ALLOCATED: LazyLock<Mutex<HashSet<SocketAddr>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    fn allocate_local_addr() -> io::Result<SocketAddr> {
+        let sock = net::bound_udp_socket((Ipv4Addr::LOCALHOST, 0).into(), None)?;
+        sock.local_addr()
+    }
+
+    iter::from_fn(|| Some(allocate_local_addr()))
+        .filter_map(|result| result.ok())
+        .filter(|addr| ALLOCATED.lock().unwrap().insert(*addr))
+        .take(count)
+        .collect()
+}
+
+fn allocate_local_tcp_addrs(count: usize) -> Vec<SocketAddr> {
+    static ALLOCATED: LazyLock<Mutex<HashSet<SocketAddr>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    fn allocate_local_addr() -> io::Result<SocketAddr> {
+        let sock = net::bound_tcp_socket((Ipv4Addr::LOCALHOST, 0).into(), None)?;
+        sock.local_addr()
+    }
+
+    iter::from_fn(|| Some(allocate_local_addr()))
+        .filter_map(|result| result.ok())
+        .filter(|addr| ALLOCATED.lock().unwrap().insert(*addr))
+        .take(count)
+        .collect()
+}
+
 #[tokio::test]
 async fn test_accept_50_seeders_and_download_multifile_torrent() {
     let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
@@ -1065,9 +1098,7 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     let data_dir = "tests/assets/screenshots";
     let port = 15002;
 
-    let seeder_ips = (50150u16..50200u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
+    let seeder_ips = allocate_local_tcp_addrs(50);
 
     let (server, tracker_mock) =
         start_tracker(seeder_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 1)
@@ -1284,9 +1315,7 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
     let data_dir = "tests/assets/pcap";
     let port = 16002;
 
-    let seeder_ips = (50050u16..50100u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
+    let seeder_ips = allocate_local_tcp_addrs(50);
 
     let (server, tracker_mock) =
         start_tracker(seeder_ips.iter(), "%8Ee%F2d%F5%C8%17%FE%D6G_%2F%A8%A9%1E%81%0DB1%A3", 1)
@@ -1424,9 +1453,7 @@ async fn test_download_torrent_from_magnet_link() {
     fs::create_dir_all(output_dir).unwrap();
     let port = 17000;
 
-    let peer_ips = (50100u16..50110u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
+    let peer_ips = allocate_local_tcp_addrs(10);
 
     let (server, tracker_mock) =
         start_tracker(peer_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 1)
@@ -1484,9 +1511,7 @@ async fn test_utp_download_torrent_from_magnet_link() {
     fs::create_dir_all(output_dir).unwrap();
     let port = 17001;
 
-    let peer_ips = (50110u16..50120u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
+    let peer_ips = allocate_local_udp_addrs(10);
 
     let magnet_link = {
         let mut tmp =
@@ -1549,9 +1574,7 @@ async fn test_stop_resume_utp_download() {
     let data_dir = "tests/assets/screenshots";
     let port = 17002;
 
-    let peer_ips = (50120u16..50130u16)
-        .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
-        .collect::<Vec<_>>();
+    let peer_ips = allocate_local_udp_addrs(10);
 
     let (server, tracker_mock) =
         start_tracker(peer_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 2)
