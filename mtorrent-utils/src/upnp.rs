@@ -291,9 +291,7 @@ impl Gateway for IgdNextGateway {
     }
 }
 
-/// Utility for creating and maintaining a port mapping on the local gateway via UPnP. The mapping
-/// is valid for `PORT_LEASE_DURATION_SEC` seconds, but automatic renewal can be enabled by calling
-/// `run_continuous_renewal()`. The mapping is removed when the `PortOpener` is dropped.
+/// Utility for creating and maintaining a port mapping on the local gateway via UPnP.
 struct PortOpener<G: GatewayFactory> {
     gateway: G::Gateway,
     internal_addr: SocketAddr,
@@ -303,7 +301,7 @@ struct PortOpener<G: GatewayFactory> {
 
 impl<G: GatewayFactory> PortOpener<G> {
     /// Create a TCP or UDP port mapping that will be valid for
-    /// `PORT_LEASE_DURATION_SEC` seconds and return a `PortOpener` that maintains it.
+    /// `lease_duration_sec` seconds and return a `PortOpener` that maintains it.
     ///
     /// If `desired_external_port` is not specified, the gateway will assign an arbitrary external
     /// port number.

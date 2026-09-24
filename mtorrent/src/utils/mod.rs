@@ -1,4 +1,4 @@
-pub(crate) mod config;
+pub(crate) mod disk;
 
 /// Interface for monitoring the state of the download.
 pub mod listener;

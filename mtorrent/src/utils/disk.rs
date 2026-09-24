@@ -82,52 +82,68 @@ pub fn remove_tracker(config_dir: impl AsRef<Path>, tracker: &TrackerUrl) -> io:
     Ok(())
 }
 
-/// Open an existing progress file for reading and writing or create a new one if it doesn't exist.
-pub fn open_progress_file(config_dir: impl AsRef<Path>) -> io::Result<fs::File> {
-    // r+w mode, open existing or create new
-    fs::File::options()
-        .write(true)
-        .read(true)
-        .create(true)
-        .truncate(false)
-        .append(false)
-        .open(config_dir.as_ref().join(FILENAME_PROGRESS))
-}
+/// Progress file, bencoded dictionary of the following format:
+/// ```text
+/// {
+///     <info hash>: <bitfield>
+/// }
+/// ```
+pub struct ProgressFile(fs::File);
 
-/// Read the bencoded progress file, and get the state of `info_hash`.
-pub fn load_progress(file: &mut fs::File, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
-    let mut buf = Vec::with_capacity(file.metadata().map(|meta| meta.len()).unwrap_or(0) as usize);
-    file.seek(io::SeekFrom::Start(0))?;
-    file.read_to_end(&mut buf)?;
-
-    if buf.is_empty() {
-        return Err(io::ErrorKind::NotFound.into());
+impl ProgressFile {
+    /// Open an existing progress file for reading and writing or create a new one if it doesn't
+    /// exist.
+    pub fn open<P: AsRef<Path>>(config_dir: P) -> io::Result<Self> {
+        // r+w mode, open existing or create new
+        let file = fs::File::options()
+            .write(true)
+            .read(true)
+            .create(true)
+            .truncate(false)
+            .append(false)
+            .open(config_dir.as_ref().join(FILENAME_PROGRESS))?;
+        Ok(Self(file))
     }
 
-    let bencode = Element::from_bytes(&buf)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
+    /// Read the bencoded progress file, and get the state of `info_hash`.
+    pub fn load_progress(&mut self, info_hash: &[u8; 20]) -> io::Result<Bitfield> {
+        let mut buf =
+            Vec::with_capacity(self.0.metadata().map(|meta| meta.len()).unwrap_or(0) as usize);
+        self.0.seek(io::SeekFrom::Start(0))?;
+        self.0.read_to_end(&mut buf)?;
 
-    let Element::Dictionary(mut root) = bencode else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected bencoded structure"));
-    };
-    let key = Element::ByteString(info_hash.into());
-    if let Some(Element::ByteString(bitfield)) = root.remove(&key) {
-        Ok(Bitfield::from_vec(bitfield))
-    } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "info hash not found"))
+        if buf.is_empty() {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+
+        let bencode = Element::from_bytes(&buf)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not bencoded"))?;
+
+        let Element::Dictionary(mut root) = bencode else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected bencoded structure",
+            ));
+        };
+        let key = Element::ByteString(info_hash.into());
+        if let Some(Element::ByteString(bitfield)) = root.remove(&key) {
+            Ok(Bitfield::from_vec(bitfield))
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "info hash not found"))
+        }
     }
-}
 
-/// Write the state of `info_hash` to the bencoded progress file.
-pub fn save_progress(file: &mut fs::File, info_hash: &[u8; 20], state: Bitfield) -> io::Result<()> {
-    let key = Element::ByteString(info_hash.into());
-    let value = Element::ByteString(state.into_vec());
-    let root: BTreeMap<Element, Element> = [(key, value)].into();
-    let bencode = Element::Dictionary(root);
+    /// Write the state of `info_hash` to the bencoded progress file.
+    pub fn save_progress(&mut self, info_hash: &[u8; 20], state: Bitfield) -> io::Result<()> {
+        let key = Element::ByteString(info_hash.into());
+        let value = Element::ByteString(state.into_vec());
+        let root: BTreeMap<Element, Element> = [(key, value)].into();
+        let bencode = Element::Dictionary(root);
 
-    file.seek(io::SeekFrom::Start(0))?;
-    file.write_all(&bencode.encode())?;
-    Ok(())
+        self.0.seek(io::SeekFrom::Start(0))?;
+        self.0.write_all(&bencode.encode())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -144,15 +160,15 @@ mod tests {
         let piece_count = 668;
         let bitfield = Bitfield::repeat(true, piece_count);
 
-        let mut file = open_progress_file(dir).unwrap();
+        let mut file = ProgressFile::open(dir).unwrap();
 
-        let err = load_progress(&mut file, &info_hash).unwrap_err();
+        let err = file.load_progress(&info_hash).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
 
-        save_progress(&mut file, &info_hash, bitfield.clone()).unwrap();
+        file.save_progress(&info_hash, bitfield.clone()).unwrap();
         assert!(Path::new(dir).join(FILENAME_PROGRESS).is_file());
 
-        let mut loaded_state = load_progress(&mut file, &info_hash).unwrap();
+        let mut loaded_state = file.load_progress(&info_hash).unwrap();
         loaded_state.resize(bitfield.len(), false);
         assert_eq!(bitfield, loaded_state);
 

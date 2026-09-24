@@ -422,7 +422,7 @@ mod tests {
         task::yield_now().await;
         assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
 
-        // start an oubound connection
+        // start an outbound connection
         let connect_task = task::spawn(async move {
             let connect_result = handle
                 .outbound_connect(OutboundConnectArgs {
