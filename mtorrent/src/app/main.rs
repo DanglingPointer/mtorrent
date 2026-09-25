@@ -1,12 +1,12 @@
 use crate::core;
 use crate::utils::{join_all_with_timeout, listener, startup};
-use futures_util::FutureExt;
 use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
+use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
@@ -104,21 +104,26 @@ pub async fn single_torrent(
     // create port mappings and get external port to send correct listening port to trackers and
     // peers later
     let (external_pwp_port, upnp_handles) = if cfg.use_upnp {
-        let (mut tcp_handle, tcp_mapper) = upnp::init(
+        // `upnp::launch` spawns its background task on the current runtime, so enter the pwp
+        // runtime to place both UPnP tasks there
+        let pwp_runtime_guard = ctx.pwp_runtime.enter();
+
+        let mut tcp_handle = upnp::launch(
             upnp::PortMappingProtocol::TCP,
             internal_pwp_port,
             cfg.pwp_port,
             cfg.bind_interface.clone(),
         );
-        tasks_to_join.spawn_on(tcp_mapper.run().map(|_| ()), &ctx.pwp_runtime);
 
-        let (mut utp_handle, utp_mapper) = upnp::init(
+        let mut utp_handle = upnp::launch(
             upnp::PortMappingProtocol::UDP,
             internal_pwp_port,
             cfg.pwp_port,
             cfg.bind_interface.clone(),
         );
-        tasks_to_join.spawn_on(utp_mapper.run().map(|_| ()), &ctx.pwp_runtime);
+
+        // drop runtime guard before any awaits
+        drop(pwp_runtime_guard);
 
         // prioritise uTP port mapping because incoming UDP packets are less likely to be blocked by
         // firewalls than incoming TCP connections
@@ -164,43 +169,67 @@ pub async fn single_torrent(
         download_strategy: cfg.download_strategy,
     };
 
-    if Path::new(metainfo_uri.as_ref()).is_file() {
-        main_stage(
-            params,
-            metainfo_uri.as_ref(),
-            cfg.output_dir,
-            cfg.config_dir,
-            &mut listener,
-            handles,
-            std::iter::empty(),
-        )
-        .await?;
-    } else {
-        let (metainfo_filepath, peers) = preliminary_stage(
-            params.clone(),
-            metainfo_uri,
-            &cfg.output_dir,
-            cfg.config_dir.to_owned(),
-            &mut listener,
-            handles.clone(),
-        )
-        .await?;
-        log::info!("Metadata downloaded successfully, starting content download");
-        main_stage(
-            params,
-            metainfo_filepath,
-            &cfg.output_dir,
-            cfg.config_dir.to_owned(),
-            &mut listener,
-            handles,
-            peers,
-        )
-        .await?;
-    }
+    let download = async {
+        if Path::new(metainfo_uri.as_ref()).is_file() {
+            main_stage(
+                params,
+                metainfo_uri.as_ref(),
+                cfg.output_dir,
+                cfg.config_dir,
+                &mut listener,
+                handles,
+                std::iter::empty(),
+            )
+            .await?;
+        } else {
+            let (metainfo_filepath, peers) = preliminary_stage(
+                params.clone(),
+                metainfo_uri,
+                &cfg.output_dir,
+                cfg.config_dir.to_owned(),
+                &mut listener,
+                handles.clone(),
+            )
+            .await?;
+            log::info!("Metadata downloaded successfully, starting content download");
+            main_stage(
+                params,
+                metainfo_filepath,
+                &cfg.output_dir,
+                cfg.config_dir.to_owned(),
+                &mut listener,
+                handles,
+                peers,
+            )
+            .await?;
+        }
+        Ok(())
+    };
 
-    drop(upnp_handles);
+    let shutdown_upnp = async move {
+        if let Some((upnp_tcp_handle, upnp_utp_handle)) = upnp_handles {
+            // request deletion of port mappings
+            _ = join!(upnp_tcp_handle.shutdown(), upnp_utp_handle.shutdown());
+        }
+    };
+
+    run_then_cleanup(download, shutdown_upnp, tasks_to_join).await
+}
+
+/// Run a future, then wait for cleanup before returning its result.
+async fn run_then_cleanup<Run, Cleanup>(
+    run: Run,
+    cleanup: Cleanup,
+    mut tasks_to_join: task::JoinSet<()>,
+) -> io::Result<()>
+where
+    Run: Future<Output = io::Result<()>>,
+    Cleanup: Future<Output = ()> + Send + 'static,
+{
+    let result = run.await;
+    tasks_to_join.spawn(cleanup);
     join_all_with_timeout!(tasks_to_join, sec!(5));
-    Ok(())
+    result
 }
 
 async fn preliminary_stage(
@@ -401,4 +430,33 @@ async fn main_stage(
     core::periodic_state_dump(ctx, content_dir, listener).await;
     tasks.shutdown().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn test_cleanup_finishes_before_run_error_is_returned() {
+        let (cleanup_started_tx, cleanup_started_rx) = oneshot::channel();
+        let (finish_cleanup_tx, finish_cleanup_rx) = oneshot::channel();
+
+        let run_task = task::spawn(run_then_cleanup(
+            async { Err(io::Error::other("download failed")) },
+            async move {
+                cleanup_started_tx.send(()).unwrap();
+                finish_cleanup_rx.await.unwrap();
+            },
+            task::JoinSet::new(),
+        ));
+
+        cleanup_started_rx.await.unwrap();
+        assert!(!run_task.is_finished());
+
+        finish_cleanup_tx.send(()).unwrap();
+        let result = run_task.await.unwrap();
+
+        assert_eq!(result.unwrap_err().to_string(), "download failed");
+    }
 }

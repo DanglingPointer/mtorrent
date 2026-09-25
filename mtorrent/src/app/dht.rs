@@ -67,30 +67,6 @@ pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(Handle, dht::CommandS
     ))
 }
 
-async fn start_upnp(
-    local_port: u16,
-    interface: Option<String>,
-) -> io::Result<(upnp::PortMapperHandle, task::JoinHandle<upnp::Result<()>>)> {
-    // try create a port mapping with the same port number
-    let (mut upnp_handle, port_mapper) =
-        upnp::init(upnp::PortMappingProtocol::UDP, local_port, Some(local_port), interface);
-
-    // start periodic renewal of the port mapping. It will stop automatically when the handle is
-    // dropped
-    let join_handle = task::spawn(port_mapper.run());
-
-    match upnp_handle.get_external_addr().await {
-        Ok(external_addr) => {
-            log::info!("UPnP for DHT succeeded, public ip: {}", external_addr);
-        }
-        Err(e) => {
-            log::error!("UPnP for DHT failed: {e}");
-        }
-    }
-
-    Ok((upnp_handle, join_handle))
-}
-
 async fn dht_main(
     cmd_server: dht::CommandSource,
     canceller: oneshot::Receiver<()>,
@@ -118,7 +94,23 @@ async fn dht_main(
 
     // launch UPnP and keep its handle alive until DHT exits
     let upnp = if use_upnp {
-        start_upnp(local_port, bind_interface).await.ok()
+        let mut upnp_handle = upnp::launch(
+            upnp::PortMappingProtocol::UDP,
+            local_port,
+            Some(local_port),
+            bind_interface,
+        );
+        match upnp_handle.get_external_addr().await {
+            Ok(external_addr) => {
+                log::info!("UPnP for DHT succeeded, public ip: {}", external_addr);
+                Some(upnp_handle)
+            }
+            Err(e) => {
+                log::error!("UPnP for DHT failed: {e}");
+                _ = upnp_handle.shutdown().await;
+                None
+            }
+        }
     } else {
         None
     };
@@ -151,9 +143,8 @@ async fn dht_main(
     }
 
     // remove port mapping
-    if let Some((port_mapper_handle, upnp_join_handle)) = upnp {
-        drop(port_mapper_handle);
-        _ = upnp_join_handle.await;
+    if let Some(upnp_handle) = upnp {
+        _ = upnp_handle.shutdown().await;
     }
 }
 
