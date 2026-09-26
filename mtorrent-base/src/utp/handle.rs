@@ -77,6 +77,9 @@ impl EndpointHandle {
 
     /// Establish a new outbound connection to `remote_addr`. Waits for the uTP handshake to
     /// complete and returns a [`DataStream`] for the new connection.
+    ///
+    /// The handshake packet is retransmitted until a reply is received, so the caller should
+    /// apply a timeout.
     /// # Error
     /// If [`IoDriver`](super::IoDriver) has been shut down or if uTP handshake failed or if the
     /// connection already exists.
@@ -115,6 +118,9 @@ impl EndpointHandle {
 
     /// Accept a new inbound connection from `remote_addr`. Waits for the uTP handshake to
     /// complete and returns a [`DataStream`] for the new connection.
+    ///
+    /// The handshake packet is retransmitted until a reply is received, so the caller should
+    /// apply a timeout.
     /// # Error
     /// If [`IoDriver`](super::IoDriver) has been shut down or if uTP handshake failed or if the
     /// connection already exists.

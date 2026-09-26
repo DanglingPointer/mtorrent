@@ -223,6 +223,10 @@ impl ConnectionState {
         }
     }
 
+    pub fn conn_id_recv(&self) -> u16 {
+        self.conn_id_recv
+    }
+
     pub fn max_window_size(&self) -> usize {
         cmp::min(self.remote_wnd, self.local_wnd) as usize
     }
