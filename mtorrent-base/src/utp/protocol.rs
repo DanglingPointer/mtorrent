@@ -235,6 +235,21 @@ impl ConnectionState {
         self.local_wnd = cmp::min(self.local_wnd + 1024, Self::MAX_LOCAL_WINDOW);
     }
 
+    /// Check that `received_header` is a reply to our handshake packet (SYN for outbound
+    /// connections, STATE for inbound). Must be called after generating the handshake packet and
+    /// before processing any other header.
+    pub fn validate_initial_header(&self, received_header: &Header) -> Result<(), ValidationError> {
+        if received_header.connection_id != self.conn_id_recv {
+            return Err(ValidationError::Invalid("unexpected connection ID"));
+        }
+        // both SYN (outbound) and STATE (inbound) are acked with next_local_seq - 1, see
+        // `generate_header` and `process_header`
+        if received_header.ack_nr != self.next_local_seq - seq(1) {
+            return Err(ValidationError::Invalid("unexpected ack nr"));
+        }
+        Ok(())
+    }
+
     pub fn validate_header(&self, received_header: &Header) -> Result<(), ValidationError> {
         if received_header.connection_id != self.conn_id_recv {
             return Err(ValidationError::Invalid("unexpected connection ID"));
@@ -617,5 +632,58 @@ mod tests {
         assert_eq!(next_data_header.seq_nr, initial_local_seq); // First DATA uses initial seq
         assert_eq!(next_data_header.ack_nr, data_seq); // Ack the received DATA
         assert_eq!(state.next_local_seq, initial_local_seq + Seq::ONE); // Incremented after DATA
+    }
+
+    fn reply_header(type_ver: TypeVer, connection_id: u16, ack_nr: Seq) -> Header {
+        Header {
+            type_ver,
+            extension: 0,
+            connection_id,
+            timestamp_us: 0,
+            timestamp_diff_us: 0,
+            wnd_size: 0,
+            seq_nr: seq(1000),
+            ack_nr,
+        }
+    }
+
+    #[test]
+    fn test_validate_initial_header_for_outbound_connection() {
+        let mut state = ConnectionState::new_outbound(100);
+        let syn = state.generate_header(TypeVer::Syn);
+        let reply_conn_id = syn.connection_id;
+
+        let valid = [TypeVer::State, TypeVer::Reset, TypeVer::Fin];
+        for type_ver in valid {
+            let header = reply_header(type_ver, reply_conn_id, syn.seq_nr);
+            assert!(state.validate_initial_header(&header).is_ok(), "{type_ver:?}");
+        }
+
+        let wrong_conn_id = reply_header(TypeVer::State, reply_conn_id + 1, syn.seq_nr);
+        assert!(state.validate_initial_header(&wrong_conn_id).is_err());
+
+        let wrong_ack = reply_header(TypeVer::State, reply_conn_id, syn.seq_nr + seq(5));
+        assert!(state.validate_initial_header(&wrong_ack).is_err());
+    }
+
+    #[test]
+    fn test_validate_initial_header_for_inbound_connection() {
+        let syn = reply_header(TypeVer::Syn, 100, seq(0));
+        let mut state = ConnectionState::new_inbound(&syn);
+        let state_header = state.generate_header(TypeVer::State);
+        let reply_conn_id = syn.connection_id + 1;
+        let expected_ack = state_header.seq_nr - seq(1);
+
+        let valid = [TypeVer::Data, TypeVer::Reset, TypeVer::Fin];
+        for type_ver in valid {
+            let header = reply_header(type_ver, reply_conn_id, expected_ack);
+            assert!(state.validate_initial_header(&header).is_ok(), "{type_ver:?}");
+        }
+
+        let wrong_conn_id = reply_header(TypeVer::Data, syn.connection_id, expected_ack);
+        assert!(state.validate_initial_header(&wrong_conn_id).is_err());
+
+        let wrong_ack = reply_header(TypeVer::Data, reply_conn_id, state_header.seq_nr);
+        assert!(state.validate_initial_header(&wrong_ack).is_err());
     }
 }
