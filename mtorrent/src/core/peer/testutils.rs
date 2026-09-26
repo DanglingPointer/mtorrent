@@ -186,6 +186,7 @@ impl PeerBuilder {
             Ipv6Addr::LOCALHOST,
             None,
             Default::default(),
+            Default::default(),
         )
         .unwrap();
         if self.has_all_pieces {

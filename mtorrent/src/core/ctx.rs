@@ -1,5 +1,5 @@
 use super::ctrl;
-use crate::app::main::DownloadStrategy;
+use crate::app::main::{DownloadStrategy, Mode};
 use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
@@ -62,6 +62,7 @@ pub(super) struct ConstData {
     bind_interface: Option<String>,
     outbound_pwp_mode: PwpMode,
     download_strategy: DownloadStrategy,
+    mode: Mode,
 }
 
 impl ConstData {
@@ -91,6 +92,9 @@ impl ConstData {
     }
     pub(super) fn download_strategy(&self) -> DownloadStrategy {
         self.download_strategy
+    }
+    pub(super) fn mode(&self) -> Mode {
+        self.mode
     }
 }
 
@@ -128,6 +132,7 @@ impl PreliminaryCtx {
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
                 download_strategy: Default::default(), // unused
+                mode: Default::default(),              // unused
             },
         })
     }
@@ -154,6 +159,7 @@ impl MainCtx {
         local_ip_v6: Ipv6Addr,
         bind_interface: Option<String>,
         download_strategy: DownloadStrategy,
+        mode: Mode,
     ) -> io::Result<Handle<Self>> {
         fn make_error(s: &'static str) -> impl FnOnce() -> io::Error {
             move || io::Error::new(io::ErrorKind::InvalidData, s)
@@ -184,6 +190,7 @@ impl MainCtx {
                 bind_interface,
                 outbound_pwp_mode: get_outbound_pwp_mode(),
                 download_strategy,
+                mode,
             },
         };
         Ok(Handle::new(ctx))
@@ -239,10 +246,6 @@ pub async fn periodic_state_dump<L: StateListener>(
             }
         });
     }
-
-    // sleep for 5s because of integration tests
-    #[cfg(debug_assertions)]
-    time::sleep(sec!(5)).await;
 
     const MIN_WRITE_INTERVAL: Duration = sec!(1);
     let mut last_write_time = Instant::now();
@@ -319,6 +322,7 @@ impl ConstData {
             bind_interface: None,
             outbound_pwp_mode: PwpMode::Any,
             download_strategy: Default::default(),
+            mode: Default::default(),
         }
     }
 }

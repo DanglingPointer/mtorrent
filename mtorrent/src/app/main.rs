@@ -25,6 +25,17 @@ pub enum DownloadStrategy {
     Sequential,
 }
 
+/// Mode of operation for a single torrent.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Mode {
+    /// Exit once the download is complete and all active leeches have received some data.
+    #[default]
+    Leech,
+    /// Keep uploading to peers after the download is complete. Exit only when the state listener
+    /// returns [`std::ops::ControlFlow::Break`].
+    Seeder,
+}
+
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -42,6 +53,8 @@ pub struct Config {
     pub bind_interface: Option<String>,
     /// Strategy for downloading pieces.
     pub download_strategy: DownloadStrategy,
+    /// Mode of operation (leech or seeder).
+    pub mode: Mode,
 }
 
 /// Context for a single torrent download.
@@ -75,10 +88,13 @@ struct Params {
     local_ip_v6: Ipv6Addr,
     bind_interface: Option<String>,
     download_strategy: DownloadStrategy,
+    mode: Mode,
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
-/// This function will exit once the download is complete or a fatal error has occurred.
+/// In [`Mode::Leech`] this function will exit once the download is complete or a fatal error has
+/// occurred. In [`Mode::Seeder`] it will keep running until the state listener returns
+/// [`std::ops::ControlFlow::Break`] or a fatal error has occurred.
 pub async fn single_torrent(
     metainfo_uri: impl AsRef<str>,
     mut listener: impl listener::StateListener,
@@ -168,6 +184,7 @@ pub async fn single_torrent(
         local_ip_v6: local_addr_v6,
         bind_interface: cfg.bind_interface,
         download_strategy: cfg.download_strategy,
+        mode: cfg.mode,
     };
 
     let download = async {
@@ -364,6 +381,7 @@ async fn main_stage(
         params.local_ip_v6,
         params.bind_interface.clone(),
         params.download_strategy,
+        params.mode,
     )?;
 
     let mut tasks = task::JoinSet::new();

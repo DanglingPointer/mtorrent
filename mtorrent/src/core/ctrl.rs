@@ -1,5 +1,5 @@
 use super::ctx;
-use crate::app::main::DownloadStrategy;
+use crate::app::main::{DownloadStrategy, Mode};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::benc;
@@ -265,17 +265,18 @@ pub fn active_upload_next_action(
 // ------------------------------------------------------------------------------------------------
 
 pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
-    #[cfg(debug_assertions)]
-    if ctx.peer_states.iter().next().is_some() {
-        // needed for integration tests to make sure we report all downloaded pieces before exiting
-        return false;
+    match ctx.const_data.mode() {
+        // finish if we have downloaded everything, and all active leeches (if any) have received
+        // at least 50 blocks
+        Mode::Leech => {
+            ctx.accountant.missing_bytes() == 0
+                && !ctx.peer_states.iter().any(|(_, state)| {
+                    is_active_leech(state) && state.upload.bytes_sent < pwp::MAX_BLOCK_SIZE * 50
+                })
+        }
+        // never finish on our own, only when the state listener says so
+        Mode::Seeder => false,
     }
-    // finish if we have downloaded everything, and all active leeches (if any) have received at
-    // least 50 blocks
-    ctx.accountant.missing_bytes() == 0
-        && !ctx.peer_states.iter().any(|(_, state)| {
-            is_active_leech(state) && state.upload.bytes_sent < pwp::MAX_BLOCK_SIZE * 50
-        })
 }
 
 pub fn verify_metadata(ctx: &mut ctx::PreliminaryCtx) -> bool {
@@ -723,6 +724,7 @@ mod tests {
             Ipv6Addr::LOCALHOST,
             None,
             DownloadStrategy::RarestFirst,
+            Mode::Leech,
         )
         .unwrap();
         define_with_ctx!(handle);
@@ -762,6 +764,7 @@ mod tests {
             Ipv6Addr::LOCALHOST,
             None,
             DownloadStrategy::Sequential,
+            Mode::Leech,
         )
         .unwrap();
         define_with_ctx!(handle);
@@ -785,6 +788,119 @@ mod tests {
             ctx.pending_requests.add(0, &ip(1));
 
             assert_eq!(next_piece_to_request(&ip(1), ctx), None);
+        });
+    }
+
+    fn new_ctx(mode: Mode) -> ctx::Handle<MainCtx> {
+        let metainfo =
+            startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        MainCtx::new(
+            metainfo,
+            [0u8; 20].into(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+            DownloadStrategy::RarestFirst,
+            mode,
+        )
+        .unwrap()
+    }
+
+    fn submit_all_pieces(ctx: &mut MainCtx) {
+        for piece_index in 0..ctx.pieces.piece_count() {
+            ctx.accountant.submit_piece(piece_index);
+        }
+    }
+
+    fn upload_state(
+        peer_interested: bool,
+        am_choking: bool,
+        bytes_sent: usize,
+    ) -> pwp::UploadState {
+        pwp::UploadState {
+            am_choking,
+            peer_interested,
+            bytes_sent,
+            last_bitrate_bps: 0,
+        }
+    }
+
+    #[test]
+    fn test_leech_finishes_when_all_pieces_downloaded() {
+        let handle = new_ctx(Mode::Leech);
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            assert!(!is_finished(ctx));
+
+            let piece_count = ctx.pieces.piece_count();
+            assert!(piece_count > 1);
+            for piece_index in 0..piece_count - 1 {
+                ctx.accountant.submit_piece(piece_index);
+            }
+            assert!(!is_finished(ctx));
+
+            ctx.accountant.submit_piece(piece_count - 1);
+            assert!(is_finished(ctx));
+        });
+    }
+
+    #[test]
+    fn test_leech_waits_for_active_leeches_to_receive_50_blocks() {
+        let handle = new_ctx(Mode::Leech);
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            submit_all_pieces(ctx);
+
+            ctx.peer_states.update_upload(&ip(1), &upload_state(true, false, 1));
+            assert!(!is_finished(ctx));
+
+            let bytes_sent = pwp::MAX_BLOCK_SIZE * 50 - 1;
+            ctx.peer_states.update_upload(&ip(1), &upload_state(true, false, bytes_sent));
+            assert!(!is_finished(ctx));
+
+            let bytes_sent = pwp::MAX_BLOCK_SIZE * 50;
+            ctx.peer_states.update_upload(&ip(1), &upload_state(true, false, bytes_sent));
+            assert!(is_finished(ctx));
+        });
+    }
+
+    #[test]
+    fn test_leech_ignores_inactive_leeches() {
+        let handle = new_ctx(Mode::Leech);
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            submit_all_pieces(ctx);
+
+            // choked by us
+            ctx.peer_states.update_upload(&ip(1), &upload_state(true, true, 1));
+            // not interested
+            ctx.peer_states.update_upload(&ip(2), &upload_state(false, false, 1));
+            // hasn't received anything
+            ctx.peer_states.update_upload(&ip(3), &upload_state(true, false, 0));
+
+            assert!(is_finished(ctx));
+        });
+    }
+
+    #[test]
+    fn test_seeder_never_finishes() {
+        let handle = new_ctx(Mode::Seeder);
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            assert!(!is_finished(ctx));
+
+            submit_all_pieces(ctx);
+            assert!(!is_finished(ctx));
+
+            let bytes_sent = pwp::MAX_BLOCK_SIZE * 100;
+            ctx.peer_states.update_upload(&ip(1), &upload_state(true, false, bytes_sent));
+            assert!(!is_finished(ctx));
         });
     }
 }

@@ -42,6 +42,10 @@ struct Cli {
     /// Disable DHT
     #[arg(long)]
     no_dht: bool,
+
+    /// Keep seeding after the download is complete (until interrupted)
+    #[arg(long)]
+    seed: bool,
 }
 
 struct SnapshotLogger {
@@ -173,6 +177,11 @@ fn main() -> io::Result<()> {
                 pwp_port: cli.port,
                 bind_interface: cli.interface,
                 download_strategy: Default::default(),
+                mode: if cli.seed {
+                    app::main::Mode::Seeder
+                } else {
+                    app::main::Mode::Leech
+                },
             },
             app::main::Context {
                 dht_handle: dht_cmds,

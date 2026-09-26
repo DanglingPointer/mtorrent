@@ -142,6 +142,7 @@ async fn run_listening_seeder(
         Ipv6Addr::LOCALHOST,
         None,
         Default::default(),
+        Default::default(),
     )
     .unwrap();
     handle.with(|ctx| {
