@@ -53,6 +53,7 @@ pub struct QueryRouter {
 }
 
 impl QueryRouter {
+    /// Runs the query router until one of its message channels closes or a routing error occurs.
     pub async fn run(mut self) {
         let _sw = debug_stopwatch!("Queries runner");
         loop {

@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 pub enum Command {
     /// Attempt to connect to a new node and insert it into the routing table.
     AddNode {
+        /// Socket address of the node to contact.
         addr: SocketAddr,
     },
     /// Commence search for peers for the given torrent.

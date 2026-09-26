@@ -70,6 +70,7 @@ pub struct RequestsSnapshot {
     pub distinct_pieces: usize,
 }
 
+/// Part of the periodic state snapshot related to downloading torrent metainfo.
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetainfoSnapshot {

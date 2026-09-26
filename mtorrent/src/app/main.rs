@@ -28,6 +28,7 @@ pub enum DownloadStrategy {
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Local peer identifier advertised to trackers and remote peers.
     pub local_peer_id: PeerId,
     /// Parent directory for the downloaded content.
     pub output_dir: PathBuf,

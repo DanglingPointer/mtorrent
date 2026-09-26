@@ -12,7 +12,10 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 
+/// Channel endpoint for submitting DHT messages to be sent over UDP.
 pub struct MessageChannelSender(pub(crate) mpsc::Sender<(Message, SocketAddr)>);
+
+/// Channel endpoint for receiving DHT messages decoded from UDP packets.
 pub struct MessageChannelReceiver(pub(crate) mpsc::Receiver<(Message, SocketAddr)>);
 
 const MSG_QUEUE_LEN: usize = 512;
@@ -37,6 +40,7 @@ pub struct IoDriver {
 }
 
 impl IoDriver {
+    /// Runs bidirectional UDP I/O until either the sending or receiving side terminates.
     pub async fn run(self) {
         let _sw = debug_stopwatch!("DHT IoDriver");
 
