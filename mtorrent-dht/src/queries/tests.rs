@@ -15,13 +15,13 @@ fn tid(num: u8) -> Vec<u8> {
 fn setup_routing(
     outgoing_msgs_sink: mpsc::Sender<(Message, SocketAddr)>,
     incoming_msgs_source: mpsc::Receiver<(Message, SocketAddr)>,
-) -> (OutboundQueries, InboundQueries, QueryRouter) {
-    super::setup_queries(
+) -> (QueryClient, InboundQueries, QueryRouter) {
+    let (outbound, inbound, router) = super::setup_queries(
         udp::MessageChannelSender(outgoing_msgs_sink),
         udp::MessageChannelReceiver(incoming_msgs_source),
         None,
-        None,
-    )
+    );
+    (QueryClient::new(outbound, None), inbound, router)
 }
 
 #[tokio::test(start_paused = true, flavor = "local")]
@@ -617,12 +617,12 @@ async fn test_outgoing_queries_limit_is_respected() {
     let (incoming_msgs_sink, incoming_msgs_source) = mpsc::channel(8);
 
     // given: max 1 outstanding query
-    let (client, _server, runner) = super::setup_queries(
+    let (outbound, _server, runner) = super::setup_queries(
         udp::MessageChannelSender(outgoing_msgs_sink),
         udp::MessageChannelReceiver(incoming_msgs_source),
-        Some(1),
         None,
     );
+    let client = QueryClient::new(outbound, Some(1));
     let mut runner_fut = spawn(runner.run());
 
     // when: first outgoing ping sent out

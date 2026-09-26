@@ -1,6 +1,6 @@
 use super::error::Error;
 use super::msgs::*;
-use super::queries::OutboundQueries;
+use super::queries::QueryClient;
 use super::u160::U160;
 use crate::kademlia::Node;
 use local_async_utils::prelude::*;
@@ -45,7 +45,7 @@ pub enum NodeEvent {
 }
 
 pub struct Ctx {
-    pub client: OutboundQueries,
+    pub client: QueryClient,
     pub event_reporter: mpsc::Sender<NodeEvent>,
     pub local_id: U160,
 }

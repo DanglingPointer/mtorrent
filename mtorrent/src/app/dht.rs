@@ -13,7 +13,9 @@ pub struct Config {
     pub local_port: u16,
     /// Optional name of the network interface to use (e.g. "eth0" or "lo").
     pub bind_interface: Option<String>,
-    /// Maximum number of concurrent outbound queries in flight. Unlimited if `None`.
+    /// Maximum number of concurrent outbound queries in flight per operation (e.g. bootstrapping
+    /// or peer search). Unlimited if `None`. A value of `Some(0)` disables outbound queries and
+    /// makes the DHT node a passive server for inbound queries.
     pub max_concurrent_queries: Option<usize>,
     /// Directory for storing data persistent across boots.
     pub config_dir: PathBuf,
@@ -120,19 +122,15 @@ async fn dht_main(
     let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
     tasks.spawn_local(udp_runner.run());
 
-    let (client, server, queries_runner) = dht::setup_queries(
-        outgoing_msgs_sink,
-        incoming_msgs_source,
-        max_concurrent_queries,
-        query_timeout,
-    );
+    let (outbound_queries, inbound_queries, queries_runner) =
+        dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, query_timeout);
     tasks.spawn_local(queries_runner.run());
 
-    let mut processor = dht::Processor::new(config_dir, client);
+    let mut processor = dht::Processor::new(config_dir, outbound_queries, max_concurrent_queries);
     if let Some(nodes) = bootstrap_nodes_override {
         processor.set_bootstrap_nodes(nodes);
     }
-    tasks.spawn_local(processor.run(server, cmd_server));
+    tasks.spawn_local(processor.run(inbound_queries, cmd_server));
 
     let join_all = async move { while tasks.join_next().await.is_some() {} };
 

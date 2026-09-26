@@ -2,7 +2,7 @@ use super::cmds::{Command, CommandSource};
 use super::kademlia;
 use super::msgs::*;
 use super::peers::TokenManager;
-use super::queries::{InboundQueries, IncomingQuery, OutboundQueries};
+use super::queries::{InboundQueries, IncomingQuery, OutboundQueries, QueryClient};
 use super::tasks::*;
 use super::u160::U160;
 use crate::config::Config;
@@ -34,19 +34,32 @@ pub struct Processor {
     token_mgr: TokenManager,
     recent_nodes: BoundedFifoSet<SocketAddr>,
     search_callbacks: HashMap<U160, mpsc::Sender<SocketAddr>>,
+    outbound_queries: OutboundQueries,
     task_ctx: Rc<Ctx>,
 
     peer_sender: local_unbounded::Sender<(SocketAddr, U160)>,
     peer_receiver: local_unbounded::Receiver<(SocketAddr, U160)>,
     node_event_receiver: mpsc::Receiver<NodeEvent>,
 
+    max_concurrent_queries: Option<usize>,
     config: Config,
     config_dir: PathBuf,
     child_tasks: TaskScope,
 }
 
 impl Processor {
-    pub fn new(config_dir: PathBuf, client: OutboundQueries) -> Self {
+    /// Creates a DHT processor, loading persistent state from `config_dir` when available.
+    ///
+    /// `outbound_queries` connects the processor to the query router. If `max_concurrent_queries`
+    /// is set, it limits the number of outbound queries made by each operation, such as
+    /// bootstrapping or an individual peer search. A value of `None` disables the limit, while
+    /// `Some(0)` disables all outbound queries and makes the DHT node a passive server for inbound
+    /// queries.
+    pub fn new(
+        config_dir: PathBuf,
+        outbound_queries: OutboundQueries,
+        max_concurrent_queries: Option<usize>,
+    ) -> Self {
         let (peer_sender, peer_receiver) = local_unbounded::channel();
         let (node_event_sender, node_event_receiver) = mpsc::channel(1024);
 
@@ -55,7 +68,7 @@ impl Processor {
             Config::default()
         });
         let node_ctx = Rc::new(Ctx {
-            client: client.clone(),
+            client: QueryClient::new(outbound_queries.clone(), max_concurrent_queries),
             event_reporter: node_event_sender,
             local_id: config.local_id,
         });
@@ -69,18 +82,28 @@ impl Processor {
             config,
             config_dir,
             task_ctx: node_ctx,
+            outbound_queries,
             node_event_receiver,
             node_table,
             recent_nodes: BoundedFifoSet::new(128 * 1024),
             search_callbacks: HashMap::new(),
             child_tasks: TaskScope::new(),
+            max_concurrent_queries,
         }
     }
 
+    /// Replaces the bootstrap nodes loaded from persistent configuration.
+    ///
+    /// Each entry may be a socket address or a hostname with a port and is resolved when
+    /// [`run`](Self::run) starts.
     pub fn set_bootstrap_nodes(&mut self, nodes: Vec<String>) {
         self.config.nodes = nodes;
     }
 
+    /// Runs the DHT processor until either the inbound-query or command channel closes.
+    ///
+    /// The processor first bootstraps its routing table while handling inbound queries, then
+    /// begins processing commands. Its persistent state is saved when the processor is dropped.
     pub async fn run(mut self, mut queries: InboundQueries, mut commands: CommandSource) {
         macro_rules! handle_next_event {
             ($queries:expr $(,$commands:expr)?) => {
@@ -296,7 +319,14 @@ impl Processor {
                     let search_data = SearchTaskData {
                         target: info_hash.into(),
                         local_peer_port,
-                        ctx: self.task_ctx.clone(),
+                        ctx: Rc::new(Ctx {
+                            client: QueryClient::new(
+                                self.outbound_queries.clone(),
+                                self.max_concurrent_queries,
+                            ),
+                            event_reporter: self.task_ctx.event_reporter.clone(),
+                            local_id: self.task_ctx.local_id,
+                        }),
                         cmd_result_sender: callback.clone(),
                         peer_sender: self.peer_sender.clone(),
                     };

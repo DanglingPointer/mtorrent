@@ -19,7 +19,7 @@ struct Args {
     #[arg(short, long, value_name = "SECONDS")]
     duration: Option<u64>,
 
-    /// Max simultaneous outstanding queries
+    /// Max simultaneous outstanding queries per operation; 0 runs as a passive server
     #[arg(short, long)]
     parallel_queries: Option<usize>,
 

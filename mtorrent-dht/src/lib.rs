@@ -19,12 +19,12 @@
 //!
 //! // Set up the DHT stack that consists of 3 layers:
 //! let (outgoing_msgs_sink, incoming_msgs_source, io_driver) = dht::setup_udp(socket);
-//! let (client, server, router) =
-//!     dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, max_concurrent_queries, query_timeout);
-//! let processor = dht::Processor::new(config_dir, client);
+//! let (outbound_queries, inbound_queries, router) =
+//!     dht::setup_queries(outgoing_msgs_sink, incoming_msgs_source, query_timeout);
+//! let processor = dht::Processor::new(config_dir, outbound_queries, max_concurrent_queries);
 //!
 //! // Run the DHT system:
-//! tokio::join!(io_driver.run(), router.run(), processor.run(server, cmd_receiver));
+//! tokio::join!(io_driver.run(), router.run(), processor.run(inbound_queries, cmd_receiver));
 //! # });
 //!
 //! // now send commands to the `cmd_sender` from a different task or runtime

@@ -63,7 +63,7 @@ impl Handler {
         &mut self,
         (msg, src_addr): (Message, SocketAddr),
     ) -> Result<(), Error> {
-        let query_result = match msg.data {
+        let received_response = match msg.data {
             MessageData::Query(request) => {
                 let response_sink = self.outgoing_msgs_sink.clone().reserve_owned().await?;
                 let incoming_query =
@@ -79,7 +79,7 @@ impl Handler {
             && let Some(queue_key) = self.tid_to_key.remove(&tid)
         {
             let (outstanding, _tid) = self.outstanding_queries.remove(&queue_key).into_inner();
-            _ = outstanding.response_sink.send(query_result);
+            _ = outstanding.response_sink.send(received_response);
         }
 
         Ok(())
