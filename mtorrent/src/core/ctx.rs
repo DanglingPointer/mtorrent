@@ -290,6 +290,7 @@ fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
         pieces: PiecesSnapshot {
             total: bitfield.len(),
             downloaded: bitfield.count_ones(),
+            bitfield,
         },
         bytes: BytesSnapshot {
             total: ctx.pieces.total_len(),

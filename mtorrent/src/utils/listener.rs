@@ -1,5 +1,5 @@
-use mtorrent_base::pwp::{PeerOrigin, PeerState, TransportProto};
-use serde::Serialize;
+use mtorrent_base::pwp::{Bitfield, PeerOrigin, PeerState, TransportProto};
+use serde::{Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
@@ -25,7 +25,7 @@ impl<L: StateListener> StateListener for &mut L {
 }
 
 /// Snapshot of the current state of the download.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot<'s> {
     /// Connected peers.
@@ -41,17 +41,20 @@ pub struct StateSnapshot<'s> {
 }
 
 /// Part of the periodic state snapshot related to pieces of the torrent.
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiecesSnapshot {
     /// Total number of pieces in the torrent.
     pub total: usize,
     /// Number of pieces that have been downloaded.
     pub downloaded: usize,
+    /// Downloaded pieces represented as an array of zeroes and ones.
+    #[serde(serialize_with = "serialize_bitfield")]
+    pub bitfield: Bitfield,
 }
 
 /// Part of the periodic state snapshot related to data of the torrent.
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BytesSnapshot {
     /// Total number of bytes in the torrent.
@@ -61,7 +64,7 @@ pub struct BytesSnapshot {
 }
 
 /// Part of the periodic state snapshot related to outstanding requests.
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestsSnapshot {
     /// Total number of piece requests in-flight sent to peers.
@@ -71,13 +74,21 @@ pub struct RequestsSnapshot {
 }
 
 /// Part of the periodic state snapshot related to downloading torrent metainfo.
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetainfoSnapshot {
     /// Total number of 16KiB pieces the metainfo file is divided into.
     pub total_pieces: usize,
     /// Number of metainfo file pieces that have been downloaded.
     pub downloaded_pieces: usize,
+}
+
+fn serialize_bitfield<S>(bitfield: &Bitfield, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let bitfield = bitfield.iter().map(|bit| if *bit { '1' } else { '0' }).collect::<String>();
+    serializer.serialize_str(&bitfield)
 }
 
 impl fmt::Display for StateSnapshot<'_> {
@@ -134,5 +145,41 @@ impl fmt::Display for StateSnapshot<'_> {
             write!(f, "\n{} {}", state.download, state.upload)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn serialize_pieces_snapshot_bitfield_as_string() {
+        let snapshot = PiecesSnapshot {
+            total: 5,
+            downloaded: 3,
+            bitfield: Bitfield::from_iter([true, false, true, true, false]),
+        };
+
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            json!({
+                "total": 5,
+                "downloaded": 3,
+                "bitfield": "10110",
+            })
+        );
+    }
+
+    #[test]
+    fn serialize_empty_pieces_snapshot_bitfield_as_empty_string() {
+        assert_eq!(
+            serde_json::to_value(PiecesSnapshot::default()).unwrap(),
+            json!({
+                "total": 0,
+                "downloaded": 0,
+                "bitfield": "",
+            })
+        );
     }
 }
