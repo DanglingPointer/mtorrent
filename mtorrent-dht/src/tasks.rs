@@ -42,7 +42,6 @@ pub enum NodeEvent {
     Discovered(Node),
     Connected(Node),
     Disconnected(Node),
-    Unreachable(SocketAddr),
 }
 
 pub struct Ctx {
@@ -52,7 +51,7 @@ pub struct Ctx {
 }
 
 pub async fn probe_node(addr: SocketAddr, ctx: Rc<Ctx>) -> Result<()> {
-    let response = match ctx
+    let response = ctx
         .client
         .find_node(
             addr,
@@ -61,14 +60,7 @@ pub async fn probe_node(addr: SocketAddr, ctx: Rc<Ctx>) -> Result<()> {
                 target: ctx.local_id,
             },
         )
-        .await
-    {
-        Ok(response) => response,
-        Err(e) => {
-            ctx.event_reporter.send(NodeEvent::Unreachable(addr)).await?;
-            return Err(e);
-        }
-    };
+        .await?;
 
     let source = Node {
         id: response.id,
@@ -105,14 +97,8 @@ pub async fn keep_alive_node(node: Node, ctx: Rc<Ctx>) -> Result<()> {
         };
 
         if response.id != node.id {
-            let addr = node.addr;
+            log::warn!("Node at {} changed ID, disconnecting", node.addr);
             ctx.event_reporter.send(NodeEvent::Disconnected(node)).await?;
-            ctx.event_reporter
-                .send(NodeEvent::Discovered(Node {
-                    id: response.id,
-                    addr,
-                }))
-                .await?;
             return Ok(());
         }
 
@@ -178,12 +164,13 @@ async fn query_node_for_peers(
 
         // report discovered peers
         for mut peer_addr in get_peers_response.peers.into_iter().map(SocketAddr::V4) {
-            if peer_addr.ip().is_unspecified() || peer_addr.ip().is_loopback() {
+            if !is_port_valid!(peer_addr) {
+                continue;
+            }
+            if !net::is_allowed_remote_ip(peer_addr.ip()) || peer_addr.ip().is_loopback() {
                 peer_addr.set_ip(node.addr.ip());
             }
-            if net::is_allowed_remote_ip(peer_addr.ip()) && is_port_valid!(peer_addr) {
-                peer_reporter.send(peer_addr).await?;
-            }
+            peer_reporter.send(peer_addr).await?;
         }
 
         // announce if possible

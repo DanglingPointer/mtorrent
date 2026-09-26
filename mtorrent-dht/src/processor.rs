@@ -10,10 +10,11 @@ use crate::kademlia::Node;
 use crate::peers::PeerTable;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
+use mtorrent_utils::fifo_set::BoundedFifoSet;
 use mtorrent_utils::task_scope::TaskScope;
-use mtorrent_utils::{info_stopwatch, warn_stopwatch};
+use mtorrent_utils::{info_stopwatch, net, warn_stopwatch};
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::ops::ControlFlow::{self, *};
 use std::path::PathBuf;
@@ -31,7 +32,7 @@ pub struct Processor {
     node_table: Box<RoutingTable>,
     peers: PeerTable,
     token_mgr: TokenManager,
-    known_nodes: HashSet<SocketAddr>,
+    recent_nodes: BoundedFifoSet<SocketAddr>,
     search_callbacks: HashMap<U160, mpsc::Sender<SocketAddr>>,
     task_ctx: Rc<Ctx>,
 
@@ -70,7 +71,7 @@ impl Processor {
             task_ctx: node_ctx,
             node_event_receiver,
             node_table,
-            known_nodes: HashSet::with_capacity(512),
+            recent_nodes: BoundedFifoSet::new(128 * 1024),
             search_callbacks: HashMap::new(),
             child_tasks: TaskScope::new(),
         }
@@ -116,7 +117,7 @@ impl Processor {
             .iter()
             .filter_map(|node| node.to_socket_addrs().ok())
             .flatten()
-            .filter(SocketAddr::is_ipv4)
+            .filter(|addr| addr.is_ipv4() && net::is_allowed_remote_ip(addr.ip()))
             .collect();
         drop(sw);
 
@@ -125,7 +126,7 @@ impl Processor {
             let _sw = info_stopwatch!("Bootstrapping");
 
             for addr in bootstrapping_nodes {
-                if self.known_nodes.insert(addr) {
+                if self.recent_nodes.insert_or_replace(addr) {
                     self.child_tasks.spawn_local(probe_node(addr, self.task_ctx.clone()));
                 }
             }
@@ -146,23 +147,19 @@ impl Processor {
         log::trace!("Handling node event: {event:?}");
         match event {
             NodeEvent::Discovered(node) => {
-                if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
+                if self.node_table.can_insert(&node.id)
+                    && self.recent_nodes.insert_or_replace(node.addr)
+                {
                     self.child_tasks.spawn_local(probe_node(node.addr, self.task_ctx.clone()));
                 }
             }
             NodeEvent::Connected(node) => {
                 if self.node_table.insert_node(&node.id, &node.addr) {
                     self.child_tasks.spawn_local(keep_alive_node(node, self.task_ctx.clone()));
-                } else {
-                    self.known_nodes.remove(&node.addr);
                 }
             }
             NodeEvent::Disconnected(node) => {
-                self.known_nodes.remove(&node.addr);
                 self.node_table.remove_node(&node.id);
-            }
-            NodeEvent::Unreachable(addr) => {
-                self.known_nodes.remove(&addr);
             }
         }
     }
@@ -271,7 +268,7 @@ impl Processor {
             log::warn!("Failed to respond to query: {e}");
         }
 
-        if self.node_table.can_insert(&node.id) && self.known_nodes.insert(node.addr) {
+        if self.node_table.can_insert(&node.id) && self.recent_nodes.insert_or_replace(node.addr) {
             self.child_tasks.spawn_local(probe_node(node.addr, self.task_ctx.clone()));
         }
     }
@@ -280,7 +277,7 @@ impl Processor {
         log::info!("Processing command: {cmd:?}");
         match cmd {
             Command::AddNode { addr } => {
-                if self.known_nodes.insert(addr) {
+                if self.recent_nodes.insert_or_replace(addr) {
                     self.child_tasks.spawn_local(probe_node(addr, self.task_ctx.clone()));
                 }
                 Continue(())
