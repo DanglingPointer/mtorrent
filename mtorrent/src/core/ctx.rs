@@ -1,5 +1,5 @@
 use super::ctrl;
-use crate::app::main::{DownloadStrategy, Mode};
+use crate::app::main::{DownloadStrategy, Mode, Outcome};
 use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
@@ -11,10 +11,12 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::time::Duration;
-use std::{cmp, fs, io, mem};
-use tokio::time::{self, Instant};
+use std::{fs, io, mem};
+use tokio::time::Instant;
+use tokio::{select, time};
 
 pub type Handle<C> = LocalShared<C>;
 
@@ -197,35 +199,57 @@ impl MainCtx {
     }
 }
 
-pub async fn periodic_metadata_check<L: StateListener>(
+const COMPLETION_CHECK_INTERVAL: Duration = millisec!(500);
+
+/// Returns `Ok(None)` if `cancel` resolved before the metadata was downloaded.
+pub async fn supervise_metadata_download<L: StateListener>(
     ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
-) -> io::Result<impl IntoIterator<Item = SocketAddr> + 'static> {
+    mut cancel: Pin<&mut impl Future<Output = ()>>,
+) -> io::Result<Option<impl IntoIterator<Item = SocketAddr> + 'static>> {
     define_with_ctx!(ctx_handle);
 
-    let mut check_finished = || {
-        with_ctx!(|ctx| {
-            state_listener.on_snapshot(preliminary_snapshot(ctx)).is_break()
-                || ctrl::verify_metadata(ctx)
-        })
-    };
-
-    let mut timer = time::interval(cmp::min(sec!(1), L::INTERVAL));
-    while !check_finished() {
-        timer.tick().await;
+    fn save_metadata_if_complete(
+        ctx: &mut PreliminaryCtx,
+        metainfo_filepath: impl AsRef<Path>,
+    ) -> io::Result<bool> {
+        if ctrl::verify_metadata(ctx) {
+            fs::write(metainfo_filepath, &ctx.metainfo)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
-    with_ctx!(|ctx| fs::write(metainfo_filepath, &ctx.metainfo))?;
+    let mut snapshot_reporter =
+        pin!(submit_snapshots_periodically(&ctx_handle, state_listener, preliminary_snapshot));
 
-    Ok(with_ctx!(|ctx| mem::take(&mut ctx.discovered_peers)))
+    let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
+    completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+
+    loop {
+        select! {
+            biased;
+            _ = &mut snapshot_reporter => unreachable!(),
+            _ = completion_check_timer.tick() => {
+                if with_ctx!(|ctx| save_metadata_if_complete(ctx, &metainfo_filepath))? {
+                    return Ok(Some(with_ctx!(|ctx| mem::take(&mut ctx.discovered_peers))));
+                }
+            }
+            _ = &mut cancel => {
+                return Ok(None);
+            }
+        }
+    }
 }
 
-pub async fn periodic_state_dump<L: StateListener>(
+pub async fn supervise_content_download<L: StateListener>(
     ctx_handle: Handle<MainCtx>,
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
-) {
+    mut cancel: Pin<&mut impl Future<Output = ()>>,
+) -> Outcome {
     define_with_ctx!(ctx_handle);
 
     let mut progress_file = disk::ProgressFile::open(&outputdir)
@@ -247,28 +271,106 @@ pub async fn periodic_state_dump<L: StateListener>(
         });
     }
 
-    const MIN_WRITE_INTERVAL: Duration = sec!(1);
-    let mut last_write_time = Instant::now();
+    let mut progress_persister = pin!(persist_progress_periodically(&ctx_handle, progress_file));
 
-    let mut check_finished = move |ctx: &mut MainCtx| {
-        // save progress to file if enough time has passed since the last write
-        if let Some(file) = progress_file.as_mut()
-            && last_write_time.elapsed() >= MIN_WRITE_INTERVAL
-        {
-            if let Err(e) =
-                file.save_progress(ctx.metainfo.info_hash(), ctx.accountant.generate_bitfield())
-            {
-                log::error!("Failed to save progress to file: {e}");
+    let mut snapshot_reporter =
+        pin!(submit_snapshots_periodically(&ctx_handle, state_listener, main_snapshot));
+
+    let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
+    completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+
+    loop {
+        select! {
+            biased;
+            _ = &mut snapshot_reporter => unreachable!(),
+            _ = completion_check_timer.tick() => {
+                if with_ctx!(|ctx| ctrl::is_finished(ctx)) {
+                    return Outcome::Finished;
+                }
             }
-            last_write_time = Instant::now();
+            _ = &mut cancel => {
+                return Outcome::Cancelled;
+            }
+            _ = &mut progress_persister => unreachable!(),
         }
-        // submit state snapshot and check if we should stop
-        state_listener.on_snapshot(main_snapshot(ctx)).is_break() || ctrl::is_finished(ctx)
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+async fn persist_progress_periodically(
+    ctx_handle: &Handle<MainCtx>,
+    progress_file: Option<disk::ProgressFile>,
+) -> ! {
+    define_with_ctx!(ctx_handle);
+    const PERSIST_INTERVAL: Duration = sec!(5);
+
+    let Some(file) = progress_file else {
+        loop {
+            std::future::pending::<()>().await;
+        }
     };
 
-    let mut timer = time::interval(L::INTERVAL);
-    while with_ctx!(|ctx| !check_finished(ctx)) {
+    let mut progress_saver = ProgressSaver {
+        file,
+        info_hash: with_ctx!(|ctx| *ctx.metainfo.info_hash()),
+        get_bitfield: || with_ctx!(|ctx| ctx.accountant.generate_bitfield()),
+        last_bitfield: with_ctx!(|ctx| ctx.accountant.generate_bitfield()),
+    };
+
+    let mut timer = time::interval_at(Instant::now() + PERSIST_INTERVAL, PERSIST_INTERVAL);
+    timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+
+    loop {
         timer.tick().await;
+        progress_saver.persist_if_changed();
+    }
+}
+
+struct ProgressSaver<F: Fn() -> pwp::Bitfield> {
+    file: disk::ProgressFile,
+    info_hash: [u8; 20],
+    get_bitfield: F,
+    last_bitfield: pwp::Bitfield,
+}
+
+impl<F: Fn() -> pwp::Bitfield> ProgressSaver<F> {
+    fn persist_if_changed(&mut self) {
+        let latest_bitfield = (self.get_bitfield)();
+        if self.last_bitfield != latest_bitfield {
+            self.last_bitfield = latest_bitfield;
+            if let Err(e) = self.file.save_progress(&self.info_hash, self.last_bitfield.clone()) {
+                log::error!("Failed to save progress to file: {e}");
+            }
+        }
+    }
+}
+
+impl<F: Fn() -> pwp::Bitfield> Drop for ProgressSaver<F> {
+    fn drop(&mut self) {
+        self.persist_if_changed();
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+async fn submit_snapshots_periodically<C, L: StateListener>(
+    ctx_handle: &Handle<C>,
+    state_listener: &mut L,
+    generate_snapshot: fn(&C) -> StateSnapshot<'_>,
+) -> ! {
+    define_with_ctx!(ctx_handle);
+
+    let mut timer = time::interval(L::INTERVAL);
+    timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+
+    loop {
+        timer.tick().await;
+
+        with_ctx!(|ctx| {
+            let snapshot = generate_snapshot(ctx);
+            state_listener.on_snapshot(snapshot);
+        });
     }
 }
 

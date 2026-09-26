@@ -6,10 +6,7 @@ use mtorrent::utils::listener;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::signal;
 
@@ -48,23 +45,13 @@ struct Cli {
     seed: bool,
 }
 
-struct SnapshotLogger {
-    stop_flag: Arc<AtomicBool>,
-    ticks: u64,
-}
+struct SnapshotLogger;
 
 impl listener::StateListener for SnapshotLogger {
-    const INTERVAL: Duration = sec!(1);
+    const INTERVAL: Duration = sec!(10);
 
-    fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) -> ControlFlow<()> {
-        if self.ticks.is_multiple_of(10) {
-            log::info!("Periodic state dump:\n{snapshot}");
-        }
-        self.ticks = self.ticks.wrapping_add(1);
-        match self.stop_flag.load(Ordering::Relaxed) {
-            true => ControlFlow::Break(()),
-            false => ControlFlow::Continue(()),
-        }
+    fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
+        log::info!("Periodic state dump:\n{snapshot}");
     }
 }
 
@@ -133,13 +120,8 @@ fn main() -> io::Result<()> {
     })?;
 
     // spawn ctrl+c handler on pwp runtime because it requires I/O
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    pwp_worker.runtime_handle().spawn({
-        let flag = stop_flag.clone();
-        async move {
-            _ = signal::ctrl_c().await;
-            flag.store(true, Ordering::Relaxed);
-        }
+    let ctrl_c_handle = pwp_worker.runtime_handle().spawn(async {
+        _ = signal::ctrl_c().await;
     });
 
     let (_dht_worker, dht_cmds) = if !cli.no_dht {
@@ -159,16 +141,14 @@ fn main() -> io::Result<()> {
 
     let peer_id = PeerId::generate_new();
 
-    tokio::runtime::Builder::new_current_thread()
+    let _outcome = tokio::runtime::Builder::new_current_thread()
         .max_blocking_threads(1) // unused
         .enable_time()
         .build_local(Default::default())?
         .block_on(app::main::single_torrent(
             cli.metainfo_uri,
-            &mut SnapshotLogger {
-                stop_flag,
-                ticks: 0,
-            },
+            &mut SnapshotLogger,
+            async { _ = ctrl_c_handle.await },
             app::main::Config {
                 local_peer_id: peer_id,
                 config_dir: local_data_dir,

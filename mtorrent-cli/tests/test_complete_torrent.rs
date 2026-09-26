@@ -7,14 +7,12 @@ use mtorrent_base::input::Metainfo;
 use mtorrent_base::{data, input, pe, pwp, utp};
 use mtorrent_utils::benc;
 use mtorrent_utils::peer_id::PeerId;
-use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -1638,18 +1636,27 @@ async fn test_stop_resume_utp_download() {
         server.socket_address().port(),
     );
 
-    struct Listener<F>(F);
-    impl<F: FnMut(&listener::StateSnapshot<'_>) -> bool> listener::StateListener for Listener<F> {
+    struct PeerCountListener {
+        min_peers: usize,
+        reached_tx: Option<local_oneshot::Sender<()>>,
+    }
+    impl listener::StateListener for PeerCountListener {
         const INTERVAL: Duration = sec!(1);
-        fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) -> ControlFlow<()> {
-            if (self.0)(&snapshot) {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
+        fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
+            if snapshot.peers.len() >= self.min_peers
+                && let Some(tx) = self.reached_tx.take()
+            {
+                tx.send(()).unwrap();
             }
         }
     }
-    let peers_finished = Rc::new(Cell::new(false));
+
+    struct NoopListener;
+    impl listener::StateListener for NoopListener {
+        const INTERVAL: Duration = sec!(1);
+        fn on_snapshot(&mut self, _: listener::StateSnapshot<'_>) {}
+    }
+
     // SAFETY: nextest runs each test in a separate process, so no other threads are reading the
     // environment concurrently
     unsafe { std::env::set_var("MTORRENT_PWP_MODE", "UTP_ONLY") };
@@ -1669,8 +1676,8 @@ async fn test_stop_resume_utp_download() {
         storage_runtime: runtime::Handle::current(),
     };
 
-    let peers_finished_clone = peers_finished.clone();
-    let idle_then_seeder_peers = task::spawn_local(async move {
+    let (peers_finished_tx, peers_finished_rx) = local_oneshot::channel();
+    let seeder_peers = task::spawn_local(async move {
         // wait for idle peers to finish (mtorrent pauses and releases connections)
         idle_peers.await.expect("idle peers task shouldn't panic");
         // seeders after resume — re-bind to the same ports round 1 used
@@ -1684,35 +1691,43 @@ async fn test_stop_resume_utp_download() {
             port,
         )
         .await;
-        peers_finished_clone.set(true);
+        _ = peers_finished_tx.send(());
     });
 
     let pause_then_resume_download = task::spawn_local(async move {
         let metainfo_file = metainfo_file.to_str().unwrap();
 
         // start download, then stop once connected to all idle peers
-        app::main::single_torrent(
+        let (peers_reached_tx, peers_reached_rx) = local_oneshot::channel();
+        let outcome = app::main::single_torrent(
             &metainfo_file,
-            Listener(|snapshot: &listener::StateSnapshot<'_>| snapshot.peers.len() >= peer_count),
+            PeerCountListener {
+                min_peers: peer_count,
+                reached_tx: Some(peers_reached_tx),
+            },
+            async { _ = peers_reached_rx.await },
             config.clone(),
             context.clone(),
         )
         .await
         .unwrap();
+        assert_eq!(outcome, app::main::Outcome::Cancelled);
 
         // resume download
-        app::main::single_torrent(
+        let outcome = app::main::single_torrent(
             &metainfo_file,
-            Listener(move |_: &listener::StateSnapshot<'_>| peers_finished.get()),
+            NoopListener,
+            async { _ = peers_finished_rx.await },
             config.clone(),
             context.clone(),
         )
         .await
         .unwrap();
+        assert_eq!(outcome, app::main::Outcome::Cancelled);
     });
 
     time::timeout(sec!(30), async move {
-        let (torrent_ret, peers_ret) = join!(pause_then_resume_download, idle_then_seeder_peers);
+        let (torrent_ret, peers_ret) = join!(pause_then_resume_download, seeder_peers);
         torrent_ret.expect("torrent task shouldn't panic");
         peers_ret.expect("peers task shouldn't panic");
     })
