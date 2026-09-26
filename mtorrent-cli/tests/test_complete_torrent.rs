@@ -1168,6 +1168,7 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
         .arg(port.to_string())
         .arg("-i")
         .arg(loopback_iface_name())
+        .env("MTORRENT_PWP_MODE", "TCP_ONLY")
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1386,6 +1387,7 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
         .arg(port.to_string())
         .arg("-i")
         .arg(loopback_iface_name())
+        .env("MTORRENT_PWP_MODE", "TCP_ONLY")
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1524,6 +1526,7 @@ async fn test_download_torrent_from_magnet_link() {
         .arg(port.to_string())
         .arg("-i")
         .arg(loopback_iface_name())
+        .env("MTORRENT_PWP_MODE", "TCP_ONLY")
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1583,7 +1586,7 @@ async fn test_utp_download_torrent_from_magnet_link() {
         .arg(port.to_string())
         .arg("-i")
         .arg(loopback_iface_name())
-        // .env("MTORRENT_PWP_MODE", "UTP_ONLY")
+        .env("MTORRENT_PWP_MODE", "UTP_ONLY")
         .spawn()
         .expect("failed to execute 'mtorrent'");
 
@@ -1645,6 +1648,9 @@ async fn test_stop_resume_utp_download() {
         }
     }
     let peers_finished = Rc::new(Cell::new(false));
+    // SAFETY: nextest runs each test in a separate process, so no other threads are reading the
+    // environment concurrently
+    unsafe { std::env::set_var("MTORRENT_PWP_MODE", "UTP_ONLY") };
     let config = Config {
         local_peer_id: PeerId::generate_new(),
         output_dir: output_dir.into(),
