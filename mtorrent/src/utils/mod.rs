@@ -6,6 +6,7 @@ pub mod listener;
 /// Startup related utility functions.
 pub mod startup;
 
+#[allow(missing_docs)]
 pub mod re_exports;
 
 /// Macro for joining all tasks in a `JoinSet` with a specified timeout.
