@@ -820,7 +820,7 @@ mod tests {
         join!(download_fut, upload_fut, run_fut);
     }
 
-    #[tokio::test(flavor = "local")]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_write_downloader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Interested]).wait(sec!(0)).build();
         let (mut download, _upload, _, runner) = setup_channels!(
@@ -838,7 +838,7 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    #[tokio::test(flavor = "local")]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_write_uploader_message() {
         let socket = MockBuilder::new().write(msgs![PeerMessage::Unchoke]).wait(sec!(0)).build();
         let (_download, mut upload, _, runner) = setup_channels!(
@@ -856,7 +856,7 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    #[tokio::test(flavor = "local")]
+    #[tokio::test(flavor = "local", start_paused = true)]
     async fn test_write_extended_messages() {
         let socket = MockBuilder::new()
             .write(msgs![
@@ -926,7 +926,7 @@ mod tests {
         drop(upload);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_writing_downloader_message_takes_priority_over_uploader_message() {
         for _ in 0..50 {
             let socket = MockBuilder::new()
@@ -968,7 +968,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_writing_extended_message_takes_priority_over_uploader_message() {
         for _ in 0..50 {
             let socket = MockBuilder::new()

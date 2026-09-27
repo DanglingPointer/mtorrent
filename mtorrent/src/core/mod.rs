@@ -9,7 +9,7 @@ mod search;
 pub(crate) use announces::{make_periodic_announces, make_preliminary_announces};
 pub(crate) use connections::*;
 pub(crate) use ctx::{
-    Handle, MainCtx, PreliminaryCtx, periodic_metadata_check, periodic_state_dump,
+    Handle, MainCtx, PreliminaryCtx, supervise_content_download, supervise_metadata_download,
 };
 #[expect(unused_imports)]
 pub(crate) use peer::{

@@ -10,6 +10,7 @@ use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use tokio::sync::broadcast;
 use tokio::{join, runtime, task};
@@ -28,12 +29,21 @@ pub enum DownloadStrategy {
 /// Mode of operation for a single torrent.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Mode {
-    /// Exit once the download is complete and all active leeches have received some data.
+    /// Exit once the download is complete and all active leeches have received some data, or
+    /// earlier if cancelled.
     #[default]
     Leech,
-    /// Keep uploading to peers after the download is complete. Exit only when the state listener
-    /// returns [`std::ops::ControlFlow::Break`].
+    /// Keep uploading to peers after the download is complete. Exit only when cancelled.
     Seeder,
+}
+
+/// Result of a successful [`single_torrent`] run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The download has finished (only possible in [`Mode::Leech`]).
+    Finished,
+    /// The `cancel` future resolved before the download finished.
+    Cancelled,
 }
 
 /// Configuration for a single torrent download.
@@ -92,15 +102,31 @@ struct Params {
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
-/// In [`Mode::Leech`] this function will exit once the download is complete or a fatal error has
-/// occurred. In [`Mode::Seeder`] it will keep running until the state listener returns
-/// [`std::ops::ControlFlow::Break`] or a fatal error has occurred.
+/// In [`Mode::Leech`] this function will exit once the download is complete, `cancel` resolves
+/// or a fatal error has occurred. In [`Mode::Seeder`] it will keep running until `cancel`
+/// resolves or a fatal error has occurred.
+///
+/// Cancellation takes effect as soon as `cancel` resolves, independently of the state
+/// listener's [`INTERVAL`](listener::StateListener::INTERVAL). Download progress is persisted to
+/// the output directory every few seconds (on a fixed schedule unrelated to the listener's
+/// interval) whenever it has changed, and once more before returning. If `cancel` resolves
+/// while the metadata is still being downloaded, the function returns without starting the
+/// content download.
+///
+/// Returns [`Outcome::Finished`] if the download completed, or [`Outcome::Cancelled`] if
+/// `cancel` resolved first.
+///
+/// To stop the download, resolve `cancel` and keep polling the returned future until it
+/// completes. Dropping the future instead is not a proper way to cancel: background tasks are
+/// then aborted rather than shut down gracefully, and cleanup such as removing UPnP port
+/// mappings is skipped.
 pub async fn single_torrent(
     metainfo_uri: impl AsRef<str>,
     mut listener: impl listener::StateListener,
+    cancel: impl Future<Output = ()>,
     cfg: Config,
     ctx: impl Borrow<Context>,
-) -> io::Result<()> {
+) -> io::Result<Outcome> {
     #[cfg(debug_assertions)]
     {
         let orig_hook = std::panic::take_hook();
@@ -188,6 +214,7 @@ pub async fn single_torrent(
     };
 
     let download = async {
+        let mut cancel = pin!(cancel);
         if Path::new(metainfo_uri.as_ref()).is_file() {
             main_stage(
                 params,
@@ -195,20 +222,25 @@ pub async fn single_torrent(
                 cfg.output_dir,
                 cfg.config_dir,
                 &mut listener,
+                cancel,
                 handles,
                 std::iter::empty(),
             )
-            .await?;
+            .await
         } else {
-            let (metainfo_filepath, peers) = preliminary_stage(
+            let Some((metainfo_filepath, peers)) = preliminary_stage(
                 params.clone(),
                 metainfo_uri,
                 &cfg.output_dir,
                 cfg.config_dir.to_owned(),
                 &mut listener,
+                cancel.as_mut(),
                 handles.clone(),
             )
-            .await?;
+            .await?
+            else {
+                return Ok(Outcome::Cancelled);
+            };
             log::info!("Metadata downloaded successfully, starting content download");
             main_stage(
                 params,
@@ -216,12 +248,12 @@ pub async fn single_torrent(
                 &cfg.output_dir,
                 cfg.config_dir.to_owned(),
                 &mut listener,
+                cancel,
                 handles,
                 peers,
             )
-            .await?;
+            .await
         }
-        Ok(())
     };
 
     let shutdown_upnp = async move {
@@ -235,13 +267,13 @@ pub async fn single_torrent(
 }
 
 /// Run a future, then wait for cleanup before returning its result.
-async fn run_then_cleanup<Run, Cleanup>(
+async fn run_then_cleanup<T, Run, Cleanup>(
     run: Run,
     cleanup: Cleanup,
     mut tasks_to_join: task::JoinSet<()>,
-) -> io::Result<()>
+) -> io::Result<T>
 where
-    Run: Future<Output = io::Result<()>>,
+    Run: Future<Output = io::Result<T>>,
     Cleanup: Future<Output = ()> + Send + 'static,
 {
     let result = run.await;
@@ -250,18 +282,20 @@ where
     result
 }
 
+/// Returns `Ok(None)` if `cancel` resolved before the metadata was downloaded.
 async fn preliminary_stage(
     params: Params,
     magnet_link: impl AsRef<str>,
     metainfo_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
+    cancel: Pin<&mut impl Future<Output = ()>>,
     handles: Handles<'_>,
-) -> io::Result<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)> {
+) -> io::Result<Option<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)>> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
         .parse()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, Box::new(e)))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
         .inspect_err(|e| log::error!("Invalid magnet link: {e}"))?;
     let _sw =
         info_stopwatch!("Preliminary stage for torrent '{}'", magnet_link.name().unwrap_or("n/a"));
@@ -340,20 +374,23 @@ async fn preliminary_stage(
         }
     });
 
-    let peers = core::periodic_metadata_check(ctx, metainfo_filepath.clone(), listener).await?;
+    let result =
+        core::supervise_metadata_download(ctx, metainfo_filepath.clone(), listener, cancel).await;
     tasks.shutdown().await;
-    Ok((metainfo_filepath, peers))
+    Ok(result?.map(|peers| (metainfo_filepath, peers)))
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn main_stage(
     params: Params,
     metainfo_filepath: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
     config_dir: impl AsRef<Path> + 'static,
     listener: &mut impl listener::StateListener,
+    cancel: Pin<&mut impl Future<Output = ()>>,
     handles: Handles<'_>,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
-) -> io::Result<()> {
+) -> io::Result<Outcome> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
     let _sw = info_stopwatch!("Main stage for torrent '{}'", metainfo.name().unwrap_or("n/a"));
@@ -446,9 +483,9 @@ async fn main_stage(
         }
     });
 
-    core::periodic_state_dump(ctx, content_dir, listener).await;
+    let outcome = core::supervise_content_download(ctx, content_dir, listener, cancel).await;
     tasks.shutdown().await;
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -462,7 +499,7 @@ mod tests {
         let (finish_cleanup_tx, finish_cleanup_rx) = oneshot::channel();
 
         let run_task = task::spawn(run_then_cleanup(
-            async { Err(io::Error::other("download failed")) },
+            async { Err::<(), _>(io::Error::other("download failed")) },
             async move {
                 cleanup_started_tx.send(()).unwrap();
                 finish_cleanup_rx.await.unwrap();

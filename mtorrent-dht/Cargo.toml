@@ -19,7 +19,7 @@ mtorrent-utils = { workspace = true }
 derive_more = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

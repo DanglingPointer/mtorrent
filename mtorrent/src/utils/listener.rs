@@ -3,23 +3,26 @@ use serde::{Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
-use std::ops::ControlFlow;
 use std::time::Duration;
 
 /// Listener for monitoring progress of a single torrent download.
 pub trait StateListener {
-    /// Interval of periodic state snapshots.
+    /// Interval of periodic state snapshots. Only affects how often
+    /// [`StateListener::on_snapshot`] is called; download progress is persisted to disk on a
+    /// separate, fixed schedule.
     const INTERVAL: Duration;
 
-    /// Callback invoked once every [`StateListener::INTERVAL`] sec. The download will stop if it
-    /// returns [`ControlFlow::Break`].
-    fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) -> ControlFlow<()>;
+    /// Callback invoked immediately when a download stage (metadata or content) starts, and then
+    /// once every [`StateListener::INTERVAL`] until the stage ends. It cannot stop the download;
+    /// use the `cancel` future passed to [`single_torrent`](crate::app::main::single_torrent)
+    /// for that.
+    fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>);
 }
 
 impl<L: StateListener> StateListener for &mut L {
     const INTERVAL: Duration = L::INTERVAL;
 
-    fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) -> ControlFlow<()> {
+    fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>) {
         L::on_snapshot(*self, snapshot)
     }
 }
