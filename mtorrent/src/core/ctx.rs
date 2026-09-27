@@ -238,6 +238,10 @@ pub async fn supervise_metadata_download<L: StateListener>(
                 }
             }
             _ = &mut cancel => {
+                with_ctx!(|ctx| log::info!(
+                    "Metadata download for torrent '{}' has been cancelled",
+                    ctx.magnet.name().unwrap_or("unnamed")
+                ));
                 return Ok(None);
             }
         }
@@ -289,6 +293,10 @@ pub async fn supervise_content_download<L: StateListener>(
                 }
             }
             _ = &mut cancel => {
+                with_ctx!(|ctx| log::info!(
+                    "Content download for torrent '{}' has been cancelled",
+                    ctx.metainfo.name().unwrap_or("unnamed")
+                ));
                 return Outcome::Cancelled;
             }
             _ = &mut progress_persister => unreachable!(),
