@@ -1636,11 +1636,11 @@ async fn test_stop_resume_utp_download() {
         server.socket_address().port(),
     );
 
-    struct PeerCountListener {
+    struct PeerCountingListener {
         min_peers: usize,
         reached_tx: Option<local_oneshot::Sender<()>>,
     }
-    impl listener::StateListener for PeerCountListener {
+    impl listener::StateListener for PeerCountingListener {
         const INTERVAL: Duration = sec!(1);
         fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
             if snapshot.peers.len() >= self.min_peers
@@ -1651,10 +1651,20 @@ async fn test_stop_resume_utp_download() {
         }
     }
 
-    struct NoopListener;
-    impl listener::StateListener for NoopListener {
-        const INTERVAL: Duration = sec!(1);
-        fn on_snapshot(&mut self, _: listener::StateSnapshot<'_>) {}
+    struct SnapshotCountingListener {
+        calls: usize,
+    }
+    impl listener::StateListener for SnapshotCountingListener {
+        const INTERVAL: Duration = sec!(3600);
+        fn on_snapshot(&mut self, snapshot: listener::StateSnapshot<'_>) {
+            self.calls += 1;
+            assert!(snapshot.pieces.total > 0);
+            if self.calls == 2 {
+                // final snapshot on cancellation: seeders exit only after receiving all Haves
+                assert_eq!(snapshot.pieces.downloaded, snapshot.pieces.total);
+                assert!(snapshot.pieces.bitfield.all());
+            }
+        }
     }
 
     // SAFETY: nextest runs each test in a separate process, so no other threads are reading the
@@ -1701,7 +1711,7 @@ async fn test_stop_resume_utp_download() {
         let (peers_reached_tx, peers_reached_rx) = local_oneshot::channel();
         let outcome = app::main::single_torrent(
             &metainfo_file,
-            PeerCountListener {
+            PeerCountingListener {
                 min_peers: peer_count,
                 reached_tx: Some(peers_reached_tx),
             },
@@ -1713,10 +1723,11 @@ async fn test_stop_resume_utp_download() {
         .unwrap();
         assert_eq!(outcome, app::main::Outcome::Cancelled);
 
-        // resume download
+        // resume download, then check that a final snapshot is delivered on cancellation
+        let mut listener = SnapshotCountingListener { calls: 0 };
         let outcome = app::main::single_torrent(
             &metainfo_file,
-            NoopListener,
+            &mut listener,
             async { _ = peers_finished_rx.await },
             config.clone(),
             context.clone(),
@@ -1724,6 +1735,8 @@ async fn test_stop_resume_utp_download() {
         .await
         .unwrap();
         assert_eq!(outcome, app::main::Outcome::Cancelled);
+        // one immediate snapshot at startup + one final snapshot on cancellation
+        assert_eq!(listener.calls, 2);
     });
 
     time::timeout(sec!(30), async move {

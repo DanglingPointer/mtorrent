@@ -46,6 +46,7 @@ derive_more = { version = "2.1", features = [
     "display",
     "debug",
     "deref",
+    "deref_mut",
 ] }
 pinned-init = { version = "0.0.10", default-features = false, features = [
     "std",

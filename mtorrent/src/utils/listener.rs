@@ -12,10 +12,16 @@ pub trait StateListener {
     /// separate, fixed schedule.
     const INTERVAL: Duration;
 
-    /// Callback invoked immediately when a download stage (metadata or content) starts, and then
-    /// once every [`StateListener::INTERVAL`] until the stage ends. It cannot stop the download;
-    /// use the `cancel` future passed to [`single_torrent`](crate::app::main::single_torrent)
-    /// for that.
+    /// Callback invoked immediately when a download stage (metadata or content) starts, then
+    /// once every [`StateListener::INTERVAL`], and one final time when the stage ends, whether
+    /// it has finished, been cancelled or failed. The final call may follow a periodic one
+    /// shortly, and it also happens if the future returned by
+    /// [`single_torrent`](crate::app::main::single_torrent) is dropped. For a magnet link, each
+    /// of the two stages delivers its own final snapshot. No final snapshot is delivered while
+    /// unwinding from a panic.
+    ///
+    /// This callback cannot stop the download; use the `cancel` future passed to
+    /// [`single_torrent`](crate::app::main::single_torrent) for that.
     fn on_snapshot(&mut self, snapshot: StateSnapshot<'_>);
 }
 

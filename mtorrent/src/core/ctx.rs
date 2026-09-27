@@ -4,6 +4,7 @@ use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
 };
+use derive_more::{Deref, DerefMut};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
@@ -306,6 +307,21 @@ pub async fn supervise_content_download<L: StateListener>(
 
 // ----------------------------------------------------------------------------
 
+#[derive(Deref, DerefMut)]
+struct CallOnDrop<F: FnMut()>(
+    #[deref]
+    #[deref_mut]
+    F,
+);
+
+impl<F: FnMut()> Drop for CallOnDrop<F> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            (self.0)();
+        }
+    }
+}
+
 async fn persist_progress_periodically(
     ctx_handle: &Handle<MainCtx>,
     progress_file: Option<disk::ProgressFile>,
@@ -313,54 +329,33 @@ async fn persist_progress_periodically(
     define_with_ctx!(ctx_handle);
     const PERSIST_INTERVAL: Duration = sec!(5);
 
-    let Some(file) = progress_file else {
+    let Some(mut file) = progress_file else {
         loop {
             std::future::pending::<()>().await;
         }
     };
 
-    let mut progress_saver = ProgressSaver {
-        file,
-        info_hash: with_ctx!(|ctx| *ctx.metainfo.info_hash()),
-        get_bitfield: || with_ctx!(|ctx| ctx.accountant.generate_bitfield()),
-        last_bitfield: with_ctx!(|ctx| ctx.accountant.generate_bitfield()),
-    };
+    let info_hash = with_ctx!(|ctx| *ctx.metainfo.info_hash());
+    let mut last_bitfield = with_ctx!(|ctx| ctx.accountant.generate_bitfield());
+
+    let mut persist_progress = CallOnDrop(move || {
+        let latest_bitfield = with_ctx!(|ctx| ctx.accountant.generate_bitfield());
+        if last_bitfield != latest_bitfield {
+            last_bitfield = latest_bitfield;
+            if let Err(e) = file.save_progress(&info_hash, last_bitfield.clone()) {
+                log::error!("Failed to save progress to file: {e}");
+            }
+        }
+    });
 
     let mut timer = time::interval_at(Instant::now() + PERSIST_INTERVAL, PERSIST_INTERVAL);
     timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
     loop {
         timer.tick().await;
-        progress_saver.persist_if_changed();
+        persist_progress();
     }
 }
-
-struct ProgressSaver<F: Fn() -> pwp::Bitfield> {
-    file: disk::ProgressFile,
-    info_hash: [u8; 20],
-    get_bitfield: F,
-    last_bitfield: pwp::Bitfield,
-}
-
-impl<F: Fn() -> pwp::Bitfield> ProgressSaver<F> {
-    fn persist_if_changed(&mut self) {
-        let latest_bitfield = (self.get_bitfield)();
-        if self.last_bitfield != latest_bitfield {
-            self.last_bitfield = latest_bitfield;
-            if let Err(e) = self.file.save_progress(&self.info_hash, self.last_bitfield.clone()) {
-                log::error!("Failed to save progress to file: {e}");
-            }
-        }
-    }
-}
-
-impl<F: Fn() -> pwp::Bitfield> Drop for ProgressSaver<F> {
-    fn drop(&mut self) {
-        self.persist_if_changed();
-    }
-}
-
-// ----------------------------------------------------------------------------
 
 async fn submit_snapshots_periodically<C, L: StateListener>(
     ctx_handle: &Handle<C>,
@@ -369,16 +364,19 @@ async fn submit_snapshots_periodically<C, L: StateListener>(
 ) -> ! {
     define_with_ctx!(ctx_handle);
 
+    let mut submit_snapshot = CallOnDrop(|| {
+        with_ctx!(|ctx| {
+            let snapshot = generate_snapshot(ctx);
+            state_listener.on_snapshot(snapshot);
+        })
+    });
+
     let mut timer = time::interval(L::INTERVAL);
     timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
     loop {
         timer.tick().await;
-
-        with_ctx!(|ctx| {
-            let snapshot = generate_snapshot(ctx);
-            state_listener.on_snapshot(snapshot);
-        });
+        submit_snapshot();
     }
 }
 
