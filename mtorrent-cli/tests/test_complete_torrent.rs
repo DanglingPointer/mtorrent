@@ -1452,6 +1452,8 @@ async fn test_accept_1_utp_leech_and_upload_monofile_torrent() {
         .arg(MONOFILE_METAINFO_FILE)
         .arg("-o")
         .arg(data_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
         .arg("--no-upnp")
         .arg("--no-dht")
         .arg("--seed")

@@ -37,6 +37,7 @@ normalize-path = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+rstest = { workspace = true }
 mockito = { workspace = true }
 simple_logger = { workspace = true }
 

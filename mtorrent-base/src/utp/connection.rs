@@ -333,8 +333,17 @@ impl Connection {
             TypeVer::State => {
                 state.process_header(&header);
             }
+            TypeVer::Fin => {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            TypeVer::Reset => {
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
             typever => {
-                return Err(io::Error::other(format!("unexpected first packet ({typever:?})")));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected first packet ({typever:?})"),
+                ));
             }
         }
 
@@ -390,8 +399,17 @@ impl Connection {
                 state.process_header(&header);
                 ack_required_reporter.signal_one();
             }
+            TypeVer::Fin => {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            TypeVer::Reset => {
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
             typever => {
-                return Err(io::Error::other(format!("unexpected first packet ({typever:?})")));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected first packet ({typever:?})"),
+                ));
             }
         }
 
@@ -452,9 +470,10 @@ impl Connection {
 mod tests {
     use super::*;
     use crate::utp::seq::seq;
+    use rstest::rstest;
     use std::hash::RandomState;
     use std::net::Ipv4Addr;
-    use tokio::join;
+    use tokio::{join, task};
 
     const PEER_ADDR: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 6881);
 
@@ -487,47 +506,169 @@ mod tests {
         let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
         let (pipe, _pipe) = local_pipe::duplex_pipe(1024);
 
-        let hasher_factory = RandomState::new();
-        let connect_fut =
-            Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory);
-        let peer_fut = async {
-            let mut syn = egress_rx.next().await.unwrap();
-            let syn = Header::decode_from(&mut syn).unwrap();
-            assert_eq!(syn.type_ver, TypeVer::Syn);
+        let connect_task = task::spawn_local(async move {
+            let hasher_factory = RandomState::new();
+            Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory).await
+        });
 
-            // FIN from the previous connection, which had the same connection ID
-            let late_fin = packet(TypeVer::Fin, syn.connection_id, seq(100), seq(5), &[]);
-            ingress_tx.send(late_fin).await.unwrap();
+        task::yield_now().await;
+        let mut syn = egress_rx.next().now_or_never().expect("SYN not sent").unwrap();
+        let syn = Header::decode_from(&mut syn).unwrap();
+        assert_eq!(syn.type_ver, TypeVer::Syn);
 
-            // malformed packet
-            ingress_tx.send(Bytes::from_static(b"garbage")).await.unwrap();
+        // FIN from the previous connection, which had the same connection ID
+        let late_fin = packet(TypeVer::Fin, syn.connection_id, seq(100), seq(5), &[]);
+        ingress_tx.try_send(late_fin).unwrap();
 
-            let state = packet(TypeVer::State, syn.connection_id, seq(200), syn.seq_nr, &[]);
-            ingress_tx.send(state).await.unwrap();
-        };
-        let (connect_result, ()) = join!(connect_fut, peer_fut);
+        // malformed packet
+        ingress_tx.try_send(Bytes::from_static(b"garbage")).unwrap();
+
+        let state = packet(TypeVer::State, syn.connection_id, seq(200), syn.seq_nr, &[]);
+        ingress_tx.try_send(state).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
         assert!(connect_result.is_ok());
     }
 
+    #[rstest]
+    #[case::reset(TypeVer::Reset, io::ErrorKind::ConnectionReset)]
+    #[case::fin(TypeVer::Fin, io::ErrorKind::UnexpectedEof)]
+    #[case::data(TypeVer::Data, io::ErrorKind::InvalidData)]
+    #[case::syn(TypeVer::Syn, io::ErrorKind::InvalidData)]
     #[tokio::test(start_paused = true, flavor = "local")]
-    async fn test_outbound_handshake_fails_on_reset_reply() {
+    async fn test_outbound_handshake_fails_on_unexpected_reply(
+        #[case] reply_type: TypeVer,
+        #[case] expected_error: io::ErrorKind,
+    ) {
         let (egress_tx, mut egress_rx) = local_bounded::channel(1);
         let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
         let (pipe, _pipe) = local_pipe::duplex_pipe(1024);
 
-        let hasher_factory = RandomState::new();
-        let connect_fut =
-            Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory);
-        let peer_fut = async {
-            let mut syn = egress_rx.next().await.unwrap();
-            let syn = Header::decode_from(&mut syn).unwrap();
+        let connect_task = task::spawn_local(async move {
+            let hasher_factory = RandomState::new();
+            Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory).await
+        });
 
-            let reset = packet(TypeVer::Reset, syn.connection_id, seq(200), syn.seq_nr, &[]);
-            ingress_tx.send(reset).await.unwrap();
-        };
-        let (connect_result, ()) = join!(connect_fut, peer_fut);
+        task::yield_now().await;
+        let mut syn = egress_rx.next().now_or_never().expect("SYN not sent").unwrap();
+        let syn = Header::decode_from(&mut syn).unwrap();
+
+        let reply = packet(reply_type, syn.connection_id, seq(200), syn.seq_nr, &[]);
+        ingress_tx.try_send(reply).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
         let error = connect_result.err().expect("handshake should fail");
-        assert!(error.to_string().contains("unexpected first packet"), "{error}");
+        assert_eq!(error.kind(), expected_error, "{error}");
+    }
+
+    #[rstest]
+    #[case::reset(TypeVer::Reset)]
+    #[case::fin(TypeVer::Fin)]
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_outbound_handshake_ignores_late_termination_packets(#[case] late_type: TypeVer) {
+        let (egress_tx, mut egress_rx) = local_bounded::channel(1);
+        let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
+        let (pipe, _pipe) = local_pipe::duplex_pipe(1024);
+
+        let connect_task = task::spawn_local(async move {
+            let hasher_factory = RandomState::new();
+            Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory).await
+        });
+
+        task::yield_now().await;
+        let mut syn = egress_rx.next().now_or_never().expect("SYN not sent").unwrap();
+        let syn = Header::decode_from(&mut syn).unwrap();
+
+        let late = packet(late_type, syn.connection_id, seq(100), syn.seq_nr + seq(10), &[]);
+        ingress_tx.try_send(late).unwrap();
+
+        let state = packet(TypeVer::State, syn.connection_id, seq(200), syn.seq_nr, &[]);
+        ingress_tx.try_send(state).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
+        assert!(connect_result.is_ok());
+    }
+
+    #[rstest]
+    #[case::reset(TypeVer::Reset, io::ErrorKind::ConnectionReset)]
+    #[case::fin(TypeVer::Fin, io::ErrorKind::UnexpectedEof)]
+    #[case::state(TypeVer::State, io::ErrorKind::InvalidData)]
+    #[case::syn(TypeVer::Syn, io::ErrorKind::InvalidData)]
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_inbound_handshake_fails_on_unexpected_reply(
+        #[case] reply_type: TypeVer,
+        #[case] expected_error: io::ErrorKind,
+    ) {
+        let (egress_tx, mut egress_rx) = local_bounded::channel(1);
+        let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
+        let (pipe, mut remote_pipe) = local_pipe::duplex_pipe(1024);
+
+        let syn =
+            Header::decode_from(&mut packet(TypeVer::Syn, 1000, seq(0), seq(0), &[])).unwrap();
+
+        let connect_task =
+            task::spawn_local(Connection::inbound(PEER_ADDR, pipe, ingress_rx, egress_tx, syn));
+
+        task::yield_now().await;
+        let mut state = egress_rx.next().now_or_never().expect("STATE not sent").unwrap();
+        let state = Header::decode_from(&mut state).unwrap();
+
+        let reply = packet(reply_type, 1001, seq(1), state.seq_nr - seq(1), b"x");
+        ingress_tx.try_send(reply).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
+        let error = connect_result.err().expect("handshake should fail");
+        assert_eq!(error.kind(), expected_error, "{error}");
+
+        let mut buf = Vec::new();
+        remote_pipe
+            .read_to_end(&mut buf)
+            .now_or_never()
+            .expect("pipe should be closed")
+            .unwrap();
+        assert!(buf.is_empty(), "no data should be written: {buf:?}");
+    }
+
+    #[rstest]
+    #[case::reset(TypeVer::Reset)]
+    #[case::fin(TypeVer::Fin)]
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_inbound_handshake_ignores_late_termination_packets(#[case] late_type: TypeVer) {
+        let (egress_tx, mut egress_rx) = local_bounded::channel(1);
+        let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
+        let (pipe, mut remote_pipe) = local_pipe::duplex_pipe(1024);
+
+        let syn =
+            Header::decode_from(&mut packet(TypeVer::Syn, 1000, seq(0), seq(0), &[])).unwrap();
+
+        let connect_task =
+            task::spawn_local(Connection::inbound(PEER_ADDR, pipe, ingress_rx, egress_tx, syn));
+
+        task::yield_now().await;
+        let mut state = egress_rx.next().now_or_never().expect("STATE not sent").unwrap();
+        let state = Header::decode_from(&mut state).unwrap();
+
+        let late = packet(late_type, 1001, seq(1), state.seq_nr + seq(10), &[]);
+        ingress_tx.try_send(late).unwrap();
+
+        let data = packet(TypeVer::Data, 1001, seq(1), state.seq_nr - seq(1), b"new");
+        ingress_tx.try_send(data).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
+        assert!(connect_result.is_ok());
+
+        let mut buf = [0u8; 3];
+        remote_pipe
+            .read_exact(&mut buf)
+            .now_or_never()
+            .expect("data not written")
+            .unwrap();
+        assert_eq!(&buf, b"new");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -539,26 +680,33 @@ mod tests {
         let syn_bytes = packet(TypeVer::Syn, 1000, seq(0), seq(0), &[]);
         let syn = Header::decode_from(&mut syn_bytes.clone()).unwrap();
 
-        let connect_fut = Connection::inbound(PEER_ADDR, pipe, ingress_rx, egress_tx, syn);
-        let peer_fut = async {
-            let mut state = egress_rx.next().await.unwrap();
-            let state = Header::decode_from(&mut state).unwrap();
-            assert_eq!(state.type_ver, TypeVer::State);
-            assert_eq!(state.connection_id, 1000);
+        let connect_task =
+            task::spawn_local(Connection::inbound(PEER_ADDR, pipe, ingress_rx, egress_tx, syn));
 
-            // DATA from the previous connection, which had the same connection ID
-            let late_data = packet(TypeVer::Data, 1001, seq(1), state.seq_nr + seq(10), b"old");
-            ingress_tx.send(late_data).await.unwrap();
+        task::yield_now().await;
+        let mut state = egress_rx.next().now_or_never().expect("STATE not sent").unwrap();
+        let state = Header::decode_from(&mut state).unwrap();
+        assert_eq!(state.type_ver, TypeVer::State);
+        assert_eq!(state.connection_id, 1000);
 
-            let data = packet(TypeVer::Data, 1001, seq(1), state.seq_nr - seq(1), b"new");
-            ingress_tx.send(data).await.unwrap();
+        // DATA from the previous connection, which had the same connection ID
+        let late_data = packet(TypeVer::Data, 1001, seq(1), state.seq_nr + seq(10), b"old");
+        ingress_tx.try_send(late_data).unwrap();
 
-            let mut buf = [0u8; 3];
-            remote_pipe.read_exact(&mut buf).await.unwrap();
-            assert_eq!(&buf, b"new");
-        };
-        let (connect_result, ()) = join!(connect_fut, peer_fut);
+        let data = packet(TypeVer::Data, 1001, seq(1), state.seq_nr - seq(1), b"new");
+        ingress_tx.try_send(data).unwrap();
+        task::yield_now().await;
+
+        let connect_result = connect_task.now_or_never().expect("handshake not finished").unwrap();
         assert!(connect_result.is_ok());
+
+        let mut buf = [0u8; 3];
+        remote_pipe
+            .read_exact(&mut buf)
+            .now_or_never()
+            .expect("data not written")
+            .unwrap();
+        assert_eq!(&buf, b"new");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
