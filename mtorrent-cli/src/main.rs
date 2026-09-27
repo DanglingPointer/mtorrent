@@ -94,10 +94,7 @@ fn main() -> io::Result<()> {
     let local_data_dir = if let Some(dir) = cli.config_dir {
         dir
     } else {
-        match dirs_next::data_local_dir()
-            .or_else(dirs_next::data_dir)
-            .or_else(dirs_next::config_dir)
-        {
+        match dirs::data_local_dir().or_else(dirs::data_dir).or_else(dirs::config_dir) {
             Some(dir) => dir,
             None => std::env::current_dir()?,
         }
