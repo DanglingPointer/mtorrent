@@ -283,9 +283,9 @@ pub fn setup(log_all_msgs: bool) {
 
     let mut logger = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug);
+        .with_module_level("mtorrent::core", log::LevelFilter::Debug);
     if log_all_msgs {
-        logger = logger.with_module_level("mtorrent::pwp::channels", log::LevelFilter::Trace);
+        logger = logger.with_module_level("mtorrent_base::pwp::channels", log::LevelFilter::Trace);
     }
     let _ = logger.init();
 }

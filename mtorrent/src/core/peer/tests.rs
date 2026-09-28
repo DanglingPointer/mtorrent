@@ -181,7 +181,7 @@ async fn run_listening_seeder(
 async fn test_send_metainfo_file_to_peer() {
     let _ = simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Off)
-        .with_module_level("mtorrent::ops", log::LevelFilter::Debug)
+        .with_module_level("mtorrent::core", log::LevelFilter::Debug)
         .init();
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43212));
@@ -950,5 +950,54 @@ async fn test_keep_reqq_requests_in_flight_when_rx_is_faster_than_tx() {
         assert!(expected_retransmissions.remove(&buf[..bytes_read]));
 
         time::timeout(sec!(19), sock.read(&mut buf)).await.expect_err("unexpected msg");
+    });
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_downloaded_piece_not_lost_when_socket_closes_right_after_block() {
+    setup(true);
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
+
+    // we have all pieces except piece 0
+    let piece_count = startup::read_metainfo(metainfo_filepath).unwrap().pieces().count();
+    let mut local_bitfield = pwp::Bitfield::repeat(false, piece_count.div_ceil(8) * 8);
+    local_bitfield[1..piece_count].fill(true);
+
+    let block = BlockInfo {
+        piece_index: 0,
+        in_piece_offset: 0,
+        block_length: pwp::MAX_BLOCK_SIZE,
+    };
+
+    // serve the last missing piece and immediately disconnect
+    let socket = MockBuilder::new()
+        .write(&msgs![pwp::UploaderMessage::Bitfield(local_bitfield)])
+        .read(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .write(&msgs![pwp::DownloaderMessage::Interested])
+        .read(&msgs![pwp::UploaderMessage::Unchoke])
+        .write(&msgs![pwp::DownloaderMessage::Request(block.clone())])
+        .read(&msgs![pwp::UploaderMessage::Block(
+            block,
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .build();
+
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    ctx.with(|ctx| {
+        for piece_index in 1..piece_count {
+            assert!(ctx.accountant.submit_piece(piece_index));
+            ctx.piece_tracker.forget_piece(piece_index);
+        }
+    });
+
+    let peer_result = time::timeout(sec!(1), peer_future).await.expect("timeout");
+    assert!(peer_result.is_err());
+    ctx.with(|ctx| {
+        assert!(ctx.accountant.has_piece(0), "piece not received");
     });
 }

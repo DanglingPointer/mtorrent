@@ -201,14 +201,6 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
         async {
             select! {
                 biased;
-                request_result = request_pieces(
-                    inner.handle.clone(),
-                    &mut inner.tx,
-                    received_ever,
-                    block_received_waiter,
-                    peer_reqq,
-                    &requests_in_flight,
-                ) => request_result,
                 receive_result = receive_pieces(
                     inner.handle.clone(),
                     &mut inner.rx,
@@ -218,6 +210,14 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
                     piece_sink,
                     &requests_in_flight,
                 ) => receive_result,
+                request_result = request_pieces(
+                    inner.handle.clone(),
+                    &mut inner.tx,
+                    received_ever,
+                    block_received_waiter,
+                    peer_reqq,
+                    &requests_in_flight,
+                ) => request_result,
             }
         },
         verify_pieces(
