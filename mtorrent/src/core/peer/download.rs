@@ -1,15 +1,12 @@
 use crate::core::{ctrl, ctx};
-use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, pwp};
 use mtorrent_utils::{bandwidth, debug_stopwatch, trace_stopwatch};
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::time::Duration;
 use std::{cmp, io, iter};
-use tokio::sync::broadcast;
+use tokio::select;
 use tokio::time::{self, Instant};
-use tokio::{select, try_join};
 
 type CtxHandle = ctx::Handle<ctx::MainCtx>;
 
@@ -18,9 +15,8 @@ struct Data {
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
-    piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    verification_channel: local_bounded::Sender<usize>,
     state: pwp::DownloadState,
-    verified_pieces: usize,
 }
 
 impl Drop for Data {
@@ -86,16 +82,15 @@ pub async fn new_peer(
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
-    piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    verification_channel: local_bounded::Sender<usize>,
 ) -> io::Result<IdlePeer> {
     let mut inner = Box::new(Data {
         handle,
         rx,
         tx,
         storage,
-        piece_downloaded_channel,
+        verification_channel,
         state: Default::default(),
-        verified_pieces: 0,
     });
     // try wait for bitfield
     match inner.rx.receive_message_timed(sec!(1)).await {
@@ -194,40 +189,28 @@ pub async fn get_pieces(peer: SeedingPeer) -> io::Result<Peer> {
     let peer_reqq = with_ctx!(|ctx| ctrl::get_peer_reqq(inner.rx.remote_ip(), ctx));
 
     let requests_in_flight = sealed::Set::with_capacity(peer_reqq);
-    let (piece_sink, piece_src) = local_bounded::channel::<usize>(64);
     let (block_received_notifier, block_received_waiter) = local_condvar::condvar();
 
-    try_join!(
-        async {
-            select! {
-                biased;
-                receive_result = receive_pieces(
-                    inner.handle.clone(),
-                    &mut inner.rx,
-                    &mut inner.state,
-                    &inner.storage,
-                    block_received_notifier,
-                    piece_sink,
-                    &requests_in_flight,
-                ) => receive_result,
-                request_result = request_pieces(
-                    inner.handle.clone(),
-                    &mut inner.tx,
-                    received_ever,
-                    block_received_waiter,
-                    peer_reqq,
-                    &requests_in_flight,
-                ) => request_result,
-            }
-        },
-        verify_pieces(
+    select! {
+        biased;
+        receive_result = receive_pieces(
             inner.handle.clone(),
+            &mut inner.rx,
+            &mut inner.state,
             &inner.storage,
-            &inner.piece_downloaded_channel,
-            piece_src,
-            &mut inner.verified_pieces,
-        )
-    )?;
+            block_received_notifier,
+            &mut inner.verification_channel,
+            &requests_in_flight,
+        ) => receive_result,
+        request_result = request_pieces(
+            inner.handle.clone(),
+            &mut inner.tx,
+            received_ever,
+            block_received_waiter,
+            peer_reqq,
+            &requests_in_flight,
+        ) => request_result,
+    }?;
     debug_assert!(requests_in_flight.is_empty());
     update_ctx!(inner);
     Ok(to_enum!(inner))
@@ -351,7 +334,7 @@ async fn receive_pieces(
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
     block_received_reporter: local_condvar::Sender,
-    mut verification_channel: local_bounded::Sender<usize>,
+    verification_channel: &mut local_bounded::Sender<usize>,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -372,8 +355,12 @@ async fn receive_pieces(
                     storage.start_write_block(global_offset, data).unwrap_or_else(|e| {
                         panic!("Failed to start write ({info}) to storage: {e}")
                     });
-                    if with_ctx!(|ctx| ctx.accountant.has_piece(info.piece_index)) {
-                        _ = verification_channel.send(info.piece_index).await;
+                    // verify the entire piece if ready
+                    if with_ctx!(|ctx| ctx.accountant.has_piece(info.piece_index))
+                        && verification_channel.send(info.piece_index).await.is_err()
+                    {
+                        with_ctx!(|ctx| ctx.accountant.remove_piece(info.piece_index));
+                        return Err(io::Error::other("piece verification failed"));
                     }
                 }
                 // notify the request task
@@ -391,45 +378,6 @@ async fn receive_pieces(
     }
     state.last_bitrate_bps = speed_measurer.get_bps();
     with_ctx!(|ctx| ctx.peer_states.update_download(rx.remote_ip(), state));
-    Ok(())
-}
-
-async fn verify_pieces(
-    handle: CtxHandle,
-    storage: &data::StorageClient,
-    progress_reporter: &broadcast::Sender<usize>,
-    mut downloaded_pieces: local_bounded::Receiver<usize>,
-    verified_pieces: &mut usize,
-) -> io::Result<()> {
-    define_with_ctx!(handle);
-    let _sw = trace_stopwatch!("Verifying pieces");
-    let piece_info = with_ctx!(|ctx| ctx.pieces.clone());
-
-    while let Some(piece_index) = downloaded_pieces.next().await {
-        let piece_len = piece_info.piece_len(piece_index);
-        let global_offset = piece_info
-            .global_offset(piece_index, 0, piece_len)
-            .expect("Requested (and received!) invalid piece index");
-        let expected_sha1: &[u8; 20] = piece_info
-            .hash_of_piece(piece_index)
-            .expect("Requested (and received!) invalid piece index");
-        let verification_success =
-            storage.verify_block(global_offset, piece_len, expected_sha1).await?;
-        with_ctx!(|ctx| ctx.pending_requests.clear_requests_of(piece_index));
-        if verification_success {
-            *verified_pieces += 1;
-            with_ctx!(|ctx| ctx.piece_tracker.forget_piece(piece_index));
-            let _ = progress_reporter.send(piece_index).inspect_err(|e| {
-                log::warn!("Failed to broadcast downloaded piece {piece_index}: {e}")
-            });
-        } else {
-            log::error!("Piece verification failed, piece_index={piece_index}");
-            with_ctx!(|ctx| ctx.accountant.remove_piece(piece_index));
-            if *verified_pieces == 0 {
-                return Err(io::Error::other("piece verification failed"));
-            }
-        }
-    }
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use crate::core::{PeerReporter, UtpHandle, ctx};
+use crate::core::{PeerReporter, UtpHandle, ctx, verifier};
 use crate::utils::startup;
 use futures_util::future::LocalBoxFuture;
 use local_async_utils::prelude::*;
@@ -8,10 +8,8 @@ use std::fmt::Debug;
 use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::{fs, iter, panic};
 use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::sync::broadcast;
 use tokio::task;
 
 pub fn compare_input_and_output(
@@ -82,7 +80,7 @@ pub struct PeerBuilder {
     content_path: Option<PathBuf>,
     extensions_enabled: bool,
     has_all_pieces: bool,
-    piece_downloaded_channel: Option<Rc<broadcast::Sender<usize>>>,
+    piece_downloaded_capacity: Option<usize>,
 }
 
 impl PeerBuilder {
@@ -131,14 +129,25 @@ impl PeerBuilder {
         self.has_all_pieces = true;
         self
     }
-    pub fn with_piece_downloaded_channel(mut self, channel: Rc<broadcast::Sender<usize>>) -> Self {
-        self.piece_downloaded_channel = Some(channel);
+    pub fn with_piece_downloaded_capacity(mut self, capacity: usize) -> Self {
+        self.piece_downloaded_capacity = Some(capacity);
         self
     }
     #[must_use]
     pub fn build_main(
         self,
     ) -> (ctx::Handle<ctx::MainCtx>, LocalBoxFuture<'static, io::Result<()>>) {
+        let (ctx_handle, _verifier_handle, run_future) = self.build_main_with_verifier();
+        (ctx_handle, run_future)
+    }
+    #[must_use]
+    pub fn build_main_with_verifier(
+        self,
+    ) -> (
+        ctx::Handle<ctx::MainCtx>,
+        verifier::VerifierHandle,
+        LocalBoxFuture<'static, io::Result<()>>,
+    ) {
         let metainfo = startup::read_metainfo(
             self.metainfo_uri
                 .as_deref()
@@ -199,7 +208,20 @@ impl PeerBuilder {
             });
         }
 
+        let (verifier_handle, verifier) = verifier::piece_verifier(
+            ctx_handle.clone(),
+            content_storage.clone(),
+            self.piece_downloaded_capacity.unwrap_or(1024),
+        );
+        let verifier_handle_copy = verifier_handle.clone();
+        task::spawn_local(async move {
+            // keep the verifier alive after the peer connection has exited
+            let _handle = verifier_handle_copy;
+            verifier.run().await;
+        });
+
         let ctx_handle_clone = ctx_handle.clone();
+        let verifier_handle_clone = verifier_handle.clone();
         let run_future = async move {
             let data = super::MainConnectionData {
                 content_storage,
@@ -207,9 +229,7 @@ impl PeerBuilder {
                 ctx_handle: ctx_handle.clone(),
                 pwp_worker_handle: tokio::runtime::Handle::current(),
                 peer_reporter: PeerReporter::new_mock(),
-                piece_downloaded_channel: self
-                    .piece_downloaded_channel
-                    .unwrap_or_else(|| Rc::new(broadcast::Sender::new(1024))),
+                verifier: verifier_handle,
                 utp_handle: UtpHandle::new_mock(),
             };
             super::run_peer_connection(
@@ -223,7 +243,7 @@ impl PeerBuilder {
             .await
         };
 
-        (ctx_handle_clone, Box::pin(run_future))
+        (ctx_handle_clone, verifier_handle_clone, Box::pin(run_future))
     }
     #[must_use]
     pub fn build_preliminary(

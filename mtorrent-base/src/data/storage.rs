@@ -82,14 +82,14 @@ impl StorageClient {
         &self,
         global_offset: usize,
         length: usize,
-        expected_sha1: &[u8; 20],
+        expected_sha1: [u8; 20],
     ) -> Result<bool, Error> {
         let _sw = warn_stopwatch!("Verification of {length} bytes");
         let (result_sender, result_receiver) = oneshot::channel::<VerifyResult>();
         self.channel.send(Command::VerifyBlock {
             global_offset,
             length,
-            expected_sha1: *expected_sha1,
+            expected_sha1,
             callback: result_sender,
         })?;
         result_receiver.await?
@@ -99,6 +99,17 @@ impl StorageClient {
 #[cfg(feature = "mocks")]
 #[doc(hidden)]
 pub fn new_mock_storage(total_size: usize) -> StorageClient {
+    new_mock_storage_with_verifier(total_size, |_global_offset, _length| true)
+}
+
+/// Like [`new_mock_storage`], but the result of each in-bounds block verification is
+/// determined by `verify(global_offset, length)`.
+#[cfg(feature = "mocks")]
+#[doc(hidden)]
+pub fn new_mock_storage_with_verifier(
+    total_size: usize,
+    verify: impl Fn(usize, usize) -> bool + Send + 'static,
+) -> StorageClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     tokio::task::spawn(async move {
         while let Some(cmd) = rx.recv().await {
@@ -109,7 +120,7 @@ pub fn new_mock_storage(total_size: usize) -> StorageClient {
                     callback,
                 } => {
                     if let Some(cb) = callback {
-                        cb.send(if global_offset + data.len() < total_size {
+                        cb.send(if global_offset + data.len() <= total_size {
                             Ok(())
                         } else {
                             Err(Error::InvalidLocation)
@@ -123,7 +134,7 @@ pub fn new_mock_storage(total_size: usize) -> StorageClient {
                     callback,
                 } => {
                     callback
-                        .send(if global_offset + length < total_size {
+                        .send(if global_offset + length <= total_size {
                             Ok(vec![0; length])
                         } else {
                             Err(Error::InvalidLocation)
@@ -137,8 +148,8 @@ pub fn new_mock_storage(total_size: usize) -> StorageClient {
                     callback,
                 } => {
                     callback
-                        .send(if global_offset + length < total_size {
-                            Ok(true)
+                        .send(if global_offset + length <= total_size {
+                            Ok(verify(global_offset, length))
                         } else {
                             Err(Error::InvalidLocation)
                         })
@@ -584,9 +595,9 @@ mod tests {
     #[tokio::test]
     async fn test_async_verify_block() {
         let sha1_0_10 =
-            b"\x49\x41\x79\x71\x4a\x6c\xd6\x27\x23\x9d\xfe\xde\xdf\x2d\xe9\xef\x99\x4c\xaf\x03";
+            *b"\x49\x41\x79\x71\x4a\x6c\xd6\x27\x23\x9d\xfe\xde\xdf\x2d\xe9\xef\x99\x4c\xaf\x03";
         let sha1_10_20 =
-            b"\xdd\xd1\x27\x8d\x28\xaf\x87\xc7\x58\x84\xf5\x5b\x71\xfb\xb4\xa1\x23\x1a\xf2\xe5";
+            *b"\xdd\xd1\x27\x8d\x28\xaf\x87\xc7\x58\x84\xf5\x5b\x71\xfb\xb4\xa1\x23\x1a\xf2\xe5";
         task::LocalSet::new()
             .run_until(async {
                 let s = GenericStorage::from_length_file_pairs(iter::once(fake_length_file_pair(
