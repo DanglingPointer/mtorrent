@@ -1095,5 +1095,72 @@ async fn test_downloaded_piece_not_lost_when_socket_closes_right_after_block() {
     assert!(peer_result.is_err());
     ctx.with(|ctx| {
         assert!(ctx.accountant.has_piece(0), "piece not received");
+        // TODO: uncomment the line below
+        // assert!(!ctx.piece_tracker.has_missing_pieces(), "piece not verified");
+    });
+}
+
+#[ignore] // TODO: un-ignore
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_downloaded_piece_not_lost_when_peer_disconnects_before_verification() {
+    setup(true);
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
+
+    let (mut sock, farend_sock) = io::duplex(17 * 1024);
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(farend_sock)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    // we have all pieces except piece 0
+    ctx.with(|ctx| {
+        for piece_index in 1..ctx.pieces.piece_count() {
+            assert!(ctx.accountant.submit_piece(piece_index));
+            ctx.piece_tracker.forget_piece(piece_index);
+        }
+    });
+
+    let block = BlockInfo {
+        piece_index: 0,
+        in_piece_offset: 0,
+        block_length: pwp::MAX_BLOCK_SIZE,
+    };
+
+    let (peer_result, _) = join!(time::timeout(sec!(30), peer_future), async move {
+        sock.write_all(&msgs![
+            pwp::UploaderMessage::Have { piece_index: 0 },
+            pwp::UploaderMessage::Unchoke
+        ])
+        .await
+        .unwrap();
+
+        // wait for the request for piece 0 (skipping bitfield, interested etc.)
+        let expected_request = msgs![pwp::DownloaderMessage::Request(block.clone())];
+        let mut received = Vec::new();
+        let mut buf = vec![0u8; 17 * 1024];
+        while !received.ends_with(&expected_request) {
+            let bytes_read = time::timeout(sec!(5), sock.read(&mut buf))
+                .await
+                .expect("timeout")
+                .expect("io error");
+            assert_ne!(bytes_read, 0, "unexpected EOF");
+            received.extend_from_slice(&buf[..bytes_read]);
+        }
+
+        // serve the last missing piece and immediately disconnect
+        sock.write_all(&msgs![pwp::UploaderMessage::Block(
+            block,
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .await
+        .unwrap();
+        drop(sock);
+    });
+
+    assert!(peer_result.expect("timeout").is_err());
+    ctx.with(|ctx| {
+        assert!(ctx.accountant.has_piece(0), "piece not received");
+        assert!(!ctx.piece_tracker.has_missing_pieces(), "piece not verified");
     });
 }

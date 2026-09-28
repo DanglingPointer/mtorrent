@@ -45,8 +45,15 @@ impl PieceTracker {
         self.piece_index_to_owners.iter().map(Option::is_some).collect()
     }
 
+    /// Whether there are any pieces that we're looking to download, but haven't downloaded yet,
+    /// regardless of whether any peers have them.
+    pub fn has_missing_pieces(&self) -> bool {
+        self.piece_index_to_owners.iter().any(Option::is_some)
+    }
+
     /// Get an iterator over the not-yet-downloaded pieces, ordered by the number of
     /// peers that own each piece, such that pieces with fewest owners are yielded first.
+    /// Pieces that no peers have, are excluded.
     pub fn missing_pieces_rarest_first(&self) -> impl Iterator<Item = usize> + '_ {
         self.owner_count_to_piece_indices
             .iter()
