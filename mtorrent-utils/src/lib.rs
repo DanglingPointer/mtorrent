@@ -38,3 +38,6 @@ pub mod connect_recorder;
 
 /// Scoped task spawning that aborts outstanding tasks when the scope is dropped.
 pub mod task_scope;
+
+/// Wait for the next item from any stream in a keyed collection of streams.
+pub mod select_next;

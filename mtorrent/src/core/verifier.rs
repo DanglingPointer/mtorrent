@@ -1,11 +1,11 @@
 use super::{ctx, peer};
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use local_async_utils::prelude::*;
 use mtorrent_base::data;
+use mtorrent_utils::select_next::select_next;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tokio::select;
 use tokio::sync::broadcast;
@@ -90,7 +90,7 @@ impl Verifier {
                         None => break,
                     }
                 }
-                (peer_addr, received) = SelectNext(&mut data.peer_channels), if !data.peer_channels.is_empty() => {
+                Some((peer_addr, received)) = select_next(&mut data.peer_channels) => {
                     match received {
                         Some(piece_index) => {
                             data.verify_piece(peer_addr, piece_index).await?;
@@ -199,39 +199,6 @@ fn discard_pieces(ctx: &mut ctx::MainCtx, mut piece_rx: local_bounded::Receiver<
 
     while let Poll::Ready(Some(piece)) = piece_rx.poll_next_unpin(&mut cx) {
         ctx.accountant.remove_piece(piece);
-    }
-}
-
-struct SelectNext<'a, T>(&'a mut T);
-
-impl<'a, T, K, V> Future for SelectNext<'a, T>
-where
-    K: Copy,
-    V: Stream + Unpin,
-    for<'r> &'r mut T: IntoIterator<Item = (&'r K, &'r mut V)>,
-    for<'r> <&'r mut T as IntoIterator>::IntoIter: ExactSizeIterator,
-{
-    type Output = (K, Option<<V as Stream>::Item>);
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let len = self.0.into_iter().len();
-        assert_ne!(len, 0);
-
-        let start_ind = rand::random_range(0..len);
-
-        for (peer_addr, channel) in self.0.into_iter().skip(start_ind) {
-            if let Poll::Ready(piece_ind) = channel.poll_next_unpin(cx) {
-                return Poll::Ready((*peer_addr, piece_ind));
-            }
-        }
-
-        for (peer_addr, channel) in self.0.into_iter().take(start_ind) {
-            if let Poll::Ready(piece_ind) = channel.poll_next_unpin(cx) {
-                return Poll::Ready((*peer_addr, piece_ind));
-            }
-        }
-
-        Poll::Pending
     }
 }
 

@@ -20,6 +20,7 @@ derive_more = { workspace = true }
 thiserror = { workspace = true }
 local_async_utils = { workspace = true }
 bytes = { workspace = true }
+futures-util = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 igd-next = { version = "0.17", features = ["aio_tokio"] }
