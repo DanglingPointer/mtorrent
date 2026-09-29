@@ -550,7 +550,10 @@ async fn test_report_all_pieces_when_availability_reporter_lags() {
     let _ = join!(peer_future, async move {
         // download more pieces than the channel can hold
         for piece_index in 0..4 {
-            ctx.with(|ctx| assert!(ctx.accountant.submit_piece(piece_index)));
+            ctx.with(|ctx| {
+                assert!(ctx.accountant.submit_piece(piece_index));
+                ctx.piece_tracker.forget_piece(piece_index);
+            });
             piece_downloaded_channel.send(piece_index).unwrap();
         }
 
@@ -566,6 +569,99 @@ async fn test_report_all_pieces_when_availability_reporter_lags() {
 
         let result = time::timeout(sec!(1), sock.read(&mut buf)).await;
         assert!(matches!(result, Err(_timeout)));
+    });
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_initial_bitfield_excludes_unverified_pieces() {
+    setup(true);
+    let metainfo =
+        startup::read_metainfo("../mtorrent-cli/tests/assets/zeroed_example.torrent").unwrap();
+    let piece_count = metainfo.pieces().count();
+
+    let mut expected_bitfield = pwp::Bitfield::repeat(false, piece_count.div_ceil(8) * 8);
+    expected_bitfield.set(0, true);
+    expected_bitfield.set(2, true);
+    let socket = MockBuilder::new()
+        .write(&msgs![pwp::UploaderMessage::Bitfield(expected_bitfield)])
+        .wait(sec!(1))
+        .build();
+    let (ctx, peer_future) = PeerBuilder::new().with_socket(socket).build_main();
+
+    // pieces 0..4 downloaded, but only 0 and 2 verified
+    ctx.with(|ctx| {
+        for piece_index in 0..4 {
+            assert!(ctx.accountant.submit_piece(piece_index));
+        }
+        ctx.piece_tracker.forget_piece(0);
+        ctx.piece_tracker.forget_piece(2);
+    });
+
+    let _ = peer_future.await;
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_no_initial_bitfield_when_only_unverified_pieces() {
+    setup(true);
+    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(1024));
+    let socket = MockBuilder::new()
+        .wait(sec!(1))
+        .write(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
+        .build();
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
+        .build_main();
+
+    // pieces 0..4 downloaded, but none verified
+    ctx.with(|ctx| {
+        for piece_index in 0..4 {
+            assert!(ctx.accountant.submit_piece(piece_index));
+        }
+    });
+
+    let _ = join!(peer_future, async move {
+        // verify piece 0 later, anything sent before it will mismatch
+        time::sleep(millisec!(1500)).await;
+        ctx.with(|ctx| ctx.piece_tracker.forget_piece(0));
+        piece_downloaded_channel.send(0).unwrap();
+    });
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_lagging_availability_reporter_skips_unverified_pieces() {
+    setup(true);
+    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(2));
+    let socket = MockBuilder::new()
+        .write(&msgs![
+            pwp::UploaderMessage::Have { piece_index: 0 },
+            pwp::UploaderMessage::Have { piece_index: 1 },
+            pwp::UploaderMessage::Have { piece_index: 2 }
+        ])
+        .wait(sec!(1))
+        .write(&msgs![pwp::UploaderMessage::Have { piece_index: 4 }])
+        .build();
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
+        .build_main();
+
+    let _ = join!(peer_future, async move {
+        // download 5 pieces, verify 3 of them and overflow the channel, leave 3 unverified
+        ctx.with(|ctx| {
+            for piece_index in 0..5 {
+                assert!(ctx.accountant.submit_piece(piece_index));
+            }
+        });
+        for piece_index in 0..3 {
+            ctx.with(|ctx| ctx.piece_tracker.forget_piece(piece_index));
+            piece_downloaded_channel.send(piece_index).unwrap();
+        }
+
+        // verify piece 4 later, anything sent before it will mismatch
+        time::sleep(millisec!(1500)).await;
+        ctx.with(|ctx| ctx.piece_tracker.forget_piece(4));
+        piece_downloaded_channel.send(4).unwrap();
     });
 }
 

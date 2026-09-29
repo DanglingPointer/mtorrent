@@ -8,6 +8,15 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+/// Pieces that are fully downloaded and have passed hash verification. Only these should
+/// be advertised to peers or persisted to disk.
+pub fn verified_pieces_bitfield(ctx: &ctx::MainCtx) -> pwp::Bitfield {
+    let mut downloaded_pieces = ctx.accountant.downloaded_pieces_bitfield();
+    let missing_pieces = ctx.piece_tracker.tracked_pieces_bitfield();
+    downloaded_pieces &= !missing_pieces;
+    downloaded_pieces
+}
+
 pub fn get_peer_reqq(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> usize {
     const DEFAULT_REQQ: usize = 250;
     const MAX_REQQ: usize = 1024 * 2;

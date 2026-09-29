@@ -172,14 +172,8 @@ impl BlockAccountant {
     }
 
     /// Represent the internal state as a bitfield. Partially downloaded pieces won't be included.
-    pub fn generate_bitfield(&self) -> Bitfield {
-        let mut bitfield = Bitfield::repeat(false, self.pieces.piece_count());
-        for (piece_index, mut is_piece_present) in bitfield.iter_mut().enumerate() {
-            if self.has_piece(piece_index) {
-                is_piece_present.set(true);
-            }
-        }
-        bitfield
+    pub fn downloaded_pieces_bitfield(&self) -> Bitfield {
+        (0..self.pieces.piece_count()).map(|index| self.has_piece(index)).collect()
     }
 
     /// The total number of downloaded bytes.

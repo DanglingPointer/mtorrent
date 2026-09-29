@@ -336,10 +336,10 @@ async fn persist_progress_periodically(
     };
 
     let info_hash = with_ctx!(|ctx| *ctx.metainfo.info_hash());
-    let mut last_bitfield = with_ctx!(|ctx| ctx.accountant.generate_bitfield());
+    let mut last_bitfield = with_ctx!(|ctx| ctrl::verified_pieces_bitfield(ctx));
 
     let mut persist_progress = CallOnDrop(move || {
-        let latest_bitfield = with_ctx!(|ctx| ctx.accountant.generate_bitfield());
+        let latest_bitfield = with_ctx!(|ctx| ctrl::verified_pieces_bitfield(ctx));
         if last_bitfield != latest_bitfield {
             last_bitfield = latest_bitfield;
             if let Err(e) = file.save_progress(&info_hash, last_bitfield.clone()) {
@@ -394,7 +394,7 @@ fn preliminary_snapshot(ctx: &PreliminaryCtx) -> StateSnapshot<'_> {
 }
 
 fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
-    let bitfield = ctx.accountant.generate_bitfield();
+    let bitfield = ctx.accountant.downloaded_pieces_bitfield();
     let metadata_pieces = ctx.metainfo.size().div_ceil(pwp::MAX_BLOCK_SIZE);
     StateSnapshot {
         peers: ctx.peer_states.iter().map(|(addr, state)| (*addr, state)).collect(),
@@ -432,5 +432,66 @@ impl ConstData {
             download_strategy: Default::default(),
             mode: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::startup;
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_persist_only_verified_pieces() {
+        let dir = "test_persist_only_verified_pieces";
+        fs::create_dir_all(dir).unwrap();
+
+        let metainfo =
+            startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        let info_hash = *metainfo.info_hash();
+        let handle = MainCtx::new(
+            metainfo,
+            PeerId::generate_new(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+        let piece_count = handle.with(|ctx| ctx.pieces.piece_count());
+        assert!(piece_count > 4);
+
+        let mut persister = pin!(persist_progress_periodically(
+            &handle,
+            Some(disk::ProgressFile::open(dir).unwrap())
+        ));
+        let _ = time::timeout(sec!(1), &mut persister).await;
+
+        // pieces 0..4 downloaded, but only 0 and 2 verified
+        handle.with(|ctx| {
+            for piece_index in 0..4 {
+                assert!(ctx.accountant.submit_piece(piece_index));
+            }
+            ctx.piece_tracker.forget_piece(0);
+            ctx.piece_tracker.forget_piece(2);
+        });
+        let _ = time::timeout(sec!(5), &mut persister).await;
+
+        let load_progress = || {
+            let mut state =
+                disk::ProgressFile::open(dir).unwrap().load_progress(&info_hash).unwrap();
+            state.resize(piece_count, false);
+            state
+        };
+        assert_eq!(load_progress().iter_ones().collect::<Vec<_>>(), vec![0, 2]);
+
+        // verify piece 1
+        handle.with(|ctx| ctx.piece_tracker.forget_piece(1));
+        let _ = time::timeout(sec!(5), &mut persister).await;
+        assert_eq!(load_progress().iter_ones().collect::<Vec<_>>(), vec![0, 1, 2]);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

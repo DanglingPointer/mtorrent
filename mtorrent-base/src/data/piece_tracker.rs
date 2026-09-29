@@ -39,6 +39,12 @@ impl PieceTracker {
         }
     }
 
+    /// Get a bitfield of all pieces that haven't been forgotten yet, i.e. that are either
+    /// not downloaded or downloaded but not yet verified.
+    pub fn tracked_pieces_bitfield(&self) -> pwp::Bitfield {
+        self.piece_index_to_owners.iter().map(Option::is_some).collect()
+    }
+
     /// Get an iterator over the not-yet-downloaded pieces, ordered by the number of
     /// peers that own each piece, such that pieces with fewest owners are yielded first.
     pub fn missing_pieces_rarest_first(&self) -> impl Iterator<Item = usize> + '_ {

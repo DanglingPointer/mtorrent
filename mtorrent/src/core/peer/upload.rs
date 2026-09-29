@@ -1,4 +1,4 @@
-use super::super::ctx;
+use super::super::{ctrl, ctx};
 use super::LOCAL_REQQ;
 use futures_util::StreamExt;
 use local_async_utils::prelude::*;
@@ -71,7 +71,7 @@ impl AvailabilityReporter {
                         skipped,
                         self.tx.remote_ip()
                     );
-                    let bitfield = self.handle.with(|ctx| ctx.accountant.generate_bitfield());
+                    let bitfield = self.handle.with(|ctx| ctrl::verified_pieces_bitfield(ctx));
                     for piece_index in bitfield.iter_ones() {
                         self.report(piece_index).await?;
                     }
@@ -142,7 +142,7 @@ pub async fn new_peer(
     storage: data::StorageClient,
     piece_downloaded_channel: broadcast::Receiver<usize>,
 ) -> io::Result<(IdlePeer, AvailabilityReporter)> {
-    let bitfield = handle.with(|ctx| ctx.accountant.generate_bitfield());
+    let bitfield = handle.with(|ctx| ctrl::verified_pieces_bitfield(ctx));
     let mut inner = Box::new(Data {
         handle,
         rx,
