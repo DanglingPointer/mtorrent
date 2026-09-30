@@ -1,4 +1,4 @@
-use crate::core::{ctrl, ctx};
+use crate::core::{PieceSubmitter, ctrl, ctx};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, pwp};
 use mtorrent_utils::{bandwidth, debug_stopwatch, trace_stopwatch};
@@ -15,7 +15,7 @@ struct Data {
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
-    verification_channel: local_bounded::Sender<usize>,
+    verification_channel: PieceSubmitter,
     state: pwp::DownloadState,
 }
 
@@ -82,7 +82,7 @@ pub async fn new_peer(
     rx: pwp::DownloadRxChannel,
     tx: pwp::DownloadTxChannel,
     storage: data::StorageClient,
-    verification_channel: local_bounded::Sender<usize>,
+    verification_channel: PieceSubmitter,
 ) -> io::Result<IdlePeer> {
     let mut inner = Box::new(Data {
         handle,
@@ -334,7 +334,7 @@ async fn receive_pieces(
     state: &mut pwp::DownloadState,
     storage: &data::StorageClient,
     block_received_reporter: local_condvar::Sender,
-    verification_channel: &mut local_bounded::Sender<usize>,
+    verification_channel: &mut PieceSubmitter,
     requests_in_flight: &sealed::Set<pwp::BlockInfo>,
 ) -> io::Result<()> {
     define_with_ctx!(handle);
@@ -357,7 +357,7 @@ async fn receive_pieces(
                     });
                     // verify the entire piece if ready
                     if with_ctx!(|ctx| ctx.accountant.has_piece(info.piece_index))
-                        && verification_channel.send(info.piece_index).await.is_err()
+                        && !verification_channel.submit(info.piece_index).await
                     {
                         with_ctx!(|ctx| ctx.accountant.remove_piece(info.piece_index));
                         return Err(io::Error::other("piece verification failed"));

@@ -46,18 +46,31 @@ pub struct VerifierHandle {
 
 impl VerifierHandle {
     /// Register a peer and return a channel for submitting indices of its downloaded pieces.
-    pub fn register_peer(&self, peer_addr: SocketAddr) -> io::Result<local_bounded::Sender<usize>> {
+    pub fn register_peer(&self, peer_addr: SocketAddr) -> io::Result<PieceSubmitter> {
         let (piece_tx, piece_rx) = local_bounded::channel(128);
         self.cmd_tx.send(Command::AddPeer {
             peer_addr,
             piece_channel: piece_rx,
         })?;
-        Ok(piece_tx)
+        Ok(PieceSubmitter(piece_tx))
     }
 
     /// Subscribe to indices of pieces that have been successfully verified.
     pub fn subscribe(&self) -> broadcast::Receiver<usize> {
         self.progress_reporter.subscribe()
+    }
+}
+
+/// Per-peer channel for submitting downloaded pieces to the [`Verifier`].
+pub struct PieceSubmitter(local_bounded::Sender<usize>);
+
+impl PieceSubmitter {
+    /// Submit a fully downloaded piece for verification.
+    ///
+    /// Returns `false` if the verifier has rejected this peer (after a bad piece from an untrusted
+    /// peer) or has stopped.
+    pub async fn submit(&mut self, piece_index: usize) -> bool {
+        self.0.send(piece_index).await.is_ok()
     }
 }
 
@@ -293,7 +306,7 @@ mod tests {
         let mut piece_tx = verifier.register_peer(peer(6666)).unwrap();
 
         // downloaded piece is sent for verification
-        piece_tx.try_send(0).unwrap();
+        piece_tx.0.try_send(0).unwrap();
 
         // it's broadcast, and no longer considered missing or requested
         task::yield_now().await;
@@ -316,7 +329,7 @@ mod tests {
 
         // untrusted peer sends a bad piece followed by good ones
         for piece_index in 0..3 {
-            piece_tx.try_send(piece_index).unwrap();
+            piece_tx.0.try_send(piece_index).unwrap();
         }
         task::yield_now().await;
 
@@ -329,7 +342,7 @@ mod tests {
             }
         });
         // ...and the peer's channel is closed
-        assert!(piece_tx.try_send(3).is_err());
+        assert!(piece_tx.0.try_send(3).is_err());
     }
 
     #[tokio::test(flavor = "local")]
@@ -342,13 +355,13 @@ mod tests {
         let mut piece_tx = verifier.register_peer(peer(6666)).unwrap();
 
         // peer earns trust with a good piece
-        piece_tx.try_send(0).unwrap();
+        piece_tx.0.try_send(0).unwrap();
         task::yield_now().await;
         assert_eq!(verified_pieces.try_recv(), Ok(0));
 
         // then sends a bad piece followed by a good one
-        piece_tx.try_send(1).unwrap();
-        piece_tx.try_send(2).unwrap();
+        piece_tx.0.try_send(1).unwrap();
+        piece_tx.0.try_send(2).unwrap();
 
         // only the bad piece is discarded...
         task::yield_now().await;
@@ -360,7 +373,7 @@ mod tests {
             assert!(ctx.piece_tracker.missing_pieces_bitfield()[1]);
         });
         // ...and the peer's channel remains open
-        piece_tx.try_send(3).unwrap();
+        piece_tx.0.try_send(3).unwrap();
         task::yield_now().await;
         assert_eq!(verified_pieces.try_recv(), Ok(3));
     }
