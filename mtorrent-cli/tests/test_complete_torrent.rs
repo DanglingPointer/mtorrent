@@ -743,7 +743,7 @@ async fn launch_peers<P: Peer>(
     }
 
     let (content_storage, content_storage_server) =
-        startup::create_content_storage(&metainfo, &files_parentdir).unwrap();
+        startup::create_content_storage(&metainfo, &files_parentdir, &[]).unwrap();
     let (meta_storage, meta_storage_server) =
         startup::create_metainfo_storage(metainfo_file).unwrap();
 
@@ -1694,6 +1694,7 @@ async fn test_stop_resume_utp_download() {
         bind_interface: Some(loopback_iface_name().into()),
         download_strategy: Default::default(),
         mode: app::main::Mode::Seeder,
+        excluded_files: Vec::new(),
     };
     let context = Context {
         dht_handle: None,

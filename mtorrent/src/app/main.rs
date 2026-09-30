@@ -73,6 +73,9 @@ pub struct Config {
     pub download_strategy: DownloadStrategy,
     /// Mode of operation (leech or seeder).
     pub mode: Mode,
+    /// Indices of files (in the order they appear in the metainfo) that should not be downloaded.
+    /// Only supported in [`Mode::Leech`] and for multi-file torrents.
+    pub excluded_files: Vec<usize>,
 }
 
 /// Context for a single torrent download.
@@ -107,6 +110,7 @@ struct Params {
     bind_interface: Option<String>,
     download_strategy: DownloadStrategy,
     mode: Mode,
+    excluded_files: Vec<usize>,
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
@@ -123,6 +127,9 @@ struct Params {
 ///
 /// Returns [`Outcome::Finished`] if the download completed, or [`Outcome::Cancelled`] if
 /// `cancel` resolved first.
+///
+/// Files listed in [`Config::excluded_files`] are deleted from disk when the content download
+/// stops, regardless of whether it completed or was cancelled.
 ///
 /// To stop the download, resolve `cancel` and keep polling the returned future until it
 /// completes. Dropping the future instead is not a proper way to cancel: background tasks are
@@ -219,6 +226,7 @@ pub async fn single_torrent(
         bind_interface: cfg.bind_interface,
         download_strategy: cfg.download_strategy,
         mode: cfg.mode,
+        excluded_files: cfg.excluded_files,
     };
 
     let download = async {
@@ -423,8 +431,11 @@ async fn main_stage(
 
     let mut tasks_to_join = task::JoinSet::new();
 
+    let mut excluded_files = params.excluded_files;
+    startup::sanitize_excluded_files(&mut excluded_files, &metainfo, params.mode);
+
     let (content_storage, content_storage_server) =
-        startup::create_content_storage(&metainfo, &content_dir)?;
+        startup::create_content_storage(&metainfo, &content_dir, &excluded_files)?;
     tasks_to_join.spawn_on(
         tw.watch(core::CriticalTask::ContentStorage, content_storage_server.run()),
         handles.storage_runtime,
@@ -447,6 +458,10 @@ async fn main_stage(
         params.download_strategy,
         params.mode,
     )?;
+
+    if let Err(e) = core::exclude_files(&ctx, &excluded_files) {
+        log::error!("Failed to exclude selected files: {e}");
+    }
 
     let mut tasks_to_cancel = task::JoinSet::new();
 

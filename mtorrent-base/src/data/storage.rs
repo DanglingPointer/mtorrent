@@ -4,17 +4,21 @@ use mtorrent_utils::warn_stopwatch;
 use normalize_path::NormalizePath;
 use sha1_smol::Sha1;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::{cmp, fs, io};
 use tokio::sync::{mpsc, oneshot};
 
 /// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory
 /// `parent_dir`. If the files don't exist, new files with the specified size will be created.
+/// Files whose indices (in the order of `length_path_it`) are in `excluded_files` will be deleted
+/// from disk when the storage actor is dropped.
 pub fn new_async_storage<P: AsRef<Path>>(
     parent_dir: impl AsRef<Path>,
     length_path_it: impl Iterator<Item = (usize, P)>,
+    excluded_files: &[usize],
 ) -> Result<(StorageClient, StorageServer), Error> {
-    let storage = Storage::new(parent_dir.as_ref(), length_path_it)?;
+    let storage = FileStorage::new(parent_dir.as_ref(), length_path_it, excluded_files)?;
     let (client, server) = async_generic_storage(storage);
     Ok((client, StorageServer(server)))
 }
@@ -22,7 +26,7 @@ pub fn new_async_storage<P: AsRef<Path>>(
 /// Actor that performs filesystem operations, like reading and writing
 /// chunks of data, as well as calculating their hash. All operations are done
 /// sequentially and in the same order as they were scheduled.
-pub struct StorageServer(GenericStorageServer<fs::File>);
+pub struct StorageServer(GenericStorageServer<FileStorage>);
 
 impl StorageServer {
     /// Start serving commands received from [`StorageClient`]. Filesystem operations will be
@@ -163,9 +167,11 @@ pub fn new_mock_storage_with_verifier(
 
 // ------------------------------------------------------------------------------------------------
 
-fn async_generic_storage<F: RandomAccessReadWrite>(
-    storage: GenericStorage<F>,
-) -> (StorageClient, GenericStorageServer<F>) {
+fn async_generic_storage<S, F>(storage: S) -> (StorageClient, GenericStorageServer<S>)
+where
+    S: Deref<Target = GenericStorage<F>>,
+    F: RandomAccessReadWrite,
+{
     let (tx, rx) = mpsc::unbounded_channel::<Command>();
     (
         StorageClient { channel: tx },
@@ -201,12 +207,16 @@ enum Command {
     },
 }
 
-struct GenericStorageServer<F: RandomAccessReadWrite> {
+struct GenericStorageServer<S> {
     channel: mpsc::UnboundedReceiver<Command>,
-    storage: GenericStorage<F>,
+    storage: S,
 }
 
-impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
+impl<S, F> GenericStorageServer<S>
+where
+    S: Deref<Target = GenericStorage<F>>,
+    F: RandomAccessReadWrite,
+{
     async fn run(mut self) {
         while let Some(cmd) = self.channel.recv().await {
             self.handle_cmd(cmd);
@@ -263,41 +273,80 @@ impl<F: RandomAccessReadWrite> GenericStorageServer<F> {
 
 // ------------------------------------------------------------------------------------------------
 
-pub(super) type Storage = GenericStorage<fs::File>;
-
-pub(super) struct GenericStorage<F: RandomAccessReadWrite> {
-    files: BTreeMap<usize, F>,
+/// Storage of files on disk. Excluded files are deleted when the storage is dropped.
+pub(super) struct FileStorage {
+    inner: GenericStorage<fs::File>,
+    files_to_delete: Vec<PathBuf>,
 }
 
-impl Storage {
+impl FileStorage {
     pub(super) fn new<P: AsRef<Path>>(
         parent_dir: &Path,
         length_path_it: impl Iterator<Item = (usize, P)>,
+        excluded_files: &[usize],
     ) -> Result<Self, Error> {
-        let open_file = |(length, path): (usize, P)| -> io::Result<(usize, fs::File)> {
-            let path = path.as_ref();
-            if !path.is_normalized() || !path.is_relative() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Path {path:?} is not normalized or relative"),
-                ));
-            }
-            let path = parent_dir.join(path);
-            if let Some(prefix) = path.parent() {
-                fs::create_dir_all(prefix)?;
-            }
-            let file = fs::OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create(true)
-                .truncate(false)
-                .open(path)?;
-            file.set_len(length as u64)?;
-            Ok((length, file))
-        };
+        let mut files_to_delete = Vec::new();
+        let open_file =
+            |(index, (length, path)): (usize, (usize, P))| -> io::Result<(usize, fs::File)> {
+                let path = path.as_ref();
+                if !path.is_normalized() || !path.is_relative() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Path {path:?} is not normalized or relative"),
+                    ));
+                }
+                let path = parent_dir.join(path);
+                if let Some(prefix) = path.parent() {
+                    fs::create_dir_all(prefix)?;
+                }
+                let file = fs::OpenOptions::new()
+                    .write(true)
+                    .read(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&path)?;
+                file.set_len(length as u64)?;
+                if excluded_files.contains(&index) {
+                    files_to_delete.push(path);
+                }
+                Ok((length, file))
+            };
 
-        Self::from_length_file_pairs(length_path_it.map(open_file))
+        let inner =
+            GenericStorage::from_length_file_pairs(length_path_it.enumerate().map(open_file))?;
+        Ok(Self {
+            inner,
+            files_to_delete,
+        })
     }
+}
+
+impl Deref for FileStorage {
+    type Target = GenericStorage<fs::File>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for FileStorage {
+    fn drop(&mut self) {
+        // close all files before deleting
+        self.inner.files.clear();
+        for path in &self.files_to_delete {
+            match fs::remove_file(path) {
+                Ok(()) => log::info!("Deleted excluded file {path:?}"),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => log::error!("Failed to delete excluded file {path:?}: {e}"),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+
+pub(super) struct GenericStorage<F: RandomAccessReadWrite> {
+    files: BTreeMap<usize, F>,
 }
 
 impl<F: RandomAccessReadWrite> GenericStorage<F> {
@@ -461,6 +510,16 @@ mod tests {
 
     type FakeFile = std::cell::RefCell<Cursor<Vec<u8>>>;
 
+    struct FakeStorage(GenericStorage<FakeFile>);
+
+    impl Deref for FakeStorage {
+        type Target = GenericStorage<FakeFile>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
     fn fake_length_file_pair(content: Vec<u8>) -> io::Result<(usize, FakeFile)> {
         Ok((content.len(), std::cell::RefCell::new(Cursor::new(content))))
     }
@@ -572,7 +631,7 @@ mod tests {
                 )
                 .unwrap();
 
-                let (client, server) = async_generic_storage(s);
+                let (client, server) = async_generic_storage(FakeStorage(s));
 
                 task::spawn_local(async move {
                     server.run().await;
@@ -605,7 +664,7 @@ mod tests {
                 )))
                 .unwrap();
 
-                let (client, server) = async_generic_storage(s);
+                let (client, server) = async_generic_storage(FakeStorage(s));
 
                 task::spawn_local(async move {
                     server.run().await;
@@ -632,11 +691,11 @@ mod tests {
         fs::create_dir_all(parent_dir).unwrap();
 
         let good_file_path = Path::new("subdir/inside.txt");
-        let result = Storage::new(parent_dir, iter::once((1024, good_file_path)));
+        let result = FileStorage::new(parent_dir, iter::once((1024, good_file_path)), &[]);
         assert!(result.is_ok(), "Expected Ok, but got Err: {:?}", result.err());
 
         let bad_file_path = Path::new("../outside.txt");
-        let result = Storage::new(parent_dir, iter::once((1024, bad_file_path)));
+        let result = FileStorage::new(parent_dir, iter::once((1024, bad_file_path)), &[]);
         let Err(err) = result else {
             panic!("Expected error, but got Ok");
         };
@@ -644,12 +703,64 @@ mod tests {
 
         let absolute_path =
             std::env::current_dir().unwrap().canonicalize().unwrap().join("absolute.txt");
-        let result = Storage::new(parent_dir, iter::once((1024, absolute_path)));
+        let result = FileStorage::new(parent_dir, iter::once((1024, absolute_path)), &[]);
         let Err(err) = result else {
             panic!("Expected error, but got Ok");
         };
         assert!(matches!(err, Error::IOError(_)), "Unexpected error: {err:?}");
 
         fs::remove_dir_all(parent_dir).unwrap();
+    }
+
+    #[test]
+    fn test_excluded_files_are_deleted_on_drop() {
+        let parent_dir = Path::new("test_storage_deletes_excluded_files_on_drop");
+        let files = (0..3).map(|i| (10, format!("subdir/file{i}")));
+
+        let storage = FileStorage::new(parent_dir, files, &[0, 2]).unwrap();
+        let file_exists = |i: usize| parent_dir.join(format!("subdir/file{i}")).exists();
+        let existing_before_drop = [file_exists(0), file_exists(1), file_exists(2)];
+        drop(storage);
+        let existing_after_drop = [file_exists(0), file_exists(1), file_exists(2)];
+        let subdir_exists = parent_dir.join("subdir").is_dir();
+
+        fs::remove_dir_all(parent_dir).unwrap();
+        assert_eq!(existing_before_drop, [true, true, true]);
+        assert_eq!(existing_after_drop, [false, true, false]);
+        assert!(subdir_exists);
+    }
+
+    #[test]
+    fn test_drop_ignores_missing_excluded_files() {
+        let parent_dir = Path::new("test_storage_ignores_missing_excluded_files");
+        let files = (0..3).map(|i| (10, format!("file{i}")));
+
+        let storage = FileStorage::new(parent_dir, files, &[0, 2]).unwrap();
+        fs::remove_file(parent_dir.join("file0")).unwrap();
+        drop(storage);
+
+        let file_exists = |i: usize| parent_dir.join(format!("file{i}")).exists();
+        let existing_after_drop = [file_exists(0), file_exists(1), file_exists(2)];
+
+        fs::remove_dir_all(parent_dir).unwrap();
+        assert_eq!(existing_after_drop, [false, true, false]);
+    }
+
+    #[test]
+    fn test_invalid_excluded_file_indices_are_ignored() {
+        let parent_dir = Path::new("test_storage_ignores_invalid_excluded_file_indices");
+        let files = (0..3).map(|i| (10, format!("file{i}")));
+
+        let storage = FileStorage::new(parent_dir, files, &[3, 1, usize::MAX]);
+        let file_exists = |i: usize| parent_dir.join(format!("file{i}")).exists();
+        let existing_before_drop = [file_exists(0), file_exists(1), file_exists(2)];
+        let is_ok = storage.is_ok();
+        drop(storage);
+        let existing_after_drop = [file_exists(0), file_exists(1), file_exists(2)];
+
+        fs::remove_dir_all(parent_dir).unwrap();
+        assert!(is_ok);
+        assert_eq!(existing_before_drop, [true, true, true]);
+        assert_eq!(existing_after_drop, [true, false, true]);
     }
 }

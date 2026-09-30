@@ -159,6 +159,7 @@ fn main() -> io::Result<()> {
                 } else {
                     app::main::Mode::Leech
                 },
+                excluded_files: Vec::new(),
             },
             app::main::Context {
                 dht_handle: dht_cmds,
