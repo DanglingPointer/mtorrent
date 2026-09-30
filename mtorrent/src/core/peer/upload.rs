@@ -55,14 +55,14 @@ impl From<LeechingPeer> for Peer {
 pub struct AvailabilityReporter {
     handle: CtxHandle,
     tx: pwp::UploadTxChannel,
-    piece_downloaded_channel: broadcast::Receiver<usize>,
+    piece_available_channel: broadcast::Receiver<usize>,
     reported_pieces: pwp::Bitfield,
 }
 
 impl AvailabilityReporter {
     pub async fn run(mut self) -> io::Result<()> {
         loop {
-            match self.piece_downloaded_channel.recv().await {
+            match self.piece_available_channel.recv().await {
                 Ok(downloaded_piece) => self.report(downloaded_piece).await?,
                 Err(RecvError::Lagged(skipped)) => {
                     // peer is slower than downloading, catch up from the bitfield
@@ -140,7 +140,7 @@ pub async fn new_peer(
     rx: pwp::UploadRxChannel,
     tx: pwp::UploadTxChannel,
     storage: data::StorageClient,
-    piece_downloaded_channel: broadcast::Receiver<usize>,
+    piece_available_channel: broadcast::Receiver<usize>,
 ) -> io::Result<(IdlePeer, AvailabilityReporter)> {
     let bitfield = handle.with(|ctx| ctrl::verified_pieces_bitfield(ctx));
     let mut inner = Box::new(Data {
@@ -157,7 +157,7 @@ pub async fn new_peer(
     let reporter = AvailabilityReporter {
         handle: inner.handle.clone(),
         tx: inner.tx.clone(),
-        piece_downloaded_channel,
+        piece_available_channel,
         reported_pieces: bitfield,
     };
     Ok((IdlePeer(inner), reporter))

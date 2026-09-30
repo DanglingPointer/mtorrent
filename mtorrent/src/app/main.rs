@@ -11,8 +11,6 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::path::{Path, PathBuf};
 use std::pin::{Pin, pin};
-use std::rc::Rc;
-use tokio::sync::broadcast;
 use tokio::{join, runtime, task};
 
 /// Algorithm for selecting which pieces to download next.
@@ -423,6 +421,10 @@ async fn main_stage(
 
     let mut tasks = task::JoinSet::new();
 
+    let (verifier_handle, verifier) =
+        core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
+    tasks.spawn_local(verifier.run());
+
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {
             content_storage,
@@ -430,7 +432,7 @@ async fn main_stage(
             ctx_handle: ctx.clone(),
             pwp_worker_handle: handles.pwp_runtime.clone(),
             peer_reporter: peer_reporter.clone(),
-            piece_downloaded_channel: Rc::new(broadcast::Sender::new(2048)),
+            verifier: verifier_handle,
             utp_handle: handles.utp.clone(),
         });
     tasks.spawn_local(connect_throttle.run());

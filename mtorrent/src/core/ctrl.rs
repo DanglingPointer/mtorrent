@@ -12,7 +12,7 @@ use std::time::Duration;
 /// be advertised to peers or persisted to disk.
 pub fn verified_pieces_bitfield(ctx: &ctx::MainCtx) -> pwp::Bitfield {
     let mut downloaded_pieces = ctx.accountant.downloaded_pieces_bitfield();
-    let missing_pieces = ctx.piece_tracker.tracked_pieces_bitfield();
+    let missing_pieces = ctx.piece_tracker.missing_pieces_bitfield();
     downloaded_pieces &= !missing_pieces;
     downloaded_pieces
 }
@@ -44,7 +44,7 @@ fn is_peer_interesting(peer_ip: &SocketAddr, ctx: &ctx::MainCtx) -> bool {
         })
     };
 
-    if ctx.accountant.missing_bytes() == 0 {
+    if !ctx.piece_tracker.has_missing_pieces() {
         false
     } else if ctx.peer_states.seeders_count() <= MAX_SEEDER_COUNT {
         has_missing_pieces() || has_recently_uploaded_data()
@@ -278,7 +278,7 @@ pub fn is_finished(ctx: &ctx::MainCtx) -> bool {
         // finish if we have downloaded everything, and all active leeches (if any) have received
         // at least 50 blocks
         Mode::Leech => {
-            ctx.accountant.missing_bytes() == 0
+            !ctx.piece_tracker.has_missing_pieces()
                 && !ctx.peer_states.iter().any(|(_, state)| {
                     is_active_leech(state) && state.upload.bytes_sent < pwp::MAX_BLOCK_SIZE * 50
                 })
@@ -800,6 +800,43 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_peer_remains_interesting_until_all_pieces_verified() {
+        let handle = new_ctx(Mode::Leech);
+        define_with_ctx!(handle);
+
+        with_ctx!(|ctx| {
+            let piece_count = ctx.pieces.piece_count();
+            assert!(piece_count > 1);
+            let last_piece = piece_count - 1;
+
+            for piece_index in 0..piece_count {
+                ctx.piece_tracker.add_single_record(&ip(1), piece_index);
+            }
+            assert!(next_piece_to_request(&ip(1), ctx).is_some());
+            assert!(is_peer_interesting(&ip(1), ctx));
+
+            // all but one pieces are downloaded and verified
+            for piece_index in 0..last_piece {
+                ctx.accountant.submit_piece(piece_index);
+                ctx.piece_tracker.forget_piece(piece_index);
+            }
+            assert_eq!(next_piece_to_request(&ip(1), ctx), Some(last_piece));
+            assert!(is_peer_interesting(&ip(1), ctx));
+
+            // the last piece has been downloaded, but not verified yet
+            ctx.accountant.submit_piece(last_piece);
+            assert_eq!(ctx.accountant.missing_bytes(), 0);
+            assert_eq!(next_piece_to_request(&ip(1), ctx), None);
+            assert!(is_peer_interesting(&ip(1), ctx));
+
+            // the last piece has been verified
+            ctx.piece_tracker.forget_piece(last_piece);
+            assert_eq!(next_piece_to_request(&ip(1), ctx), None);
+            assert!(!is_peer_interesting(&ip(1), ctx));
+        });
+    }
+
     fn new_ctx(mode: Mode) -> ctx::Handle<MainCtx> {
         let metainfo =
             startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
@@ -820,6 +857,7 @@ mod tests {
     fn submit_all_pieces(ctx: &mut MainCtx) {
         for piece_index in 0..ctx.pieces.piece_count() {
             ctx.accountant.submit_piece(piece_index);
+            ctx.piece_tracker.forget_piece(piece_index);
         }
     }
 
@@ -837,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn test_leech_finishes_when_all_pieces_downloaded() {
+    fn test_leech_finishes_when_all_pieces_downloaded_and_verified() {
         let handle = new_ctx(Mode::Leech);
         define_with_ctx!(handle);
 
@@ -846,12 +884,20 @@ mod tests {
 
             let piece_count = ctx.pieces.piece_count();
             assert!(piece_count > 1);
+
+            // all but one pieces are downloaded and verified
             for piece_index in 0..piece_count - 1 {
                 ctx.accountant.submit_piece(piece_index);
+                ctx.piece_tracker.forget_piece(piece_index);
             }
             assert!(!is_finished(ctx));
 
+            // the last piece has been downloaded, but not verified yet
             ctx.accountant.submit_piece(piece_count - 1);
+            assert!(!is_finished(ctx));
+
+            // the last piece has been verified
+            ctx.piece_tracker.forget_piece(piece_count - 1);
             assert!(is_finished(ctx));
         });
     }

@@ -1,5 +1,5 @@
 use super::testutils::*;
-use crate::core::{PeerConnector, PeerReporter, UtpHandle, ctx};
+use crate::core::{PeerConnector, PeerReporter, UtpHandle, ctx, verifier};
 use crate::utils::startup;
 use local_async_utils::prelude::*;
 use mtorrent_base::pwp::{BlockInfo, MAX_BLOCK_SIZE};
@@ -11,7 +11,6 @@ use std::rc::Rc;
 use std::{fs, panic};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
 use tokio::time::Instant;
 use tokio::{join, runtime, task, time, try_join};
 use tokio_test::io::Builder as MockBuilder;
@@ -152,13 +151,17 @@ async fn run_listening_seeder(
         }
     });
 
+    let (verifier_handle, verifier) =
+        verifier::piece_verifier(handle.clone(), content_storage.clone(), 1024);
+    task::spawn_local(verifier.run());
+
     let data = Rc::new(super::MainConnectionData {
         content_storage,
         metainfo_storage: meta_storage,
         ctx_handle: handle,
         pwp_worker_handle: runtime::Handle::current(),
         peer_reporter: PeerReporter::new_mock(),
-        piece_downloaded_channel: Rc::new(broadcast::Sender::new(1024)),
+        verifier: verifier_handle,
         utp_handle: UtpHandle::new_mock(),
     });
 
@@ -540,12 +543,12 @@ async fn test_block_request_extra_retry_when_peer_has_seeded() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_report_all_pieces_when_availability_reporter_lags() {
     setup(true);
-    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(2));
     let (mut sock, farend_sock) = io::duplex(17 * 1024);
-    let (ctx, peer_future) = PeerBuilder::new()
+    let (ctx, verifier, peer_future) = PeerBuilder::new()
         .with_socket(farend_sock)
-        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
-        .build_main();
+        .with_piece_downloaded_capacity(2)
+        .build_main_with_verifier();
+    let piece_downloaded_channel = verifier.progress_reporter().clone();
 
     let _ = join!(peer_future, async move {
         // download more pieces than the channel can hold
@@ -603,15 +606,13 @@ async fn test_initial_bitfield_excludes_unverified_pieces() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_no_initial_bitfield_when_only_unverified_pieces() {
     setup(true);
-    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(1024));
     let socket = MockBuilder::new()
         .wait(sec!(1))
         .write(&msgs![pwp::UploaderMessage::Have { piece_index: 0 }])
         .build();
-    let (ctx, peer_future) = PeerBuilder::new()
-        .with_socket(socket)
-        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
-        .build_main();
+    let (ctx, verifier, peer_future) =
+        PeerBuilder::new().with_socket(socket).build_main_with_verifier();
+    let piece_downloaded_channel = verifier.progress_reporter().clone();
 
     // pieces 0..4 downloaded, but none verified
     ctx.with(|ctx| {
@@ -631,7 +632,6 @@ async fn test_no_initial_bitfield_when_only_unverified_pieces() {
 #[tokio::test(start_paused = true, flavor = "local")]
 async fn test_lagging_availability_reporter_skips_unverified_pieces() {
     setup(true);
-    let piece_downloaded_channel = Rc::new(broadcast::Sender::new(2));
     let socket = MockBuilder::new()
         .write(&msgs![
             pwp::UploaderMessage::Have { piece_index: 0 },
@@ -641,10 +641,11 @@ async fn test_lagging_availability_reporter_skips_unverified_pieces() {
         .wait(sec!(1))
         .write(&msgs![pwp::UploaderMessage::Have { piece_index: 4 }])
         .build();
-    let (ctx, peer_future) = PeerBuilder::new()
+    let (ctx, verifier, peer_future) = PeerBuilder::new()
         .with_socket(socket)
-        .with_piece_downloaded_channel(piece_downloaded_channel.clone())
-        .build_main();
+        .with_piece_downloaded_capacity(2)
+        .build_main_with_verifier();
+    let piece_downloaded_channel = verifier.progress_reporter().clone();
 
     let _ = join!(peer_future, async move {
         // download 5 pieces, verify 3 of them and overflow the channel, leave 3 unverified
@@ -1093,7 +1094,79 @@ async fn test_downloaded_piece_not_lost_when_socket_closes_right_after_block() {
 
     let peer_result = time::timeout(sec!(1), peer_future).await.expect("timeout");
     assert!(peer_result.is_err());
+
+    // let the verifier process the piece
+    task::yield_now().await;
+
     ctx.with(|ctx| {
         assert!(ctx.accountant.has_piece(0), "piece not received");
+        assert!(!ctx.piece_tracker.has_missing_pieces(), "piece not verified");
+    });
+}
+
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_downloaded_piece_not_lost_when_peer_disconnects_before_verification() {
+    setup(true);
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent"; // piece length 16K
+
+    let (mut sock, farend_sock) = io::duplex(17 * 1024);
+    let (ctx, peer_future) = PeerBuilder::new()
+        .with_socket(farend_sock)
+        .with_metainfo_file(metainfo_filepath)
+        .build_main();
+
+    // we have all pieces except piece 0
+    ctx.with(|ctx| {
+        for piece_index in 1..ctx.pieces.piece_count() {
+            assert!(ctx.accountant.submit_piece(piece_index));
+            ctx.piece_tracker.forget_piece(piece_index);
+        }
+    });
+
+    let block = BlockInfo {
+        piece_index: 0,
+        in_piece_offset: 0,
+        block_length: pwp::MAX_BLOCK_SIZE,
+    };
+
+    let (peer_result, _) = join!(time::timeout(sec!(30), peer_future), async move {
+        sock.write_all(&msgs![
+            pwp::UploaderMessage::Have { piece_index: 0 },
+            pwp::UploaderMessage::Unchoke
+        ])
+        .await
+        .unwrap();
+
+        // wait for the request for piece 0 (skipping bitfield, interested etc.)
+        let expected_request = msgs![pwp::DownloaderMessage::Request(block.clone())];
+        let mut received = Vec::new();
+        let mut buf = vec![0u8; 17 * 1024];
+        while !received.ends_with(&expected_request) {
+            let bytes_read = time::timeout(sec!(5), sock.read(&mut buf))
+                .await
+                .expect("timeout")
+                .expect("io error");
+            assert_ne!(bytes_read, 0, "unexpected EOF");
+            received.extend_from_slice(&buf[..bytes_read]);
+        }
+
+        // serve the last missing piece and immediately disconnect
+        sock.write_all(&msgs![pwp::UploaderMessage::Block(
+            block,
+            vec![0u8; pwp::MAX_BLOCK_SIZE]
+        )])
+        .await
+        .unwrap();
+        drop(sock);
+    });
+    assert!(peer_result.expect("timeout").is_err());
+
+    // let the verifier process the piece
+    task::yield_now().await;
+
+    ctx.with(|ctx| {
+        assert!(ctx.accountant.has_piece(0), "piece not received");
+        assert!(!ctx.piece_tracker.has_missing_pieces(), "piece not verified");
     });
 }

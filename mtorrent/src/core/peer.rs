@@ -14,14 +14,13 @@ pub use tcp::run_pwp_listener;
 pub use utp::{UtpActor, UtpHandle, init_utp};
 
 use super::connections::{PeerConnector, PeerReporter};
+use super::verifier::VerifierHandle;
 use super::{ctrl, ctx};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, pwp};
 use std::io;
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::time::Duration;
-use tokio::sync::broadcast;
 use tokio::time::{self, Instant};
 use tokio::{runtime, try_join};
 use utp::{InboundConnectArgs, OutboundConnectArgs};
@@ -140,7 +139,7 @@ async fn run_peer_connection(
         rx,
         tx,
         data.content_storage.clone(),
-        data.piece_downloaded_channel.subscribe(),
+        data.verifier.subscribe(),
     );
 
     let pwp::DownloadChannels(tx, rx) = download_chans;
@@ -149,7 +148,7 @@ async fn run_peer_connection(
         rx,
         tx,
         data.content_storage.clone(),
-        data.piece_downloaded_channel.clone(),
+        data.verifier.register_peer(remote_ip)?,
     );
 
     let handle_copy = data.ctx_handle.clone();
@@ -193,8 +192,12 @@ pub struct MainConnectionData {
     pub ctx_handle: MainHandle,
     pub pwp_worker_handle: runtime::Handle,
     pub peer_reporter: PeerReporter,
-    pub piece_downloaded_channel: Rc<broadcast::Sender<usize>>,
+    pub verifier: VerifierHandle,
     pub utp_handle: UtpHandle,
+}
+
+impl MainConnectionData {
+    pub const MAX_CONNECTIONS: usize = 200;
 }
 
 impl PeerConnector for MainConnectionData {
@@ -202,7 +205,7 @@ impl PeerConnector for MainConnectionData {
         (pwp::DownloadChannels, pwp::UploadChannels, Option<pwp::ExtendedChannels>);
 
     fn max_connections(&self) -> usize {
-        200
+        Self::MAX_CONNECTIONS
     }
 
     fn connect_retry_interval(&self) -> Duration {

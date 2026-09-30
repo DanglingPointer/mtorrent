@@ -15,7 +15,7 @@ pub use piece_tracker::PieceTracker;
 pub use storage::{StorageClient, StorageServer, new_async_storage};
 
 #[cfg(feature = "mocks")]
-pub use storage::new_mock_storage;
+pub use storage::{new_mock_storage, new_mock_storage_with_verifier};
 
 /// Common error type.
 #[derive(Debug, Error)]
