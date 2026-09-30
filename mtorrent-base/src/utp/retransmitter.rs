@@ -116,13 +116,23 @@ impl Retransmitter {
 
             if *sent_times == 1 {
                 // update RTT and RTO
-                let Rtt { rtt, rtt_var } = self.rtt.get_or_insert_default();
                 let packet_rtt = sent_at.elapsed().as_millis();
-                let abs_delta = rtt.abs_diff(packet_rtt);
-                *rtt_var += abs_delta.saturating_sub(*rtt_var) / 4;
-                *rtt += packet_rtt.saturating_sub(*rtt) / 8;
+                match &mut self.rtt {
+                    Some(Rtt { rtt, rtt_var }) => {
+                        let abs_delta = rtt.abs_diff(packet_rtt);
+                        *rtt_var = (3 * *rtt_var + abs_delta) / 4;
+                        *rtt = (7 * *rtt + packet_rtt) / 8;
+                    }
+                    None => {
+                        self.rtt = Some(Rtt {
+                            rtt: packet_rtt,
+                            rtt_var: packet_rtt / 2,
+                        });
+                    }
+                }
 
-                self.timeout = millisec!(cmp::max(*rtt + *rtt_var * 4, 500) as u64);
+                let estimate = self.rtt.as_ref().unwrap();
+                self.timeout = millisec!(cmp::max(estimate.rtt + estimate.rtt_var * 4, 500) as u64);
             }
 
             self.send_queue.retain(|in_flight| in_flight.seq_nr > acked_seq_nr);
@@ -234,5 +244,27 @@ mod tests {
             assert_eq!(&retransmit[..], b"packet1");
             assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i + millisec!(20));
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_rto_decreases_after_latency_improves() {
+        let mut retransmitter = Retransmitter::new();
+
+        retransmitter.add_new_packet(Bytes::from_static(b"packet"), seq(1));
+        time::sleep(millisec!(1000)).await;
+        retransmitter.process_ack(seq(1));
+        assert_eq!(retransmitter.rtt.as_ref().unwrap().rtt, 1000);
+        assert_eq!(retransmitter.rtt.as_ref().unwrap().rtt_var, 500);
+        let slow_timeout = retransmitter.timeout;
+
+        for seq_nr in 2..=9 {
+            retransmitter.add_new_packet(Bytes::from_static(b"packet"), seq(seq_nr));
+            time::sleep(millisec!(100)).await;
+            retransmitter.process_ack(seq(seq_nr));
+        }
+
+        assert!(retransmitter.rtt.as_ref().unwrap().rtt < 1000);
+        assert!(retransmitter.rtt.as_ref().unwrap().rtt_var < 500);
+        assert!(retransmitter.timeout < slow_timeout);
     }
 }
