@@ -294,7 +294,7 @@ mod tests {
         assert_eq!(verified_pieces.try_recv(), Ok(0));
         fx.ctx.with(|ctx| {
             assert!(ctx.accountant.has_piece(0));
-            assert!(!ctx.piece_tracker.tracked_pieces_bitfield()[0]);
+            assert!(!ctx.piece_tracker.missing_pieces_bitfield()[0]);
             assert!(!ctx.pending_requests.is_piece_requested(0));
         });
     }
@@ -319,7 +319,7 @@ mod tests {
         fx.ctx.with(|ctx| {
             for piece_index in 0..3 {
                 assert!(!ctx.accountant.has_piece(piece_index));
-                assert!(ctx.piece_tracker.tracked_pieces_bitfield()[piece_index]);
+                assert!(ctx.piece_tracker.missing_pieces_bitfield()[piece_index]);
             }
         });
         // ...and the peer's channel is closed
@@ -351,7 +351,7 @@ mod tests {
             assert!(ctx.accountant.has_piece(0));
             assert!(!ctx.accountant.has_piece(1));
             assert!(ctx.accountant.has_piece(2));
-            assert!(ctx.piece_tracker.tracked_pieces_bitfield()[1]);
+            assert!(ctx.piece_tracker.missing_pieces_bitfield()[1]);
         });
         // ...and the peer's channel remains open
         piece_tx.try_send(3).unwrap();
@@ -433,7 +433,7 @@ mod tests {
         data.handle.with(|ctx| {
             for piece_index in 0..2 {
                 assert!(ctx.accountant.has_piece(piece_index));
-                assert!(!ctx.piece_tracker.tracked_pieces_bitfield()[piece_index]);
+                assert!(!ctx.piece_tracker.missing_pieces_bitfield()[piece_index]);
             }
         });
         // ...but the new connection has not earned trust yet

@@ -12,7 +12,7 @@ use std::time::Duration;
 /// be advertised to peers or persisted to disk.
 pub fn verified_pieces_bitfield(ctx: &ctx::MainCtx) -> pwp::Bitfield {
     let mut downloaded_pieces = ctx.accountant.downloaded_pieces_bitfield();
-    let missing_pieces = ctx.piece_tracker.tracked_pieces_bitfield();
+    let missing_pieces = ctx.piece_tracker.missing_pieces_bitfield();
     downloaded_pieces &= !missing_pieces;
     downloaded_pieces
 }
