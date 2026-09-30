@@ -81,6 +81,7 @@ pub struct PeerBuilder {
     extensions_enabled: bool,
     has_all_pieces: bool,
     piece_downloaded_capacity: Option<usize>,
+    broken_metainfo_storage: bool,
 }
 
 impl PeerBuilder {
@@ -133,6 +134,10 @@ impl PeerBuilder {
         self.piece_downloaded_capacity = Some(capacity);
         self
     }
+    pub fn with_broken_metainfo_storage(mut self) -> Self {
+        self.broken_metainfo_storage = true;
+        self
+    }
     #[must_use]
     pub fn build_main(
         self,
@@ -168,9 +173,14 @@ impl PeerBuilder {
             (true, Some(metainfo_path)) => {
                 let (client, metainfo_storage_server) =
                     startup::create_metainfo_storage(metainfo_path).unwrap();
-                task::spawn(async move {
-                    metainfo_storage_server.run().await;
-                });
+                if self.broken_metainfo_storage {
+                    // all requests will fail because the server is not running
+                    drop(metainfo_storage_server);
+                } else {
+                    task::spawn(async move {
+                        metainfo_storage_server.run().await;
+                    });
+                }
                 client
             }
             _ => data::new_mock_storage(usize::MAX),

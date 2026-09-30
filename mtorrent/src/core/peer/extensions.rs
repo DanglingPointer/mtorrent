@@ -117,7 +117,6 @@ async fn handle_incoming_message(inner: &mut Data, msg: pwp::ExtendedMessage) ->
     define_with_ctx!(inner.handle);
 
     let remote_ip = *inner.rx.remote_ip();
-    let serve_metadata = with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx));
 
     match msg {
         pwp::ExtendedMessage::Handshake(mut hs) => {
@@ -144,38 +143,63 @@ async fn handle_incoming_message(inner: &mut Data, msg: pwp::ExtendedMessage) ->
             };
         }
         pwp::ExtendedMessage::MetadataRequest { piece } => {
-            if let Some(&id) = inner.remote_extensions.get(&pwp::Extension::Metadata) {
-                if serve_metadata && inner.sent_metadata_pieces.get(piece).is_some_and(|sent| !sent)
-                {
-                    log::debug!("Serving metadata request from {remote_ip}: (piece={piece})");
-                    let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
-                    let global_offset = piece * pwp::MAX_BLOCK_SIZE;
-                    let length = cmp::min(pwp::MAX_BLOCK_SIZE, metadata_len - global_offset);
-                    let data = inner.metadata_storage.read_block(global_offset, length).await?;
-                    inner
-                        .tx
-                        .send_message((
-                            pwp::ExtendedMessage::MetadataBlock {
-                                piece,
-                                total_size: metadata_len,
-                                data,
-                            },
-                            id,
-                        ))
-                        .await?;
-                    inner.sent_metadata_pieces.set(piece, true);
-                } else {
-                    log::debug!("Rejecting metadata request from {remote_ip}: (piece={piece})");
-                    inner
-                        .tx
-                        .send_message((pwp::ExtendedMessage::MetadataReject { piece }, id))
-                        .await?;
-                }
-            }
+            handle_metadata_request(inner, piece).await?;
         }
         msg => {
             log::warn!("Unexpected extension message from {remote_ip}: {msg}");
         }
     }
+    Ok(())
+}
+
+async fn handle_metadata_request(inner: &mut Data, requested_piece: usize) -> io::Result<()> {
+    define_with_ctx!(inner.handle);
+
+    let Some(&id) = inner.remote_extensions.get(&pwp::Extension::Metadata) else {
+        return Ok(());
+    };
+
+    let remote_ip = *inner.rx.remote_ip();
+    let serve_metadata = with_ctx!(|ctx| ctrl::can_serve_metadata(&remote_ip, ctx));
+
+    if serve_metadata && inner.sent_metadata_pieces.get(requested_piece).is_some_and(|sent| !sent) {
+        log::debug!("Serving metadata request from {remote_ip}: (piece={requested_piece})");
+        let metadata_len = with_ctx!(|ctx| ctx.metainfo.size());
+        let global_offset = requested_piece * pwp::MAX_BLOCK_SIZE;
+        let length = cmp::min(pwp::MAX_BLOCK_SIZE, metadata_len - global_offset);
+        match inner.metadata_storage.read_block(global_offset, length).await {
+            Err(e) => {
+                log::error!(
+                    "Failed to read metadata block (offset={global_offset} len={length}): {e}"
+                );
+            }
+            Ok(data) => {
+                inner
+                    .tx
+                    .send_message((
+                        pwp::ExtendedMessage::MetadataBlock {
+                            piece: requested_piece,
+                            total_size: metadata_len,
+                            data,
+                        },
+                        id,
+                    ))
+                    .await?;
+                inner.sent_metadata_pieces.set(requested_piece, true);
+                return Ok(());
+            }
+        }
+    }
+    log::debug!("Rejecting metadata request from {remote_ip}: (piece={requested_piece})");
+    inner
+        .tx
+        .send_message((
+            pwp::ExtendedMessage::MetadataReject {
+                piece: requested_piece,
+            },
+            id,
+        ))
+        .await?;
+
     Ok(())
 }
