@@ -10,6 +10,7 @@ use std::task::{Context, Poll, Waker};
 use tokio::select;
 use tokio::sync::broadcast;
 
+/// Create a piece verifier and a handle for communicating with it.
 pub fn piece_verifier(
     handle: ctx::Handle<ctx::MainCtx>,
     storage: data::StorageClient,
@@ -36,6 +37,7 @@ pub fn piece_verifier(
     )
 }
 
+/// Cloneable handle for registering peers with the [`Verifier`] and subscribing to its progress.
 #[derive(Clone)]
 pub struct VerifierHandle {
     cmd_tx: local_unbounded::Sender<Command>,
@@ -43,6 +45,7 @@ pub struct VerifierHandle {
 }
 
 impl VerifierHandle {
+    /// Register a peer and return a channel for submitting indices of its downloaded pieces.
     pub fn register_peer(&self, peer_addr: SocketAddr) -> io::Result<local_bounded::Sender<usize>> {
         let (piece_tx, piece_rx) = local_bounded::channel(128);
         self.cmd_tx.send(Command::AddPeer {
@@ -58,12 +61,14 @@ impl VerifierHandle {
     }
 }
 
+/// Task that checks the hashes of downloaded pieces.
 pub struct Verifier {
     cmd_rx: local_unbounded::Receiver<Command>,
     data: Data,
 }
 
 impl Verifier {
+    /// Run the verifier until all handles are dropped.
     pub async fn run(self) {
         if let Err(e) = self.run_impl().await {
             log::error!("Piece verifier exited with error: {e}");
@@ -204,6 +209,7 @@ fn discard_pieces(ctx: &mut ctx::MainCtx, mut piece_rx: local_bounded::Receiver<
 
 #[cfg(test)]
 impl VerifierHandle {
+    /// Sender used to broadcast indices of verified pieces.
     pub fn progress_reporter(&self) -> &broadcast::Sender<usize> {
         &self.progress_reporter
     }
