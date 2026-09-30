@@ -77,3 +77,11 @@ This document describes how to verify code changes in the `mtorrent` workspace. 
 | 6    | prechecks | Run doctests           |
 | 7    | checks    | Run tests              |
 | 8    | checks    | Build release          |
+
+## Writing unit tests
+
+If a regression breaks a unit test, the test should fail loudly and immediately rather than hang until it times out. So wherever possible, avoid awaiting futures that may never complete:
+
+- Use non-blocking operations such as `try_send()`, `try_recv()`, or `stream.next().now_or_never()`.
+- To let spawned tasks make progress before checking results, call `tokio::task::yield_now().await` instead of awaiting a result.
+- To poll futures and streams step by step, use the `tokio-test` utilities `task::spawn`, `assert_pending!`, `assert_ready!`, and `assert_ready_eq!`.
