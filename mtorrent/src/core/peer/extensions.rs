@@ -38,7 +38,10 @@ pub async fn new_peer(
         tx,
         metadata_storage,
         remote_extensions: Default::default(),
-        sent_metadata_pieces: pwp::Bitfield::repeat(false, metadata_len),
+        sent_metadata_pieces: pwp::Bitfield::repeat(
+            false,
+            metadata_len.div_ceil(pwp::MAX_BLOCK_SIZE),
+        ),
         last_shared_peers: Default::default(),
         peer_reporter,
     });

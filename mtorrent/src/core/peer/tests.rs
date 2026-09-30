@@ -405,6 +405,66 @@ async fn test_keep_peer_connected_when_metadata_storage_fails() {
     assert!(result.is_err(), "peer disconnected: {result:?}");
 }
 
+#[tokio::test(start_paused = true, flavor = "local")]
+async fn test_reject_out_of_range_metadata_request() {
+    setup(true);
+    let metainfo_filepath =
+        "../mtorrent-cli/tests/assets/torrents_with_tracker/screenshots.torrent";
+    let metainfo_content = fs::read(metainfo_filepath).unwrap();
+    assert!(metainfo_content.len() <= MAX_BLOCK_SIZE, "metadata must fit in 1 piece");
+    let local_ip = SocketAddr::new([0, 0, 0, 0].into(), 6666);
+    let remote_ip = SocketAddr::new([0, 0, 0, 0].into(), 7777);
+
+    let remote_handshake = pwp::ExtendedHandshake {
+        extensions: [(pwp::Extension::Metadata, pwp::Extension::Metadata.local_id())].into(),
+        ..Default::default()
+    };
+
+    let socket = MockBuilder::new()
+        .write(&msgs![pwp::ExtendedMessage::Handshake(Box::new(
+            pwp::ExtendedHandshake {
+                extensions: super::ALL_SUPPORTED_EXTENSIONS
+                    .iter()
+                    .map(|e| (*e, e.local_id()))
+                    .collect(),
+                listen_port: Some(local_ip.port()),
+                client_type: Some(super::CLIENT_NAME.to_string()),
+                yourip: Some(remote_ip.ip()),
+                metadata_size: Some(metainfo_content.len()),
+                request_limit: Some(super::LOCAL_REQQ),
+                ..Default::default()
+            }
+        ))])
+        .write(b"\x00\x00\x00\x0A\x05\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x80") // bitfield
+        .read(&msgs![
+            pwp::ExtendedMessage::Handshake(Box::new(remote_handshake)),
+            pwp::ExtendedMessage::MetadataRequest { piece: 1 },
+        ])
+        .write(&msgs![pwp::ExtendedMessage::MetadataReject { piece: 1 }])
+        .read(&msgs![pwp::ExtendedMessage::MetadataRequest { piece: 1_000_000 }])
+        .write(&msgs![pwp::ExtendedMessage::MetadataReject { piece: 1_000_000 }])
+        .read(&msgs![pwp::ExtendedMessage::MetadataRequest { piece: 0 }])
+        .write(&msgs![pwp::ExtendedMessage::MetadataBlock {
+            piece: 0,
+            total_size: metainfo_content.len(),
+            data: metainfo_content.clone(),
+        }])
+        .wait(sec!(20))
+        .build();
+
+    let (_, future) = PeerBuilder::new()
+        .with_socket(socket)
+        .with_local_ip(local_ip)
+        .with_remote_ip(remote_ip)
+        .with_metainfo_file(metainfo_filepath)
+        .with_extensions()
+        .with_all_pieces()
+        .build_main();
+
+    let result = time::timeout(sec!(10), future).await;
+    assert!(result.is_err(), "peer disconnected: {result:?}");
+}
+
 const KEEPALIVE: &[u8] = &[0u8; 4];
 
 #[tokio::test(start_paused = true, flavor = "local")]
