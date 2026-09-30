@@ -41,3 +41,6 @@ pub mod task_scope;
 
 /// Wait for the next item from any stream in a keyed collection of streams.
 pub mod select_next;
+
+/// Get notified when futures complete or are dropped.
+pub mod task_watcher;

@@ -25,6 +25,7 @@ log = { workspace = true }
 rand = { workspace = true }
 igd-next = { version = "0.17", features = ["aio_tokio"] }
 socket2 = { workspace = true }
+pin-project-lite = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 libc = "0.2"
