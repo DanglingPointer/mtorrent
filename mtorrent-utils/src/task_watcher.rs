@@ -7,10 +7,10 @@ use tokio::sync::mpsc;
 
 /// Tracks a set of futures and reports when each of them exits, i.e. completes or is dropped.
 ///
-/// Every future wrapped via [`watch`](Self::watch) or [`watch_tagged`](Self::watch_tagged)
-/// reports its exit exactly once: either when it completes or when it is dropped before
-/// completion, whichever happens first. Note that when a future is dropped before completion,
-/// the exit is reported before the inner future itself is dropped.
+/// Every future wrapped via [`watch`](Self::watch) reports its exit exactly once: either when it
+/// completes or when it is dropped before completion, whichever happens first. Note that when a
+/// future is dropped before completion, the exit is reported before the inner future itself is
+/// dropped.
 ///
 /// Once all futures have been wrapped, call [`into_exits`](Self::into_exits) to get a stream
 /// of [`Exit`]s. The stream ends after every watched future has exited.
@@ -28,7 +28,7 @@ impl<T> TaskWatcher<T> {
     }
 
     /// Wrap `future` so that its exit is reported with `tag`.
-    pub fn watch_tagged<F: Future>(&self, tag: T, future: F) -> Watched<F, T> {
+    pub fn watch<F: Future>(&self, tag: T, future: F) -> Watched<F, T> {
         Watched {
             future,
             notifier: Some(Notifier {
@@ -36,14 +36,6 @@ impl<T> TaskWatcher<T> {
                 tag,
             }),
         }
-    }
-
-    /// Same as [`watch_tagged`](Self::watch_tagged) using `T::default()` as the tag.
-    pub fn watch<F: Future>(&self, future: F) -> Watched<F, T>
-    where
-        T: Default,
-    {
-        self.watch_tagged(T::default(), future)
     }
 
     /// Stop watching new futures and return a stream of exits of the watched futures.
@@ -114,7 +106,7 @@ impl<T> FusedStream for Exits<T> {
 }
 
 pin_project! {
-    /// Future returned by [`TaskWatcher::watch`] and [`TaskWatcher::watch_tagged`].
+    /// Future returned by [`TaskWatcher::watch`].
     #[derive(Debug)]
     pub struct Watched<F, T> {
         #[pin]
@@ -177,7 +169,7 @@ mod tests {
     #[test]
     fn test_pending_while_future_alive() {
         let watcher = TaskWatcher::new();
-        let watched = watcher.watch_tagged(1, pending::<()>());
+        let watched = watcher.watch(1, pending::<()>());
         let mut exits = task::spawn(watcher.into_exits());
         assert_pending!(exits.poll_next());
 
@@ -190,7 +182,7 @@ mod tests {
     #[test]
     fn test_reports_completion_before_drop() {
         let watcher = TaskWatcher::new();
-        let mut watched = task::spawn(watcher.watch_tagged(1, ready(42)));
+        let mut watched = task::spawn(watcher.watch(1, ready(42)));
         let mut exits = task::spawn(watcher.into_exits());
         assert_pending!(exits.poll_next());
 
@@ -205,7 +197,7 @@ mod tests {
     #[test]
     fn test_reports_drop_without_completion() {
         let watcher = TaskWatcher::new();
-        let watched = watcher.watch_tagged(7, pending::<()>());
+        let watched = watcher.watch(7, pending::<()>());
         drop(watched);
         let mut exits = task::spawn(watcher.into_exits());
         assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(7)));
@@ -215,9 +207,9 @@ mod tests {
     #[test]
     fn test_drains_all_exits_in_order() {
         let watcher = TaskWatcher::new();
-        let a = watcher.watch_tagged(1, pending::<()>());
-        let b = watcher.watch_tagged(2, pending::<()>());
-        let c = watcher.watch_tagged(3, pending::<()>());
+        let a = watcher.watch(1, pending::<()>());
+        let b = watcher.watch(2, pending::<()>());
+        let c = watcher.watch(3, pending::<()>());
         let mut exits = task::spawn(watcher.into_exits());
         drop(b);
         drop(c);
@@ -231,8 +223,8 @@ mod tests {
     #[test]
     fn test_is_terminated() {
         let watcher = TaskWatcher::new();
-        let a = watcher.watch_tagged(1, pending::<()>());
-        let b = watcher.watch_tagged(2, pending::<()>());
+        let a = watcher.watch(1, pending::<()>());
+        let b = watcher.watch(2, pending::<()>());
         let mut exits = task::spawn(watcher.into_exits());
         assert!(!exits.is_terminated());
 
@@ -257,19 +249,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_tag() {
-        let watcher = TaskWatcher::<u32>::default();
-        drop(watcher.watch(pending::<()>()));
-        let mut exits = task::spawn(watcher.into_exits());
-        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(0)));
-        assert_ready_eq!(exits.poll_next(), None);
-    }
-
-    #[test]
     fn test_waiting_stream_is_woken_on_completion() {
         let watcher = TaskWatcher::new();
         let (tx, rx) = oneshot::channel::<()>();
-        let mut watched = task::spawn(watcher.watch_tagged(5, rx));
+        let mut watched = task::spawn(watcher.watch(5, rx));
         let mut exits = task::spawn(watcher.into_exits());
 
         assert_pending!(exits.poll_next());
@@ -287,8 +270,8 @@ mod tests {
     #[test]
     fn test_reports_mixed_exits() {
         let watcher = TaskWatcher::new();
-        let mut completing = task::spawn(watcher.watch_tagged("completing", ready(())));
-        let dropped = watcher.watch_tagged("dropped", pending::<()>());
+        let mut completing = task::spawn(watcher.watch("completing", ready(())));
+        let dropped = watcher.watch("dropped", pending::<()>());
         let mut exits = task::spawn(watcher.into_exits());
 
         drop(dropped);
@@ -322,7 +305,7 @@ mod tests {
         let mut window_hits = 0;
         for _ in 0..ITERATIONS {
             let watcher = TaskWatcher::new();
-            let watched = watcher.watch_tagged(1, pending::<()>());
+            let watched = watcher.watch(1, pending::<()>());
             let mut exits = task::spawn(watcher.into_exits());
             let dropper = std::thread::spawn(move || drop(watched));
 
@@ -357,8 +340,7 @@ mod tests {
 
         for _ in 0..200 {
             let watcher = TaskWatcher::new();
-            let watched: Vec<_> =
-                (0..TASKS).map(|i| watcher.watch_tagged(i, pending::<()>())).collect();
+            let watched: Vec<_> = (0..TASKS).map(|i| watcher.watch(i, pending::<()>())).collect();
             let mut exits = watcher.into_exits();
             let threads: Vec<_> = watched
                 .into_iter()

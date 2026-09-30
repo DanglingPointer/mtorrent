@@ -1,4 +1,4 @@
-use super::{CriticalTaskTag, ctrl};
+use super::{CriticalTask, ctrl};
 use crate::app::main::{DownloadStrategy, Mode, Outcome};
 use crate::utils::disk;
 use crate::utils::listener::{
@@ -210,7 +210,7 @@ pub async fn supervise_metadata_download<L: StateListener>(
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
-    critical_task_exits: impl Stream<Item = Exit<CriticalTaskTag>> + Unpin,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
 ) -> io::Result<Option<impl IntoIterator<Item = SocketAddr> + 'static>> {
     define_with_ctx!(ctx_handle);
 
@@ -263,7 +263,7 @@ pub async fn supervise_content_download<L: StateListener>(
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
-    critical_task_exits: impl Stream<Item = Exit<CriticalTaskTag>> + Unpin,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
 ) -> io::Result<Outcome> {
     define_with_ctx!(ctx_handle);
 
@@ -323,7 +323,7 @@ pub async fn supervise_content_download<L: StateListener>(
 
 // ----------------------------------------------------------------------------
 
-fn premature_exit_error(exit: Exit<CriticalTaskTag>) -> io::Error {
+fn premature_exit_error(exit: Exit<CriticalTask>) -> io::Error {
     match exit {
         Exit::Completed(tag) => io::Error::other(format!("task {tag:?} completed prematurely")),
         Exit::Dropped(tag) => {
@@ -560,7 +560,7 @@ mod tests {
     }
 
     /// Stream that ends immediately and panics if polled again after that.
-    fn stream_panicking_after_end() -> impl Stream<Item = Exit<CriticalTaskTag>> + Unpin {
+    fn stream_panicking_after_end() -> impl Stream<Item = Exit<CriticalTask>> + Unpin {
         let mut ended = false;
         futures_util::stream::poll_fn(move |_cx| {
             assert!(!ended, "stream polled again after it ended");
@@ -583,7 +583,7 @@ mod tests {
                 NONEXISTENT_DIR,
                 &mut NoopListener,
                 cancel,
-                futures_util::stream::iter([Exit::Dropped(CriticalTaskTag::PieceVerifier)]),
+                futures_util::stream::iter([Exit::Dropped(CriticalTask::PieceVerifier)]),
             ),
         )
         .await
@@ -600,7 +600,7 @@ mod tests {
         let cancel = pin!(time::sleep(sec!(10)));
         let stopped = pin!(futures_util::stream::once(async {
             time::sleep(sec!(5)).await;
-            Exit::Completed(CriticalTaskTag::ConnectControl)
+            Exit::Completed(CriticalTask::ConnectControl)
         }));
         let result = supervise_content_download(
             main_ctx(),
@@ -638,7 +638,7 @@ mod tests {
                 NONEXISTENT_METAINFO,
                 &mut NoopListener,
                 cancel,
-                futures_util::stream::iter([Exit::Completed(CriticalTaskTag::ConnectControl)]),
+                futures_util::stream::iter([Exit::Completed(CriticalTask::ConnectControl)]),
             ),
         )
         .await

@@ -21,7 +21,7 @@ pub(crate) use verifier::*;
 
 /// Identifies a task whose exit before the end of a download stage is fatal for the download.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CriticalTaskTag {
+pub enum CriticalTask {
     ContentStorage,
     ConnectControl,
     PieceVerifier,

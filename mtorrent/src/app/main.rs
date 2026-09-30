@@ -326,9 +326,7 @@ async fn preliminary_stage(
             peer_reporter: peer_reporter.clone(),
             utp_handle: handles.utp.clone(),
         });
-    tasks.spawn_local(
-        tw.watch_tagged(core::CriticalTaskTag::ConnectControl, connect_throttle.run()),
-    );
+    tasks.spawn_local(tw.watch(core::CriticalTask::ConnectControl, connect_throttle.run()));
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
@@ -415,7 +413,7 @@ async fn main_stage(
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir)?;
     tasks_to_join.spawn_on(
-        tw.watch_tagged(core::CriticalTaskTag::ContentStorage, content_storage_server.run()),
+        tw.watch(core::CriticalTask::ContentStorage, content_storage_server.run()),
         handles.storage_runtime,
     );
 
@@ -441,8 +439,7 @@ async fn main_stage(
 
     let (verifier_handle, verifier) =
         core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
-    tasks_to_cancel
-        .spawn_local(tw.watch_tagged(core::CriticalTaskTag::PieceVerifier, verifier.run()));
+    tasks_to_cancel.spawn_local(tw.watch(core::CriticalTask::PieceVerifier, verifier.run()));
 
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {
@@ -454,9 +451,8 @@ async fn main_stage(
             verifier: verifier_handle,
             utp_handle: handles.utp.clone(),
         });
-    tasks_to_cancel.spawn_local(
-        tw.watch_tagged(core::CriticalTaskTag::ConnectControl, connect_throttle.run()),
-    );
+    tasks_to_cancel
+        .spawn_local(tw.watch(core::CriticalTask::ConnectControl, connect_throttle.run()));
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
