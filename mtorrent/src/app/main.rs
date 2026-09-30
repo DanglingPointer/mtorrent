@@ -382,7 +382,7 @@ async fn preliminary_stage(
         metainfo_filepath.clone(),
         listener,
         cancel,
-        tw.into_finished(),
+        tw.into_exits(),
     )
     .await;
     tasks.shutdown().await;
@@ -507,8 +507,7 @@ async fn main_stage(
     });
 
     let result =
-        core::supervise_content_download(ctx, content_dir, listener, cancel, tw.into_finished())
-            .await;
+        core::supervise_content_download(ctx, content_dir, listener, cancel, tw.into_exits()).await;
     tasks_to_cancel.shutdown().await;
     join_all_with_timeout!(tasks_to_join, sec!(3));
     result

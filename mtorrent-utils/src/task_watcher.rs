@@ -5,20 +5,19 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use tokio::sync::mpsc;
 
-/// Tracks a set of futures and reports when each of them completes or is dropped.
+/// Tracks a set of futures and reports when each of them exits, i.e. completes or is dropped.
 ///
 /// Every future wrapped via [`watch`](Self::watch) or [`watch_tagged`](Self::watch_tagged)
-/// sends its tag exactly once: either when it completes or when it is dropped, whichever
-/// happens first. Note that when a future is dropped before completion, the tag is sent
-/// before the inner future itself is dropped.
+/// reports its exit exactly once: either when it completes or when it is dropped before
+/// completion, whichever happens first. Note that when a future is dropped before completion,
+/// the exit is reported before the inner future itself is dropped.
 ///
-/// Once all futures have been wrapped, call [`into_finished`](Self::into_finished) to get a
-/// stream of tags of the finished futures. The stream ends after every watched future has
-/// finished.
+/// Once all futures have been wrapped, call [`into_exits`](Self::into_exits) to get a stream
+/// of [`Exit`]s. The stream ends after every watched future has exited.
 #[derive(Debug)]
 pub struct TaskWatcher<T> {
-    tx: mpsc::UnboundedSender<T>,
-    rx: mpsc::UnboundedReceiver<T>,
+    tx: mpsc::UnboundedSender<Exit<T>>,
+    rx: mpsc::UnboundedReceiver<Exit<T>>,
 }
 
 impl<T> TaskWatcher<T> {
@@ -28,7 +27,7 @@ impl<T> TaskWatcher<T> {
         Self { tx, rx }
     }
 
-    /// Wrap `future` so that `tag` is reported when it completes or is dropped.
+    /// Wrap `future` so that its exit is reported with `tag`.
     pub fn watch_tagged<F: Future>(&self, tag: T, future: F) -> Watched<F, T> {
         Watched {
             future,
@@ -47,10 +46,10 @@ impl<T> TaskWatcher<T> {
         self.watch_tagged(T::default(), future)
     }
 
-    /// Stop watching new futures and return a stream of tags of the watched futures as they
-    /// finish, i.e. complete or get dropped. The stream ends once all of them have finished.
-    pub fn into_finished(self) -> Finished<T> {
-        Finished { rx: self.rx }
+    /// Stop watching new futures and return a stream of exits of the watched futures.
+    /// The stream ends once all of them have exited.
+    pub fn into_exits(self) -> Exits<T> {
+        Exits { rx: self.rx }
     }
 }
 
@@ -60,24 +59,55 @@ impl<T> Default for TaskWatcher<T> {
     }
 }
 
-/// Stream of tags of finished watched futures, returned by [`TaskWatcher::into_finished`].
-///
-/// A watched future counts as finished when it either completes or is dropped. If it
-/// completes, its tag is reported immediately, even if the [`Watched`] future is dropped later.
-#[derive(Debug)]
-pub struct Finished<T> {
-    rx: mpsc::UnboundedReceiver<T>,
+/// How a watched future exited, together with its tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exit<T> {
+    /// The future ran to completion.
+    Completed(T),
+    /// The future was dropped before completion, e.g. because it was aborted or panicked.
+    Dropped(T),
 }
 
-impl<T> Stream for Finished<T> {
-    type Item = T;
+impl<T> Exit<T> {
+    /// Tag of the exited future.
+    pub fn tag(&self) -> &T {
+        match self {
+            Self::Completed(tag) | Self::Dropped(tag) => tag,
+        }
+    }
+
+    /// Consume the exit and return the tag of the exited future.
+    pub fn into_tag(self) -> T {
+        match self {
+            Self::Completed(tag) | Self::Dropped(tag) => tag,
+        }
+    }
+
+    /// Whether the future ran to completion.
+    pub fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed(_))
+    }
+}
+
+/// Stream of exits of watched futures, returned by [`TaskWatcher::into_exits`].
+///
+/// If a future completes, [`Exit::Completed`] is reported immediately, even if the [`Watched`]
+/// future is dropped later. [`Exit::Dropped`] is only reported for futures dropped before
+/// completion.
+#[derive(Debug)]
+pub struct Exits<T> {
+    rx: mpsc::UnboundedReceiver<Exit<T>>,
+}
+
+impl<T> Stream for Exits<T> {
+    type Item = Exit<T>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx)
     }
 }
 
-impl<T> FusedStream for Finished<T> {
+impl<T> FusedStream for Exits<T> {
     fn is_terminated(&self) -> bool {
         self.rx.is_closed() && self.rx.is_empty()
     }
@@ -96,7 +126,7 @@ pin_project! {
         fn drop(this: Pin<&mut Self>) {
             let this = this.project();
             if let Some(notifier) = this.notifier.take() {
-                notifier.fire();
+                notifier.fire(Exit::Dropped);
             }
         }
     }
@@ -112,7 +142,7 @@ where
         let this = self.project();
         let ret = ready!(this.future.poll(cx));
         if let Some(notifier) = this.notifier.take() {
-            notifier.fire();
+            notifier.fire(Exit::Completed);
         }
         Poll::Ready(ret)
     }
@@ -120,13 +150,13 @@ where
 
 #[derive(Debug)]
 struct Notifier<T> {
-    tx: mpsc::UnboundedSender<T>,
+    tx: mpsc::UnboundedSender<Exit<T>>,
     tag: T,
 }
 
 impl<T> Notifier<T> {
-    fn fire(self) {
-        _ = self.tx.send(self.tag);
+    fn fire(self, exit: fn(T) -> Exit<T>) {
+        _ = self.tx.send(exit(self.tag));
     }
 }
 
@@ -140,35 +170,35 @@ mod tests {
     #[test]
     fn test_no_watched_futures() {
         let watcher = TaskWatcher::<u32>::new();
-        let mut finished = task::spawn(watcher.into_finished());
-        assert_ready_eq!(finished.poll_next(), None);
+        let mut exits = task::spawn(watcher.into_exits());
+        assert_ready_eq!(exits.poll_next(), None);
     }
 
     #[test]
     fn test_pending_while_future_alive() {
         let watcher = TaskWatcher::new();
         let watched = watcher.watch_tagged(1, pending::<()>());
-        let mut finished = task::spawn(watcher.into_finished());
-        assert_pending!(finished.poll_next());
+        let mut exits = task::spawn(watcher.into_exits());
+        assert_pending!(exits.poll_next());
 
         drop(watched);
-        assert!(finished.is_woken());
-        assert_ready_eq!(finished.poll_next(), Some(1));
-        assert_ready_eq!(finished.poll_next(), None);
+        assert!(exits.is_woken());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(1)));
+        assert_ready_eq!(exits.poll_next(), None);
     }
 
     #[test]
     fn test_reports_completion_before_drop() {
         let watcher = TaskWatcher::new();
         let mut watched = task::spawn(watcher.watch_tagged(1, ready(42)));
-        let mut finished = task::spawn(watcher.into_finished());
-        assert_pending!(finished.poll_next());
+        let mut exits = task::spawn(watcher.into_exits());
+        assert_pending!(exits.poll_next());
 
         assert_ready_eq!(watched.poll(), 42);
-        assert!(finished.is_woken());
-        assert_ready_eq!(finished.poll_next(), Some(1));
+        assert!(exits.is_woken());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Completed(1)));
         // The sender is released on completion, so the stream ends without dropping `watched`.
-        assert_ready_eq!(finished.poll_next(), None);
+        assert_ready_eq!(exits.poll_next(), None);
         drop(watched);
     }
 
@@ -177,25 +207,25 @@ mod tests {
         let watcher = TaskWatcher::new();
         let watched = watcher.watch_tagged(7, pending::<()>());
         drop(watched);
-        let mut finished = task::spawn(watcher.into_finished());
-        assert_ready_eq!(finished.poll_next(), Some(7));
-        assert_ready_eq!(finished.poll_next(), None);
+        let mut exits = task::spawn(watcher.into_exits());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(7)));
+        assert_ready_eq!(exits.poll_next(), None);
     }
 
     #[test]
-    fn test_drains_all_tags_in_order() {
+    fn test_drains_all_exits_in_order() {
         let watcher = TaskWatcher::new();
         let a = watcher.watch_tagged(1, pending::<()>());
         let b = watcher.watch_tagged(2, pending::<()>());
         let c = watcher.watch_tagged(3, pending::<()>());
-        let mut finished = task::spawn(watcher.into_finished());
+        let mut exits = task::spawn(watcher.into_exits());
         drop(b);
         drop(c);
         drop(a);
         for expected in [2, 3, 1] {
-            assert_ready_eq!(finished.poll_next(), Some(expected));
+            assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(expected)));
         }
-        assert_ready_eq!(finished.poll_next(), None);
+        assert_ready_eq!(exits.poll_next(), None);
     }
 
     #[test]
@@ -203,36 +233,36 @@ mod tests {
         let watcher = TaskWatcher::new();
         let a = watcher.watch_tagged(1, pending::<()>());
         let b = watcher.watch_tagged(2, pending::<()>());
-        let mut finished = task::spawn(watcher.into_finished());
-        assert!(!finished.is_terminated());
+        let mut exits = task::spawn(watcher.into_exits());
+        assert!(!exits.is_terminated());
 
         drop(a);
-        assert!(!finished.is_terminated());
-        assert_ready_eq!(finished.poll_next(), Some(1));
-        assert!(!finished.is_terminated());
+        assert!(!exits.is_terminated());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(1)));
+        assert!(!exits.is_terminated());
 
-        // All senders are gone, but a tag is still queued.
+        // All senders are gone, but an exit is still queued.
         drop(b);
-        assert!(!finished.is_terminated());
-        assert_ready_eq!(finished.poll_next(), Some(2));
-        assert!(finished.is_terminated());
-        assert_ready_eq!(finished.poll_next(), None);
-        assert!(finished.is_terminated());
+        assert!(!exits.is_terminated());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(2)));
+        assert!(exits.is_terminated());
+        assert_ready_eq!(exits.poll_next(), None);
+        assert!(exits.is_terminated());
     }
 
     #[test]
     fn test_is_terminated_without_watched_futures() {
-        let finished = TaskWatcher::<u32>::new().into_finished();
-        assert!(finished.is_terminated());
+        let exits = TaskWatcher::<u32>::new().into_exits();
+        assert!(exits.is_terminated());
     }
 
     #[test]
     fn test_default_tag() {
         let watcher = TaskWatcher::<u32>::default();
         drop(watcher.watch(pending::<()>()));
-        let mut finished = task::spawn(watcher.into_finished());
-        assert_ready_eq!(finished.poll_next(), Some(0));
-        assert_ready_eq!(finished.poll_next(), None);
+        let mut exits = task::spawn(watcher.into_exits());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped(0)));
+        assert_ready_eq!(exits.poll_next(), None);
     }
 
     #[test]
@@ -240,24 +270,52 @@ mod tests {
         let watcher = TaskWatcher::new();
         let (tx, rx) = oneshot::channel::<()>();
         let mut watched = task::spawn(watcher.watch_tagged(5, rx));
-        let mut finished = task::spawn(watcher.into_finished());
+        let mut exits = task::spawn(watcher.into_exits());
 
-        assert_pending!(finished.poll_next());
+        assert_pending!(exits.poll_next());
         assert_pending!(watched.poll());
 
         tx.send(()).unwrap();
         assert!(watched.is_woken());
         assert_ready!(watched.poll()).unwrap();
-        assert!(finished.is_woken());
-        assert_ready_eq!(finished.poll_next(), Some(5));
-        assert_ready_eq!(finished.poll_next(), None);
+        assert!(exits.is_woken());
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Completed(5)));
+        assert_ready_eq!(exits.poll_next(), None);
         drop(watched);
+    }
+
+    #[test]
+    fn test_reports_mixed_exits() {
+        let watcher = TaskWatcher::new();
+        let mut completing = task::spawn(watcher.watch_tagged("completing", ready(())));
+        let dropped = watcher.watch_tagged("dropped", pending::<()>());
+        let mut exits = task::spawn(watcher.into_exits());
+
+        drop(dropped);
+        assert_ready!(completing.poll());
+        drop(completing);
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Dropped("dropped")));
+        assert_ready_eq!(exits.poll_next(), Some(Exit::Completed("completing")));
+        assert_ready_eq!(exits.poll_next(), None);
+    }
+
+    #[test]
+    fn test_exit_accessors() {
+        let completed = Exit::Completed(1);
+        assert!(completed.is_completed());
+        assert_eq!(completed.tag(), &1);
+        assert_eq!(completed.into_tag(), 1);
+
+        let dropped = Exit::Dropped(2);
+        assert!(!dropped.is_completed());
+        assert_eq!(dropped.tag(), &2);
+        assert_eq!(dropped.into_tag(), 2);
     }
 
     #[test]
     fn test_polled_between_send_and_sender_drop() {
         // Tries to hit the window where a watched future dropped on another thread has already
-        // sent its tag but not yet dropped its sender, while the stream yields the tag and is
+        // sent its exit but not yet dropped its sender, while the stream yields the exit and is
         // immediately polled again. That poll must be woken once the sender is dropped, instead
         // of staying pending forever.
         const ITERATIONS: usize = 10_000;
@@ -265,27 +323,27 @@ mod tests {
         for _ in 0..ITERATIONS {
             let watcher = TaskWatcher::new();
             let watched = watcher.watch_tagged(1, pending::<()>());
-            let mut finished = task::spawn(watcher.into_finished());
+            let mut exits = task::spawn(watcher.into_exits());
             let dropper = std::thread::spawn(move || drop(watched));
 
             loop {
-                match finished.poll_next() {
-                    Poll::Ready(tag) => {
-                        assert_eq!(tag, Some(1));
+                match exits.poll_next() {
+                    Poll::Ready(exit) => {
+                        assert_eq!(exit, Some(Exit::Dropped(1)));
                         break;
                     }
                     Poll::Pending => std::hint::spin_loop(),
                 }
             }
 
-            let first_poll = finished.poll_next();
+            let first_poll = exits.poll_next();
             dropper.join().unwrap();
             match first_poll {
-                Poll::Ready(tag) => assert_eq!(tag, None),
+                Poll::Ready(exit) => assert_eq!(exit, None),
                 Poll::Pending => {
                     window_hits += 1;
-                    assert!(finished.is_woken(), "stream not woken after the last sender dropped");
-                    assert_ready_eq!(finished.poll_next(), None);
+                    assert!(exits.is_woken(), "stream not woken after the last sender dropped");
+                    assert_ready_eq!(exits.poll_next(), None);
                 }
             }
         }
@@ -301,7 +359,7 @@ mod tests {
             let watcher = TaskWatcher::new();
             let watched: Vec<_> =
                 (0..TASKS).map(|i| watcher.watch_tagged(i, pending::<()>())).collect();
-            let mut finished = watcher.into_finished();
+            let mut exits = watcher.into_exits();
             let threads: Vec<_> = watched
                 .into_iter()
                 .map(|watched| std::thread::spawn(move || drop(watched)))
@@ -309,8 +367,9 @@ mod tests {
             let received: Vec<_> = rt.block_on(async {
                 use futures_util::StreamExt;
                 let mut received = Vec::with_capacity(TASKS);
-                while let Some(tag) = finished.next().await {
-                    received.push(tag);
+                while let Some(exit) = exits.next().await {
+                    assert!(!exit.is_completed());
+                    received.push(exit.into_tag());
                 }
                 received
             });

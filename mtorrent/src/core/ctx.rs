@@ -9,6 +9,7 @@ use futures_util::{Stream, StreamExt};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_watcher::Exit;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -209,7 +210,7 @@ pub async fn supervise_metadata_download<L: StateListener>(
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
-    stopped_critical_tasks: impl Stream<Item = CriticalTaskTag> + Unpin,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTaskTag>> + Unpin,
 ) -> io::Result<Option<impl IntoIterator<Item = SocketAddr> + 'static>> {
     define_with_ctx!(ctx_handle);
 
@@ -225,8 +226,8 @@ pub async fn supervise_metadata_download<L: StateListener>(
         }
     }
 
-    let mut stopped_critical_tasks = stopped_critical_tasks.fuse();
-    let mut next_prematurely_stopped = stopped_critical_tasks.next();
+    let mut critical_task_exits = critical_task_exits.fuse();
+    let mut next_premature_exit = critical_task_exits.next();
 
     let mut snapshot_reporter =
         pin!(submit_snapshots_periodically(&ctx_handle, state_listener, preliminary_snapshot));
@@ -250,8 +251,8 @@ pub async fn supervise_metadata_download<L: StateListener>(
                 ));
                 return Ok(None);
             }
-            Some(task_tag) = &mut next_prematurely_stopped => {
-                return Err(io::Error::other(format!("task {task_tag:?} exited prematurely")));
+            Some(exit) = &mut next_premature_exit => {
+                return Err(premature_exit_error(exit));
             }
         }
     }
@@ -262,7 +263,7 @@ pub async fn supervise_content_download<L: StateListener>(
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
-    stopped_critical_tasks: impl Stream<Item = CriticalTaskTag> + Unpin,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTaskTag>> + Unpin,
 ) -> io::Result<Outcome> {
     define_with_ctx!(ctx_handle);
 
@@ -285,8 +286,8 @@ pub async fn supervise_content_download<L: StateListener>(
         });
     }
 
-    let mut stopped_critical_tasks = stopped_critical_tasks.fuse();
-    let mut next_prematurely_stopped = stopped_critical_tasks.next();
+    let mut critical_task_exits = critical_task_exits.fuse();
+    let mut next_premature_exit = critical_task_exits.next();
 
     let mut progress_persister = pin!(persist_progress_periodically(&ctx_handle, progress_file));
 
@@ -312,8 +313,8 @@ pub async fn supervise_content_download<L: StateListener>(
                 ));
                 return Ok(Outcome::Cancelled);
             }
-            Some(task_tag) = &mut next_prematurely_stopped => {
-                return Err(io::Error::other(format!("task {task_tag:?} exited prematurely")));
+            Some(exit) = &mut next_premature_exit => {
+                return Err(premature_exit_error(exit));
             }
             _ = &mut progress_persister => unreachable!(),
         }
@@ -321,6 +322,15 @@ pub async fn supervise_content_download<L: StateListener>(
 }
 
 // ----------------------------------------------------------------------------
+
+fn premature_exit_error(exit: Exit<CriticalTaskTag>) -> io::Error {
+    match exit {
+        Exit::Completed(tag) => io::Error::other(format!("task {tag:?} completed prematurely")),
+        Exit::Dropped(tag) => {
+            io::Error::other(format!("task {tag:?} was dropped prematurely (panicked or aborted)"))
+        }
+    }
+}
 
 #[derive(Deref, DerefMut)]
 struct CallOnDrop<F: FnMut()>(
@@ -550,7 +560,7 @@ mod tests {
     }
 
     /// Stream that ends immediately and panics if polled again after that.
-    fn stream_panicking_after_end() -> impl Stream<Item = CriticalTaskTag> + Unpin {
+    fn stream_panicking_after_end() -> impl Stream<Item = Exit<CriticalTaskTag>> + Unpin {
         let mut ended = false;
         futures_util::stream::poll_fn(move |_cx| {
             assert!(!ended, "stream polled again after it ended");
@@ -573,13 +583,16 @@ mod tests {
                 NONEXISTENT_DIR,
                 &mut NoopListener,
                 cancel,
-                futures_util::stream::iter([CriticalTaskTag::PieceVerifier]),
+                futures_util::stream::iter([Exit::Dropped(CriticalTaskTag::PieceVerifier)]),
             ),
         )
         .await
         .expect("supervisor did not react to stopped critical task");
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("PieceVerifier"), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "task PieceVerifier was dropped prematurely (panicked or aborted)"
+        );
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -587,7 +600,7 @@ mod tests {
         let cancel = pin!(time::sleep(sec!(10)));
         let stopped = pin!(futures_util::stream::once(async {
             time::sleep(sec!(5)).await;
-            CriticalTaskTag::ConnectControl
+            Exit::Completed(CriticalTaskTag::ConnectControl)
         }));
         let result = supervise_content_download(
             main_ctx(),
@@ -598,7 +611,7 @@ mod tests {
         )
         .await;
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("ConnectControl"), "{error}");
+        assert_eq!(error.to_string(), "task ConnectControl completed prematurely");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -625,13 +638,13 @@ mod tests {
                 NONEXISTENT_METAINFO,
                 &mut NoopListener,
                 cancel,
-                futures_util::stream::iter([CriticalTaskTag::ConnectControl]),
+                futures_util::stream::iter([Exit::Completed(CriticalTaskTag::ConnectControl)]),
             ),
         )
         .await
         .expect("supervisor did not react to stopped critical task");
         let error = result.err().unwrap();
-        assert!(error.to_string().contains("ConnectControl"), "{error}");
+        assert_eq!(error.to_string(), "task ConnectControl completed prematurely");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
