@@ -5,6 +5,7 @@ mod connections;
 mod ctrl;
 mod peer;
 mod search;
+mod selection;
 mod verifier;
 
 pub(crate) use announces::{make_periodic_announces, make_preliminary_announces};
@@ -18,6 +19,7 @@ pub(crate) use peer::{
     MainConnectionData, PreliminaryConnectionData, UtpActor, UtpHandle, init_utp, run_pwp_listener,
 };
 pub(crate) use search::run_dht_search;
+pub(crate) use selection::*;
 pub(crate) use verifier::*;
 
 /// Identifies a task whose exit before the end of a download stage is fatal for the download.

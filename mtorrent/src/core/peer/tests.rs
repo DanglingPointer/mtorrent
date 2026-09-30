@@ -121,7 +121,7 @@ async fn run_listening_seeder(
 ) -> io::Result<()> {
     let metainfo = startup::read_metainfo(metainfo_path).unwrap();
     let (content_storage, content_storage_server) =
-        startup::create_content_storage(&metainfo, files_dir).unwrap();
+        startup::create_content_storage(&metainfo, files_dir, &[]).unwrap();
     let (meta_storage, meta_storage_server) =
         startup::create_metainfo_storage(metainfo_path).unwrap();
     runtime::Handle::current().spawn(async move {

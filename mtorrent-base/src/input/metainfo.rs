@@ -130,7 +130,7 @@ impl Metainfo {
         }
     }
 
-    /// Total size of the metainfo in bytes.
+    /// Total size of the metainfo file in bytes.
     pub fn size(&self) -> usize {
         self.size
     }

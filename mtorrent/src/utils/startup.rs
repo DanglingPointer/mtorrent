@@ -1,3 +1,4 @@
+use crate::app::main::Mode;
 use mtorrent_base::{data, input};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -9,26 +10,60 @@ pub(crate) fn read_metainfo<P: AsRef<Path>>(metainfo_filepath: P) -> io::Result<
     Ok(metainfo)
 }
 
+/// Remove from `excluded_files` all indices that can't be excluded: indices out of range, any
+/// indices if the torrent has a single file, and any indices if `mode` is not [`Mode::Leech`].
+/// Remaining indices are sorted and deduplicated.
+pub(crate) fn sanitize_excluded_files(
+    excluded_files: &mut Vec<usize>,
+    metainfo: &input::Metainfo,
+    mode: Mode,
+) {
+    if excluded_files.is_empty() {
+        return;
+    }
+    if !matches!(mode, Mode::Leech) {
+        log::warn!("Ignoring all excluded files: file exclusion is only supported in leech mode");
+        excluded_files.clear();
+        return;
+    }
+    let Some(files) = metainfo.files() else {
+        log::warn!("Ignoring all excluded files: torrent has a single file");
+        excluded_files.clear();
+        return;
+    };
+    let file_count = files.count();
+
+    excluded_files.sort_unstable();
+    excluded_files.dedup();
+    excluded_files.retain(|&index| {
+        let valid = index < file_count;
+        if !valid {
+            log::warn!("Ignoring invalid file index {index}: torrent has {file_count} files");
+        }
+        valid
+    });
+}
+
 #[doc(hidden)]
 pub fn create_content_storage(
     metainfo: &input::Metainfo,
     content_parent_dir: impl AsRef<Path>,
+    excluded_files: &[usize],
 ) -> io::Result<(data::StorageClient, data::StorageServer)> {
-    let total_size = metainfo
-        .length()
-        .or_else(|| metainfo.files().map(|it| it.map(|(len, _path)| len).sum()))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no total length in metainfo"))?;
-
     if let Some(files) = metainfo.files() {
-        Ok(data::new_async_storage(content_parent_dir, files)?)
+        Ok(data::new_async_storage(content_parent_dir, files, excluded_files)?)
     } else {
+        let length = metainfo.length().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "no total length in metainfo")
+        })?;
         let name = match metainfo.name() {
             Some(s) => s.to_string(),
             None => String::from_utf8_lossy(metainfo.info_hash()).to_string(),
         };
         Ok(data::new_async_storage(
             content_parent_dir,
-            iter::once((total_size, PathBuf::from(name))),
+            iter::once((length, PathBuf::from(name))),
+            &[],
         )?)
     }
 }
@@ -44,7 +79,11 @@ pub fn create_metainfo_storage(
     let filename = metainfo_path.as_ref().file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "metainfo file has no filename")
     })?;
-    Ok(data::new_async_storage(parent, iter::once((metainfo_filelen, PathBuf::from(filename))))?)
+    Ok(data::new_async_storage(
+        parent,
+        iter::once((metainfo_filelen, PathBuf::from(filename))),
+        &[],
+    )?)
 }
 
 /// Name of the torrent being downloaded. If `uri` is a magnet link, the name field
@@ -85,7 +124,7 @@ mod tests {
 
         let parent_dir = "test_read_metainfo_and_spawn_files_output";
         let filedir = Path::new(parent_dir).join("files");
-        let storage = create_content_storage(&info, &filedir).unwrap();
+        let storage = create_content_storage(&info, &filedir, &[]).unwrap();
 
         assert_eq!(info.files().unwrap().count(), count_files(parent_dir).unwrap());
 
@@ -113,7 +152,7 @@ mod tests {
 
         let parent_dir = "test_read_metainfo_and_spawn_single_file_output";
         let filedir = Path::new(parent_dir).join("files");
-        let storage = create_content_storage(&info, &filedir).unwrap();
+        let storage = create_content_storage(&info, &filedir, &[]).unwrap();
 
         assert_eq!(1, count_files(parent_dir).unwrap());
 
@@ -140,5 +179,38 @@ mod tests {
 
         let uri = "../mtorrent-cli/tests/assets/screenshots_bad_tracker.torrent";
         assert_eq!(get_torrent_name(uri), Some("screenshots_bad_tracker".to_owned()));
+    }
+
+    #[rstest::rstest]
+    #[case::empty(Mode::Leech, vec![], vec![])]
+    #[case::all_valid(Mode::Leech, vec![2, 0], vec![0, 2])]
+    #[case::duplicates(Mode::Leech, vec![1, 0, 1, 0], vec![0, 1])]
+    #[case::some_invalid(Mode::Leech, vec![1000, 1, 2000], vec![1])]
+    #[case::all_invalid(Mode::Leech, vec![1000, 2000], vec![])]
+    #[case::seeder(Mode::Seeder, vec![0, 1], vec![])]
+    fn test_sanitize_excluded_files_for_multi_file_torrent(
+        #[case] mode: Mode,
+        #[case] mut excluded_files: Vec<usize>,
+        #[case] expected: Vec<usize>,
+    ) {
+        let info =
+            input::Metainfo::from_file("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        assert!(info.files().unwrap().count() > 2);
+        assert!(info.files().unwrap().count() < 1000);
+
+        sanitize_excluded_files(&mut excluded_files, &info, mode);
+        assert_eq!(excluded_files, expected);
+    }
+
+    #[test]
+    fn test_sanitize_excluded_files_for_single_file_torrent() {
+        let info = input::Metainfo::from_file(
+            "../mtorrent-cli/tests/assets/torrents_with_tracker/pcap.torrent",
+        )
+        .unwrap();
+
+        let mut excluded_files = vec![0];
+        sanitize_excluded_files(&mut excluded_files, &info, Mode::Leech);
+        assert!(excluded_files.is_empty(), "{excluded_files:?}");
     }
 }
