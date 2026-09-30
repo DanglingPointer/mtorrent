@@ -80,6 +80,7 @@ impl EgressProcessor {
         macro_rules! send_data_if_ready {
             () => {{
                 if send_buffer.get_ref().len() > Header::MIN_SIZE && tx_allowed!() {
+                    self.ack_required_notifier.wait_for_one().now_or_never();
                     let buf =
                         mem::replace(&mut send_buffer, init_send_buf(retransmitter.packet_size()));
                     let header = with!(|state| state.generate_header(TypeVer::Data));
@@ -90,8 +91,6 @@ impl EgressProcessor {
                         log::trace!("TX-{peer_addr}: {header:?}");
                     }
                     retransmitter.add_new_packet(packet, header.seq_nr);
-                    // clear pending ack notification if any
-                    self.ack_received_notifier.wait_and_get().now_or_never();
                 }
             }};
         }
@@ -735,5 +734,159 @@ mod tests {
         assert!(connect_result.is_err(), "handshake should still be in progress");
         // sent at 0s, 3s, 6s and 9s
         assert_eq!(sent_count, 4);
+    }
+
+    const REMOTE_SEQ: Seq = seq(200);
+
+    /// Connection that has completed an outbound handshake and is running.
+    struct Established {
+        egress_rx: local_bounded::Receiver<Bytes>,
+        ingress_tx: local_bounded::Sender<Bytes>,
+        remote_pipe: local_pipe::DuplexEnd,
+        conn_id: u16,
+        _canceller: local_condvar::Sender,
+    }
+
+    impl Established {
+        async fn new(egress_capacity: usize) -> Self {
+            let (egress_tx, mut egress_rx) = local_bounded::channel(egress_capacity);
+            let (mut ingress_tx, ingress_rx) = local_bounded::channel(8);
+            let (pipe, remote_pipe) = local_pipe::duplex_pipe(1024);
+
+            let connect_task = task::spawn_local(async move {
+                let hasher_factory = RandomState::new();
+                Connection::outbound(PEER_ADDR, pipe, ingress_rx, egress_tx, &hasher_factory).await
+            });
+            task::yield_now().await;
+            let mut syn = egress_rx.next().now_or_never().expect("SYN not sent").unwrap();
+            let syn = Header::decode_from(&mut syn).unwrap();
+
+            // remote's first DATA packet will have REMOTE_SEQ
+            let state = packet(TypeVer::State, syn.connection_id, REMOTE_SEQ, syn.seq_nr, &[]);
+            ingress_tx.try_send(state).unwrap();
+            task::yield_now().await;
+            let connection =
+                connect_task.now_or_never().expect("handshake not finished").unwrap().unwrap();
+
+            let (canceller, cancel_receiver) = local_condvar::condvar();
+            task::spawn_local(connection.run(cancel_receiver));
+            task::yield_now().await;
+
+            Self {
+                egress_rx,
+                ingress_tx,
+                remote_pipe,
+                conn_id: syn.connection_id,
+                _canceller: canceller,
+            }
+        }
+
+        fn write_local_data(&mut self, data: &[u8]) {
+            write_and_flush(&mut self.remote_pipe, &mut &data[..])
+                .now_or_never()
+                .expect("pipe full")
+                .unwrap();
+        }
+
+        fn receive_remote_packet(&mut self, type_ver: TypeVer, seq_nr: Seq, ack_nr: Seq) {
+            let data: &[u8] = if type_ver == TypeVer::Data {
+                b"remote"
+            } else {
+                &[]
+            };
+            let packet = packet(type_ver, self.conn_id, seq_nr, ack_nr, data);
+            self.ingress_tx.try_send(packet).unwrap();
+        }
+
+        async fn sent_headers(&mut self) -> Vec<Header> {
+            let mut headers = Vec::new();
+            loop {
+                task::yield_now().await;
+                match self.egress_rx.next().now_or_never() {
+                    Some(Some(mut packet)) => {
+                        headers.push(Header::decode_from(&mut packet).unwrap());
+                    }
+                    _ => return headers,
+                }
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_data_packet_acks_received_data_instead_of_separate_state() {
+        let mut conn = Established::new(1).await;
+
+        // first packet fills the egress channel
+        conn.write_local_data(b"local1");
+        task::yield_now().await;
+        // second packet is blocked on send
+        conn.write_local_data(b"local2");
+        task::yield_now().await;
+        // while blocked, remote data arrives which requires an ack, and more local data is written
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        task::yield_now().await;
+        conn.write_local_data(b"local3");
+
+        // the third packet carries the ack, so no separate STATE is sent
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(
+            summary,
+            [
+                (TypeVer::Data, REMOTE_SEQ - seq(1)),
+                (TypeVer::Data, REMOTE_SEQ - seq(1)),
+                (TypeVer::Data, REMOTE_SEQ),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_data_received_during_blocked_send_is_acked() {
+        let mut conn = Established::new(1).await;
+
+        // first packet fills the egress channel
+        conn.write_local_data(b"local1");
+        task::yield_now().await;
+        // second packet is blocked on send
+        conn.write_local_data(b"local2");
+        task::yield_now().await;
+        // remote data arrives while blocked
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        task::yield_now().await;
+
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(
+            summary,
+            [
+                (TypeVer::Data, REMOTE_SEQ - seq(1)),
+                (TypeVer::Data, REMOTE_SEQ - seq(1)),
+                (TypeVer::State, REMOTE_SEQ),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_ack_received_during_blocked_send_is_processed() {
+        let mut conn = Established::new(1).await;
+
+        // first packet fills the egress channel
+        conn.write_local_data(b"local1");
+        task::yield_now().await;
+        // second packet is blocked on send
+        conn.write_local_data(b"local2");
+        task::yield_now().await;
+        // remote acks both packets while blocked
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(2));
+        task::yield_now().await;
+
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| (h.type_ver, h.seq_nr)).collect();
+        assert_eq!(sent_seqs, [(TypeVer::Data, seq(1)), (TypeVer::Data, seq(2))]);
+
+        // acked packets must not be retransmitted
+        time::sleep(sec!(10)).await;
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
     }
 }

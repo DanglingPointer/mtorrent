@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 pub(super) enum Command {
-    AddConnection((SocketAddr, ConnectionHandle)),
+    AddConnection(SocketAddr, ConnectionHandle),
     ResetConnections,
 }
 
@@ -118,7 +118,7 @@ impl IoDriver {
         }
 
         match ready!(self.commands.poll_recv(cx)) {
-            Some(Command::AddConnection((peer_addr, connection))) => {
+            Some(Command::AddConnection(peer_addr, connection)) => {
                 match self.connections.entry(peer_addr) {
                     Entry::Occupied(mut entry) => {
                         if entry.get().ingress.is_closed() || entry.get().egress.is_closed() {
@@ -167,6 +167,12 @@ impl IoDriver {
                             packet.len()
                         );
                         self.connections.remove(remote_addr);
+                    }
+                    Err(e) if is_transient_error(&e.kind()) => {
+                        // The error may have been caused by an earlier packet sent to a different
+                        // peer (e.g. ICMP port unreachable), so don't blame this connection.
+                        log::warn!("Send failed to {remote_addr}, dropping packet: {e}");
+                        self.dropped_packets += 1;
                     }
                     Err(e) => {
                         // `e` is guaranteed to never be WouldBlock here
@@ -302,10 +308,10 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer1_addr, handle1))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer1_addr, handle1)).await.unwrap();
 
         let (mut conn2, handle2) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer2_addr, handle2))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer2_addr, handle2)).await.unwrap();
 
         let msg1 = Bytes::from("Hello, Peer 1!");
         conn1.egress.send(msg1.clone()).await.unwrap();
@@ -361,10 +367,10 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer1_addr, handle1))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer1_addr, handle1)).await.unwrap();
 
         let (mut conn2, handle2) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer2_addr, handle2))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer2_addr, handle2)).await.unwrap();
 
         let msg1 = Bytes::from("Hello from Peer 1!");
         peer1_socket.send_to(&msg1, driver_addr).await.unwrap();
@@ -415,13 +421,13 @@ mod tests {
 
         let (mut conn1, handle1) = new_connection();
         cmd_tx
-            .send(Command::AddConnection(((Ipv4Addr::LOCALHOST, 12345u16).into(), handle1)))
+            .send(Command::AddConnection((Ipv4Addr::LOCALHOST, 12345u16).into(), handle1))
             .await
             .unwrap();
 
         let (mut conn2, handle2) = new_connection();
         cmd_tx
-            .send(Command::AddConnection(((Ipv4Addr::LOCALHOST, 23456u16).into(), handle2)))
+            .send(Command::AddConnection((Ipv4Addr::LOCALHOST, 23456u16).into(), handle2))
             .await
             .unwrap();
 
@@ -439,7 +445,7 @@ mod tests {
         let peer_addr = peer_socket.local_addr().unwrap();
 
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
         task::yield_now().await;
 
         // verify the connection hasn't been added yet
@@ -481,7 +487,7 @@ mod tests {
         cmd_tx.send(Command::ResetConnections).await.unwrap();
 
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         let msg = Bytes::from("Hello after initial reset!");
         conn.egress.send(msg.clone()).await.unwrap();
@@ -512,7 +518,7 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         // Close the connection
         drop(conn.ingress);
@@ -541,7 +547,7 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         let msg = Bytes::from("Hello to unreachable peer!");
         conn.egress.send(msg.clone()).await.unwrap();
@@ -567,7 +573,7 @@ mod tests {
 
         {
             let (mut conn, handle) = new_connection();
-            cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+            cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
             let msg = Bytes::from("Hello to unreachable peer!");
             conn.egress.send(msg.clone()).await.unwrap();
@@ -579,7 +585,7 @@ mod tests {
 
         {
             let (mut conn, handle) = new_connection();
-            cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+            cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
             let msg = Bytes::from("Retry hello to unreachable peer!");
             conn.egress.send(msg.clone()).await.unwrap();
@@ -617,7 +623,7 @@ mod tests {
         assert_eq!(reported_msg, long_msg);
 
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         conn.egress.send(long_msg.clone()).await.unwrap();
         let mut buf = vec![0u8; packet_size];
@@ -649,7 +655,7 @@ mod tests {
 
         // add a connection
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         // sending a message succeeds
         conn.egress.send(Bytes::from("hello")).await.unwrap();
@@ -695,7 +701,7 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (mut conn, handle) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle)).await.unwrap();
 
         // Fill the ingress channel
         let packets: Vec<_> = (0..=INGRESS_CHANNEL_CAPACITY)
@@ -735,10 +741,10 @@ mod tests {
         let peer_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 12345u16).into();
 
         let (mut conn1, handle1) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle1))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle1)).await.unwrap();
 
         let (mut conn2, handle2) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle2))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle2)).await.unwrap();
 
         task::yield_now().await;
 
@@ -761,12 +767,12 @@ mod tests {
         task::spawn_local(driver.run());
 
         let (mut conn1, handle1) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle1))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle1)).await.unwrap();
 
         drop(conn1.ingress);
 
         let (mut conn2, handle2) = new_connection();
-        cmd_tx.send(Command::AddConnection((peer_addr, handle2))).await.unwrap();
+        cmd_tx.send(Command::AddConnection(peer_addr, handle2)).await.unwrap();
 
         let msg1 = Bytes::from("Hello from new connection 1");
         conn1.egress.send(msg1.clone()).await.unwrap();

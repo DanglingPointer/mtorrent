@@ -89,7 +89,7 @@ impl EndpointHandle {
         let (ingress_sender, ingress_receiver) = local_bounded::channel(Self::INGRESS_QUEUE);
         let handle = udp::ConnectionHandle::new(egress_receiver, ingress_sender);
         self.cmds
-            .send(udp::Command::AddConnection((remote_addr, handle)))
+            .send(udp::Command::AddConnection(remote_addr, handle))
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
 
@@ -135,7 +135,7 @@ impl EndpointHandle {
         let (ingress_sender, ingress_receiver) = local_bounded::channel(Self::INGRESS_QUEUE);
         let handle = udp::ConnectionHandle::new(egress_receiver, ingress_sender);
         self.cmds
-            .send(udp::Command::AddConnection((remote_addr, handle)))
+            .send(udp::Command::AddConnection(remote_addr, handle))
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
 
