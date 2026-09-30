@@ -4,6 +4,7 @@ use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_watcher::TaskWatcher;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::future::Future;
@@ -314,6 +315,8 @@ async fn preliminary_stage(
         params.bind_interface.clone(),
     );
 
+    let tw = TaskWatcher::new();
+
     let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
@@ -323,7 +326,7 @@ async fn preliminary_stage(
             peer_reporter: peer_reporter.clone(),
             utp_handle: handles.utp.clone(),
         });
-    tasks.spawn_local(connect_throttle.run());
+    tasks.spawn_local(tw.watch(core::CriticalTask::ConnectControl, connect_throttle.run()));
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
@@ -372,8 +375,14 @@ async fn preliminary_stage(
         }
     });
 
-    let result =
-        core::supervise_metadata_download(ctx, metainfo_filepath.clone(), listener, cancel).await;
+    let result = core::supervise_metadata_download(
+        ctx,
+        metainfo_filepath.clone(),
+        listener,
+        cancel,
+        tw.into_exits(),
+    )
+    .await;
     tasks.shutdown().await;
     Ok(result?.map(|peers| (metainfo_filepath, peers)))
 }
@@ -397,13 +406,20 @@ async fn main_stage(
         .as_ref()
         .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());
 
+    let tw = TaskWatcher::new();
+
+    let mut tasks_to_join = task::JoinSet::new();
+
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir)?;
-    handles.storage_runtime.spawn(content_storage_server.run());
+    tasks_to_join.spawn_on(
+        tw.watch(core::CriticalTask::ContentStorage, content_storage_server.run()),
+        handles.storage_runtime,
+    );
 
     let (metainfo_storage, metainfo_storage_server) =
         startup::create_metainfo_storage(&metainfo_filepath)?;
-    handles.storage_runtime.spawn(metainfo_storage_server.run());
+    tasks_to_join.spawn_on(metainfo_storage_server.run(), handles.storage_runtime);
 
     let info_hash: [u8; 20] = *metainfo.info_hash();
 
@@ -419,11 +435,11 @@ async fn main_stage(
         params.mode,
     )?;
 
-    let mut tasks = task::JoinSet::new();
+    let mut tasks_to_cancel = task::JoinSet::new();
 
     let (verifier_handle, verifier) =
         core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
-    tasks.spawn_local(verifier.run());
+    tasks_to_cancel.spawn_local(tw.watch(core::CriticalTask::PieceVerifier, verifier.run()));
 
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {
@@ -435,7 +451,8 @@ async fn main_stage(
             verifier: verifier_handle,
             utp_handle: handles.utp.clone(),
         });
-    tasks.spawn_local(connect_throttle.run());
+    tasks_to_cancel
+        .spawn_local(tw.watch(core::CriticalTask::ConnectControl, connect_throttle.run()));
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
@@ -445,7 +462,7 @@ async fn main_stage(
     }
 
     handles.dht.map(|dht_cmds| {
-        tasks.spawn_local(core::run_dht_search(
+        tasks_to_cancel.spawn_local(core::run_dht_search(
             info_hash,
             dht_cmds.clone(),
             peer_reporter.clone(),
@@ -453,7 +470,7 @@ async fn main_stage(
         ))
     });
 
-    tasks.spawn_on(
+    tasks_to_cancel.spawn_on(
         core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v4.into(), params.internal_pwp_port),
             params.bind_interface.clone(),
@@ -462,7 +479,7 @@ async fn main_stage(
         handles.pwp_runtime,
     );
 
-    tasks.spawn_on(
+    tasks_to_cancel.spawn_on(
         core::run_pwp_listener(
             SocketAddr::new(params.local_ip_v6.into(), params.internal_pwp_port),
             params.bind_interface,
@@ -471,7 +488,7 @@ async fn main_stage(
         handles.pwp_runtime,
     );
 
-    tasks.spawn_local(core::make_periodic_announces(
+    tasks_to_cancel.spawn_local(core::make_periodic_announces(
         ctx.clone(),
         handles.trackers,
         peer_reporter.clone(),
@@ -479,15 +496,17 @@ async fn main_stage(
     ));
 
     let extra_peers: Vec<_> = extra_peers.into_iter().collect();
-    tasks.spawn_local(async move {
+    tasks_to_cancel.spawn_local(async move {
         for peer_addr in extra_peers {
             peer_reporter.report_discovered(peer_addr, pwp::PeerOrigin::Other).await;
         }
     });
 
-    let outcome = core::supervise_content_download(ctx, content_dir, listener, cancel).await;
-    tasks.shutdown().await;
-    Ok(outcome)
+    let result =
+        core::supervise_content_download(ctx, content_dir, listener, cancel, tw.into_exits()).await;
+    tasks_to_cancel.shutdown().await;
+    join_all_with_timeout!(tasks_to_join, sec!(3));
+    result
 }
 
 #[cfg(test)]

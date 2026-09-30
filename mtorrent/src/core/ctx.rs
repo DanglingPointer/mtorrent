@@ -1,13 +1,15 @@
-use super::ctrl;
+use super::{CriticalTask, ctrl};
 use crate::app::main::{DownloadStrategy, Mode, Outcome};
 use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
 };
 use derive_more::{Deref, DerefMut};
+use futures_util::{Stream, StreamExt};
 use local_async_utils::prelude::*;
 use mtorrent_base::{data, input, pwp};
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_watcher::Exit;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -208,6 +210,7 @@ pub async fn supervise_metadata_download<L: StateListener>(
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
 ) -> io::Result<Option<impl IntoIterator<Item = SocketAddr> + 'static>> {
     define_with_ctx!(ctx_handle);
 
@@ -222,6 +225,9 @@ pub async fn supervise_metadata_download<L: StateListener>(
             Ok(false)
         }
     }
+
+    let mut critical_task_exits = critical_task_exits.fuse();
+    let mut next_premature_exit = critical_task_exits.next();
 
     let mut snapshot_reporter =
         pin!(submit_snapshots_periodically(&ctx_handle, state_listener, preliminary_snapshot));
@@ -245,6 +251,9 @@ pub async fn supervise_metadata_download<L: StateListener>(
                 ));
                 return Ok(None);
             }
+            Some(exit) = &mut next_premature_exit => {
+                return Err(premature_exit_error(exit));
+            }
         }
     }
 }
@@ -254,7 +263,8 @@ pub async fn supervise_content_download<L: StateListener>(
     outputdir: impl AsRef<Path>,
     state_listener: &mut L,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
-) -> Outcome {
+    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
+) -> io::Result<Outcome> {
     define_with_ctx!(ctx_handle);
 
     let mut progress_file = disk::ProgressFile::open(&outputdir)
@@ -276,6 +286,9 @@ pub async fn supervise_content_download<L: StateListener>(
         });
     }
 
+    let mut critical_task_exits = critical_task_exits.fuse();
+    let mut next_premature_exit = critical_task_exits.next();
+
     let mut progress_persister = pin!(persist_progress_periodically(&ctx_handle, progress_file));
 
     let mut snapshot_reporter =
@@ -290,7 +303,7 @@ pub async fn supervise_content_download<L: StateListener>(
             _ = &mut snapshot_reporter => unreachable!(),
             _ = completion_check_timer.tick() => {
                 if with_ctx!(|ctx| ctrl::is_finished(ctx)) {
-                    return Outcome::Finished;
+                    return Ok(Outcome::Finished);
                 }
             }
             _ = &mut cancel => {
@@ -298,7 +311,10 @@ pub async fn supervise_content_download<L: StateListener>(
                     "Content download for torrent '{}' has been cancelled",
                     ctx.metainfo.name().unwrap_or("unnamed")
                 ));
-                return Outcome::Cancelled;
+                return Ok(Outcome::Cancelled);
+            }
+            Some(exit) = &mut next_premature_exit => {
+                return Err(premature_exit_error(exit));
             }
             _ = &mut progress_persister => unreachable!(),
         }
@@ -306,6 +322,15 @@ pub async fn supervise_content_download<L: StateListener>(
 }
 
 // ----------------------------------------------------------------------------
+
+fn premature_exit_error(exit: Exit<CriticalTask>) -> io::Error {
+    match exit {
+        Exit::Completed(tag) => io::Error::other(format!("task {tag:?} completed prematurely")),
+        Exit::Dropped(tag) => {
+            io::Error::other(format!("task {tag:?} was dropped prematurely (panicked or aborted)"))
+        }
+    }
+}
 
 #[derive(Deref, DerefMut)]
 struct CallOnDrop<F: FnMut()>(
@@ -493,5 +518,146 @@ mod tests {
         assert_eq!(load_progress().iter_ones().collect::<Vec<_>>(), vec![0, 1, 2]);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    struct NoopListener;
+
+    impl StateListener for NoopListener {
+        const INTERVAL: Duration = sec!(1);
+        fn on_snapshot(&mut self, _snapshot: StateSnapshot<'_>) {}
+    }
+
+    fn main_ctx() -> Handle<MainCtx> {
+        let metainfo =
+            startup::read_metainfo("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        MainCtx::new(
+            metainfo,
+            PeerId::generate_new(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap()
+    }
+
+    fn preliminary_ctx() -> Handle<PreliminaryCtx> {
+        let magnet = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
+            .parse::<input::MagnetLink>()
+            .unwrap();
+        PreliminaryCtx::new(
+            magnet,
+            PeerId::generate_new(),
+            1234,
+            12345,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+        )
+    }
+
+    /// Stream that ends immediately and panics if polled again after that.
+    fn stream_panicking_after_end() -> impl Stream<Item = Exit<CriticalTask>> + Unpin {
+        let mut ended = false;
+        futures_util::stream::poll_fn(move |_cx| {
+            assert!(!ended, "stream polled again after it ended");
+            ended = true;
+            std::task::Poll::Ready(None)
+        })
+    }
+
+    // Neither directory exists, so nothing is written to disk.
+    const NONEXISTENT_DIR: &str = "test_supervise_nonexistent_dir";
+    const NONEXISTENT_METAINFO: &str = "test_supervise_nonexistent_dir/example.torrent";
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_content_download_fails_when_critical_task_stops() {
+        let cancel = pin!(std::future::pending::<()>());
+        let result = time::timeout(
+            sec!(10),
+            supervise_content_download(
+                main_ctx(),
+                NONEXISTENT_DIR,
+                &mut NoopListener,
+                cancel,
+                futures_util::stream::iter([Exit::Dropped(CriticalTask::PieceVerifier)]),
+            ),
+        )
+        .await
+        .expect("supervisor did not react to stopped critical task");
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "task PieceVerifier was dropped prematurely (panicked or aborted)"
+        );
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_content_download_fails_when_critical_task_stops_later() {
+        let cancel = pin!(time::sleep(sec!(10)));
+        let stopped = pin!(futures_util::stream::once(async {
+            time::sleep(sec!(5)).await;
+            Exit::Completed(CriticalTask::ConnectControl)
+        }));
+        let result = supervise_content_download(
+            main_ctx(),
+            NONEXISTENT_DIR,
+            &mut NoopListener,
+            cancel,
+            stopped,
+        )
+        .await;
+        let error = result.unwrap_err();
+        assert_eq!(error.to_string(), "task ConnectControl completed prematurely");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_content_download_continues_after_critical_task_stream_ends() {
+        let cancel = pin!(time::sleep(sec!(5)));
+        let result = supervise_content_download(
+            main_ctx(),
+            NONEXISTENT_DIR,
+            &mut NoopListener,
+            cancel,
+            stream_panicking_after_end(),
+        )
+        .await;
+        assert_eq!(result.unwrap(), Outcome::Cancelled);
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_metadata_download_fails_when_critical_task_stops() {
+        let cancel = pin!(std::future::pending::<()>());
+        let result = time::timeout(
+            sec!(10),
+            supervise_metadata_download(
+                preliminary_ctx(),
+                NONEXISTENT_METAINFO,
+                &mut NoopListener,
+                cancel,
+                futures_util::stream::iter([Exit::Completed(CriticalTask::ConnectControl)]),
+            ),
+        )
+        .await
+        .expect("supervisor did not react to stopped critical task");
+        let error = result.err().unwrap();
+        assert_eq!(error.to_string(), "task ConnectControl completed prematurely");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_metadata_download_continues_after_critical_task_stream_ends() {
+        let cancel = pin!(time::sleep(sec!(5)));
+        let result = supervise_metadata_download(
+            preliminary_ctx(),
+            NONEXISTENT_METAINFO,
+            &mut NoopListener,
+            cancel,
+            stream_panicking_after_end(),
+        )
+        .await;
+        assert!(result.unwrap().is_none());
     }
 }
