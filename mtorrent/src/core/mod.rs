@@ -18,3 +18,11 @@ pub(crate) use peer::{
 };
 pub(crate) use search::run_dht_search;
 pub(crate) use verifier::*;
+
+/// Identifies a task whose exit before the end of a download stage is fatal for the download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalTaskTag {
+    ContentStorage,
+    ConnectControl,
+    PieceVerifier,
+}

@@ -4,6 +4,7 @@ use local_async_utils::prelude::*;
 use mtorrent_base::{input, pwp, trackers};
 use mtorrent_dht as dht;
 use mtorrent_utils::peer_id::PeerId;
+use mtorrent_utils::task_watcher::TaskWatcher;
 use mtorrent_utils::{info_stopwatch, net, upnp};
 use std::borrow::Borrow;
 use std::future::Future;
@@ -314,6 +315,8 @@ async fn preliminary_stage(
         params.bind_interface.clone(),
     );
 
+    let tw = TaskWatcher::new();
+
     let mut tasks = task::JoinSet::new();
 
     let (peer_reporter, connect_throttle) =
@@ -323,7 +326,9 @@ async fn preliminary_stage(
             peer_reporter: peer_reporter.clone(),
             utp_handle: handles.utp.clone(),
         });
-    tasks.spawn_local(connect_throttle.run());
+    tasks.spawn_local(
+        tw.watch_tagged(core::CriticalTaskTag::ConnectControl, connect_throttle.run()),
+    );
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
@@ -372,8 +377,14 @@ async fn preliminary_stage(
         }
     });
 
-    let result =
-        core::supervise_metadata_download(ctx, metainfo_filepath.clone(), listener, cancel).await;
+    let result = core::supervise_metadata_download(
+        ctx,
+        metainfo_filepath.clone(),
+        listener,
+        cancel,
+        tw.into_finished(),
+    )
+    .await;
     tasks.shutdown().await;
     Ok(result?.map(|peers| (metainfo_filepath, peers)))
 }
@@ -397,9 +408,13 @@ async fn main_stage(
         .as_ref()
         .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());
 
+    let tw = TaskWatcher::new();
+
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir)?;
-    handles.storage_runtime.spawn(content_storage_server.run());
+    handles.storage_runtime.spawn(
+        tw.watch_tagged(core::CriticalTaskTag::ContentStorage, content_storage_server.run()),
+    );
 
     let (metainfo_storage, metainfo_storage_server) =
         startup::create_metainfo_storage(&metainfo_filepath)?;
@@ -423,7 +438,7 @@ async fn main_stage(
 
     let (verifier_handle, verifier) =
         core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
-    tasks.spawn_local(verifier.run());
+    tasks.spawn_local(tw.watch_tagged(core::CriticalTaskTag::PieceVerifier, verifier.run()));
 
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {
@@ -435,7 +450,9 @@ async fn main_stage(
             verifier: verifier_handle,
             utp_handle: handles.utp.clone(),
         });
-    tasks.spawn_local(connect_throttle.run());
+    tasks.spawn_local(
+        tw.watch_tagged(core::CriticalTaskTag::ConnectControl, connect_throttle.run()),
+    );
 
     if let Err(e) = handles.utp.restart(peer_reporter.clone()).await {
         log::error!("Failed to restart uTP: {e}");
@@ -485,9 +502,11 @@ async fn main_stage(
         }
     });
 
-    let outcome = core::supervise_content_download(ctx, content_dir, listener, cancel).await;
+    let result =
+        core::supervise_content_download(ctx, content_dir, listener, cancel, tw.into_finished())
+            .await;
     tasks.shutdown().await;
-    Ok(outcome)
+    result
 }
 
 #[cfg(test)]

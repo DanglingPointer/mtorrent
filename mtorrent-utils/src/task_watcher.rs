@@ -1,4 +1,5 @@
 use futures_util::Stream;
+use futures_util::stream::FusedStream;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -73,6 +74,12 @@ impl<T> Stream for Finished<T> {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx)
+    }
+}
+
+impl<T> FusedStream for Finished<T> {
+    fn is_terminated(&self) -> bool {
+        self.rx.is_closed() && self.rx.is_empty()
     }
 }
 
@@ -189,6 +196,34 @@ mod tests {
             assert_ready_eq!(finished.poll_next(), Some(expected));
         }
         assert_ready_eq!(finished.poll_next(), None);
+    }
+
+    #[test]
+    fn test_is_terminated() {
+        let watcher = TaskWatcher::new();
+        let a = watcher.watch_tagged(1, pending::<()>());
+        let b = watcher.watch_tagged(2, pending::<()>());
+        let mut finished = task::spawn(watcher.into_finished());
+        assert!(!finished.is_terminated());
+
+        drop(a);
+        assert!(!finished.is_terminated());
+        assert_ready_eq!(finished.poll_next(), Some(1));
+        assert!(!finished.is_terminated());
+
+        // All senders are gone, but a tag is still queued.
+        drop(b);
+        assert!(!finished.is_terminated());
+        assert_ready_eq!(finished.poll_next(), Some(2));
+        assert!(finished.is_terminated());
+        assert_ready_eq!(finished.poll_next(), None);
+        assert!(finished.is_terminated());
+    }
+
+    #[test]
+    fn test_is_terminated_without_watched_futures() {
+        let finished = TaskWatcher::<u32>::new().into_finished();
+        assert!(finished.is_terminated());
     }
 
     #[test]
