@@ -2,11 +2,11 @@ use super::seq::Seq;
 use bytes::Bytes;
 use futures_util::Stream;
 use local_async_utils::prelude::*;
+use std::cmp;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use std::{cmp, mem};
 use tokio::time::{Instant, Sleep, sleep_until};
 
 struct InFlight {
@@ -27,7 +27,6 @@ pub struct Retransmitter {
     send_queue: VecDeque<InFlight>,
     rtt: Option<Rtt>,
     timeout: Duration,
-    duplicate_ack_count: usize,
     packet_size: usize,
 }
 
@@ -55,7 +54,6 @@ impl Retransmitter {
             send_queue: VecDeque::new(),
             rtt: None,
             timeout: Self::INITIAL_RTO,
-            duplicate_ack_count: 0,
             packet_size: Self::MIN_PACKET_SIZE,
         }
     }
@@ -70,8 +68,7 @@ impl Retransmitter {
 
     fn poll_next_retransmit(&mut self, cx: &mut Context<'_>) -> Poll<Bytes> {
         let packet_lost =
-            self.timer.as_mut().as_pin_mut().is_some_and(|timer| timer.poll(cx).is_ready())
-                || self.duplicate_ack_count >= 2;
+            self.timer.as_mut().as_pin_mut().is_some_and(|timer| timer.poll(cx).is_ready());
 
         if packet_lost && let Some(mut in_flight) = self.send_queue.pop_front() {
             let packet = in_flight.packet.clone();
@@ -80,7 +77,6 @@ impl Retransmitter {
             in_flight.sent_times += 1;
             self.send_queue.push_back(in_flight);
 
-            self.duplicate_ack_count = 0;
             self.update_timer();
 
             self.packet_size = (self.packet_size / 2).max(Self::MIN_PACKET_SIZE);
@@ -112,8 +108,6 @@ impl Retransmitter {
             ..
         }) = self.send_queue.iter().find(|entry| entry.seq_nr == acked_seq_nr)
         {
-            self.duplicate_ack_count = 0;
-
             if *sent_times == 1 {
                 // update RTT and RTO
                 let packet_rtt = sent_at.elapsed().as_millis();
@@ -141,15 +135,6 @@ impl Retransmitter {
             if self.send_queue.is_empty() {
                 self.packet_size = (self.packet_size * 2).min(Self::MAX_PACKET_SIZE);
             }
-        } else if !self.send_queue.is_empty() {
-            self.duplicate_ack_count += 1;
-            if self.duplicate_ack_count == 2 {
-                // TODO:
-                // max_window /= 2;
-                let tmp_timeout = mem::replace(&mut self.timeout, Duration::ZERO);
-                self.update_timer();
-                self.timeout = tmp_timeout;
-            }
         }
     }
 
@@ -176,7 +161,7 @@ impl Retransmitter {
 mod tests {
     use super::super::seq::seq;
     use super::*;
-    use futures_util::{FutureExt, StreamExt};
+    use futures_util::StreamExt;
     use tokio::time;
 
     #[tokio::test(start_paused = true)]
@@ -211,39 +196,6 @@ mod tests {
         retransmitter.process_ack(seq(2));
         assert_eq!(retransmitter.send_queue.len(), 0);
         assert!(retransmitter.next().await.is_none());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_fast_retransmit() {
-        let mut retransmitter = Retransmitter::new();
-
-        retransmitter.add_new_packet(Bytes::from_static(b"packet0"), seq(10));
-        retransmitter.process_ack(seq(10));
-        assert!(retransmitter.next().await.is_none());
-
-        let send_time = Instant::now();
-        retransmitter.add_new_packet(Bytes::from_static(b"packet1"), seq(11));
-        retransmitter.add_new_packet(Bytes::from_static(b"packet2"), seq(12));
-        assert_eq!(retransmitter.send_queue.len(), 2);
-
-        time::sleep(millisec!(10)).await;
-        retransmitter.process_ack(seq(10));
-        time::sleep(millisec!(10)).await;
-        retransmitter.process_ack(seq(10));
-
-        let retransmit = retransmitter.next().now_or_never().unwrap().unwrap();
-        assert_eq!(&retransmit[..], b"packet1");
-        assert!(retransmitter.next().now_or_never().is_none());
-
-        for i in 1..=2 {
-            let retransmit = retransmitter.next().await.unwrap();
-            assert_eq!(&retransmit[..], b"packet2");
-            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i);
-
-            let retransmit = retransmitter.next().await.unwrap();
-            assert_eq!(&retransmit[..], b"packet1");
-            assert_eq!(send_time.elapsed(), Retransmitter::INITIAL_RTO / 2 * i + millisec!(20));
-        }
     }
 
     #[tokio::test(start_paused = true)]
