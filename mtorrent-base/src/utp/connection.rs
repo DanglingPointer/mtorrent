@@ -56,26 +56,21 @@ fn finalize_send_buf(buf: Limit<BytesMut>, header: &Header) -> Bytes {
     inner.freeze()
 }
 
-fn resize_send_buf(buf: &mut Limit<BytesMut>, new_packet_size: usize) {
-    let filled_bytes = buf.get_ref().len();
-    let max_remaining = new_packet_size.saturating_sub(filled_bytes);
-    buf.set_limit(max_remaining);
-}
-
 impl EgressProcessor {
     async fn run(&mut self, peer_addr: &SocketAddr, stats: &mut EgressStats) -> io::Result<()> {
         define_with!(self.state);
 
         let mut retransmitter = Retransmitter::new();
-        let mut send_buffer = init_send_buf(retransmitter.packet_size());
+        let mut send_buffer = init_send_buf(Retransmitter::PACKET_SIZE);
 
         macro_rules! tx_allowed {
             () => {{
                 // lost packets must be retransmitted before any new data
                 !retransmitter.has_lost_packets()
-                    && (retransmitter.total_bytes_in_flight() == 0
-                        || retransmitter.total_bytes_in_flight() + send_buffer.get_ref().len()
-                            <= with!(|state| state.max_window_size()))
+                    && retransmitter.can_send(
+                        send_buffer.get_ref().len(),
+                        with!(|state| state.remote_window_size()),
+                    )
             }};
         }
 
@@ -86,9 +81,6 @@ impl EgressProcessor {
                 if log_enabled!(log::Level::Trace) {
                     log::trace!("TX-{peer_addr}: <retransmit>");
                 }
-                // max packet size might've changed, update send_buffer
-                resize_send_buf(&mut send_buffer, retransmitter.packet_size());
-                with!(|state| state.shrink_local_window());
             }};
         }
 
@@ -97,7 +89,7 @@ impl EgressProcessor {
                 if send_buffer.get_ref().len() > Header::MIN_SIZE && tx_allowed!() {
                     self.ack_required_notifier.wait_for_one().now_or_never();
                     let buf =
-                        mem::replace(&mut send_buffer, init_send_buf(retransmitter.packet_size()));
+                        mem::replace(&mut send_buffer, init_send_buf(Retransmitter::PACKET_SIZE));
                     let header = with!(|state| state.generate_header(TypeVer::Data));
                     let packet = finalize_send_buf(buf, &header);
                     self.sender.send(packet.clone()).await?;
@@ -117,15 +109,11 @@ impl EgressProcessor {
                     let Some(ack) = ack else {
                         return Ok(()); // ingress processor exited
                     };
-                    let fast_resend = retransmitter.process_ack(ack);
-                    if !retransmitter.has_unacked_packets() {
-                        with!(|state| state.grow_local_window());
-                    }
-                    if let Some(packet) = fast_resend {
+                    if let Some(packet) = retransmitter.process_ack(ack) {
                         send_retransmit!(packet);
                     }
                     while let Some(packet) =
-                        retransmitter.resend_lost(with!(|state| state.max_window_size()))
+                        retransmitter.resend_lost(with!(|state| state.remote_window_size()))
                     {
                         send_retransmit!(packet);
                     }
