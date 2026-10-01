@@ -71,9 +71,24 @@ impl EgressProcessor {
 
         macro_rules! tx_allowed {
             () => {{
-                retransmitter.total_bytes_in_flight() == 0
-                    || retransmitter.total_bytes_in_flight() + send_buffer.get_ref().len()
-                        <= with!(|state| state.max_window_size())
+                // lost packets must be retransmitted before any new data
+                !retransmitter.has_lost_packets()
+                    && (retransmitter.total_bytes_in_flight() == 0
+                        || retransmitter.total_bytes_in_flight() + send_buffer.get_ref().len()
+                            <= with!(|state| state.max_window_size()))
+            }};
+        }
+
+        macro_rules! send_retransmit {
+            ($packet:expr) => {{
+                self.sender.send($packet).await?;
+                stats.retransmit_count += 1;
+                if log_enabled!(log::Level::Trace) {
+                    log::trace!("TX-{peer_addr}: <retransmit>");
+                }
+                // max packet size might've changed, update send_buffer
+                resize_send_buf(&mut send_buffer, retransmitter.packet_size());
+                with!(|state| state.shrink_local_window());
             }};
         }
 
@@ -102,21 +117,22 @@ impl EgressProcessor {
                     let Some(ack) = ack else {
                         return Ok(()); // ingress processor exited
                     };
-                    retransmitter.process_ack(ack);
-                    if retransmitter.total_bytes_in_flight()  == 0 {
+                    let fast_resend = retransmitter.process_ack(ack);
+                    if !retransmitter.has_unacked_packets() {
                         with!(|state| state.grow_local_window());
+                    }
+                    if let Some(packet) = fast_resend {
+                        send_retransmit!(packet);
+                    }
+                    while let Some(packet) =
+                        retransmitter.resend_lost(with!(|state| state.max_window_size()))
+                    {
+                        send_retransmit!(packet);
                     }
                     send_data_if_ready!();
                 }
                 Some(packet) = retransmitter.next() => {
-                    self.sender.send(packet).await?;
-                    stats.retransmit_count += 1;
-                    if log_enabled!(log::Level::Trace) {
-                        log::trace!("TX-{peer_addr}: <retransmit>");
-                    }
-                    // max packet size might've changed, update send_buffer
-                    resize_send_buf(&mut send_buffer, retransmitter.packet_size());
-                    with!(|state| state.shrink_local_window());
+                    send_retransmit!(packet);
                 }
                 read_result = self.receiver.read_buf(&mut send_buffer), if tx_allowed!() => {
                     match read_result {
@@ -181,7 +197,8 @@ impl IngressProcessor {
             match with!(|state| state.validate_header(&header)) {
                 Ok(()) => {
                     stats.in_order_count += 1;
-                    if last_received_ack.is_none_or(|last| header.ack_nr > last) {
+                    // duplicate acks are needed too, they end fast-timeout mode in Retransmitter
+                    if last_received_ack.is_none_or(|last| header.ack_nr >= last) {
                         last_received_ack = Some(header.ack_nr);
                         self.ack_received_reporter.set_and_notify(header.ack_nr);
                     }
@@ -885,6 +902,49 @@ mod tests {
         assert_eq!(sent_seqs, [(TypeVer::Data, seq(1)), (TypeVer::Data, seq(2))]);
 
         // acked packets must not be retransmitted
+        time::sleep(sec!(10)).await;
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_timeout_retransmits_oldest_packet_and_rest_after_ack() {
+        let mut conn = Established::new(8).await;
+
+        for data in [b"local1", b"local2", b"local3"] {
+            conn.write_local_data(data);
+            task::yield_now().await;
+        }
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| (h.type_ver, h.seq_nr)).collect();
+        assert_eq!(
+            sent_seqs,
+            [
+                (TypeVer::Data, seq(1)),
+                (TypeVer::Data, seq(2)),
+                (TypeVer::Data, seq(3))
+            ]
+        );
+
+        // only the oldest packet is retransmitted on timeout
+        time::sleep(sec!(1)).await;
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| h.seq_nr).collect();
+        assert_eq!(sent_seqs, [seq(1)]);
+
+        // ack of the retransmitted packet triggers fast resend of the next one, and the remaining
+        // lost packet is resent because it fits into the window
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1));
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| h.seq_nr).collect();
+        assert_eq!(sent_seqs, [seq(2), seq(3)]);
+
+        // duplicate ack doesn't trigger any retransmits
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1));
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(3));
         time::sleep(sec!(10)).await;
         let sent = conn.sent_headers().await;
         assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
