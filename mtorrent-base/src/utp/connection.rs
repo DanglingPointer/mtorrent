@@ -56,24 +56,31 @@ fn finalize_send_buf(buf: Limit<BytesMut>, header: &Header) -> Bytes {
     inner.freeze()
 }
 
-fn resize_send_buf(buf: &mut Limit<BytesMut>, new_packet_size: usize) {
-    let filled_bytes = buf.get_ref().len();
-    let max_remaining = new_packet_size.saturating_sub(filled_bytes);
-    buf.set_limit(max_remaining);
-}
-
 impl EgressProcessor {
     async fn run(&mut self, peer_addr: &SocketAddr, stats: &mut EgressStats) -> io::Result<()> {
         define_with!(self.state);
 
         let mut retransmitter = Retransmitter::new();
-        let mut send_buffer = init_send_buf(retransmitter.packet_size());
+        let mut send_buffer = init_send_buf(Retransmitter::PACKET_SIZE);
 
         macro_rules! tx_allowed {
             () => {{
-                retransmitter.total_bytes_in_flight() == 0
-                    || retransmitter.total_bytes_in_flight() + send_buffer.get_ref().len()
-                        <= with!(|state| state.max_window_size())
+                // lost packets must be retransmitted before any new data
+                !retransmitter.has_lost_packets()
+                    && retransmitter.can_send(
+                        send_buffer.get_ref().len(),
+                        with!(|state| state.remote_window_size()),
+                    )
+            }};
+        }
+
+        macro_rules! send_retransmit {
+            ($packet:expr) => {{
+                self.sender.send($packet).await?;
+                stats.retransmit_count += 1;
+                if log_enabled!(log::Level::Trace) {
+                    log::trace!("TX-{peer_addr}: <retransmit>");
+                }
             }};
         }
 
@@ -82,7 +89,7 @@ impl EgressProcessor {
                 if send_buffer.get_ref().len() > Header::MIN_SIZE && tx_allowed!() {
                     self.ack_required_notifier.wait_for_one().now_or_never();
                     let buf =
-                        mem::replace(&mut send_buffer, init_send_buf(retransmitter.packet_size()));
+                        mem::replace(&mut send_buffer, init_send_buf(Retransmitter::PACKET_SIZE));
                     let header = with!(|state| state.generate_header(TypeVer::Data));
                     let packet = finalize_send_buf(buf, &header);
                     self.sender.send(packet.clone()).await?;
@@ -102,21 +109,18 @@ impl EgressProcessor {
                     let Some(ack) = ack else {
                         return Ok(()); // ingress processor exited
                     };
-                    retransmitter.process_ack(ack);
-                    if retransmitter.total_bytes_in_flight()  == 0 {
-                        with!(|state| state.grow_local_window());
+                    if let Some(packet) = retransmitter.process_ack(ack) {
+                        send_retransmit!(packet);
+                    }
+                    while let Some(packet) =
+                        retransmitter.resend_lost(with!(|state| state.remote_window_size()))
+                    {
+                        send_retransmit!(packet);
                     }
                     send_data_if_ready!();
                 }
                 Some(packet) = retransmitter.next() => {
-                    self.sender.send(packet).await?;
-                    stats.retransmit_count += 1;
-                    if log_enabled!(log::Level::Trace) {
-                        log::trace!("TX-{peer_addr}: <retransmit>");
-                    }
-                    // max packet size might've changed, update send_buffer
-                    resize_send_buf(&mut send_buffer, retransmitter.packet_size());
-                    with!(|state| state.shrink_local_window());
+                    send_retransmit!(packet);
                 }
                 read_result = self.receiver.read_buf(&mut send_buffer), if tx_allowed!() => {
                     match read_result {
@@ -181,7 +185,8 @@ impl IngressProcessor {
             match with!(|state| state.validate_header(&header)) {
                 Ok(()) => {
                     stats.in_order_count += 1;
-                    if last_received_ack.is_none_or(|last| header.ack_nr > last) {
+                    // duplicate acks are needed too, they end fast-timeout mode in Retransmitter
+                    if last_received_ack.is_none_or(|last| header.ack_nr >= last) {
                         last_received_ack = Some(header.ack_nr);
                         self.ack_received_reporter.set_and_notify(header.ack_nr);
                     }
@@ -190,14 +195,14 @@ impl IngressProcessor {
                             with!(|state| state.process_header(&header));
                         }
                         TypeVer::Data => {
+                            with!(|state| state.process_header(&header));
+                            self.ack_required_reporter.signal_one();
                             if let Err(e) = write_and_flush(&mut self.sender, &mut packet).await {
                                 log::debug!(
                                     "Ingress processor for {peer_addr} exiting: pipe closed ({e})"
                                 );
                                 return Ok(());
                             }
-                            with!(|state| state.process_header(&header));
-                            self.ack_required_reporter.signal_one();
                         }
                         TypeVer::Fin => {
                             log::debug!("Ingress processor for {peer_addr} exiting: received FIN");
@@ -472,6 +477,7 @@ mod tests {
     use rstest::rstest;
     use std::hash::RandomState;
     use std::net::Ipv4Addr;
+    use tokio::io::AsyncReadExt;
     use tokio::{join, task};
 
     const PEER_ADDR: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 6881);
@@ -788,12 +794,13 @@ mod tests {
                 .unwrap();
         }
 
-        fn receive_remote_packet(&mut self, type_ver: TypeVer, seq_nr: Seq, ack_nr: Seq) {
-            let data: &[u8] = if type_ver == TypeVer::Data {
-                b"remote"
-            } else {
-                &[]
-            };
+        fn receive_remote_packet(
+            &mut self,
+            type_ver: TypeVer,
+            seq_nr: Seq,
+            ack_nr: Seq,
+            data: &[u8],
+        ) {
             let packet = packet(type_ver, self.conn_id, seq_nr, ack_nr, data);
             self.ingress_tx.try_send(packet).unwrap();
         }
@@ -823,7 +830,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // while blocked, remote data arrives which requires an ack, and more local data is written
-        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"remote");
         task::yield_now().await;
         conn.write_local_data(b"local3");
 
@@ -851,7 +858,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // remote data arrives while blocked
-        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"remote");
         task::yield_now().await;
 
         let sent = conn.sent_headers().await;
@@ -877,7 +884,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // remote acks both packets while blocked
-        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(2));
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(2), &[]);
         task::yield_now().await;
 
         let sent = conn.sent_headers().await;
@@ -888,5 +895,84 @@ mod tests {
         time::sleep(sec!(10)).await;
         let sent = conn.sent_headers().await;
         assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_timeout_retransmits_oldest_packet_and_rest_after_ack() {
+        let mut conn = Established::new(8).await;
+
+        for data in [b"local1", b"local2", b"local3"] {
+            conn.write_local_data(data);
+            task::yield_now().await;
+        }
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| (h.type_ver, h.seq_nr)).collect();
+        assert_eq!(
+            sent_seqs,
+            [
+                (TypeVer::Data, seq(1)),
+                (TypeVer::Data, seq(2)),
+                (TypeVer::Data, seq(3))
+            ]
+        );
+
+        // only the oldest packet is retransmitted on timeout
+        time::sleep(sec!(1)).await;
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| h.seq_nr).collect();
+        assert_eq!(sent_seqs, [seq(1)]);
+
+        // ack of the retransmitted packet triggers fast resend of the next one, and the remaining
+        // lost packet is resent because it fits into the window
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1), &[]);
+        let sent = conn.sent_headers().await;
+        let sent_seqs: Vec<_> = sent.iter().map(|h| h.seq_nr).collect();
+        assert_eq!(sent_seqs, [seq(2), seq(3)]);
+
+        // duplicate ack doesn't trigger any retransmits
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1), &[]);
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(3), &[]);
+        time::sleep(sec!(10)).await;
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_data_is_acked_when_local_pipe_is_full() {
+        let mut conn = Established::new(8).await;
+
+        // payload exceeds the pipe capacity, so delivery to the local side blocks
+        let payload = vec![0xAB; 2000];
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), &payload);
+
+        // ack is sent even though the local side hasn't read anything
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(summary, [(TypeVer::State, REMOTE_SEQ)]);
+
+        // outgoing data acks the received packet as well
+        conn.write_local_data(b"local1");
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(summary, [(TypeVer::Data, REMOTE_SEQ)]);
+
+        // draining the pipe delivers the whole payload and doesn't trigger extra acks
+        let mut received = Vec::new();
+        while received.len() < payload.len() {
+            let bytes_read = conn
+                .remote_pipe
+                .read_buf(&mut received)
+                .now_or_never()
+                .expect("data not delivered")
+                .unwrap();
+            assert_ne!(bytes_read, 0, "pipe closed");
+            task::yield_now().await;
+        }
+        assert_eq!(received, payload);
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected packets: {sent:?}");
     }
 }

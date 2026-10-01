@@ -194,7 +194,6 @@ pub enum ValidationError {
 
 impl ConnectionState {
     const MAX_LOCAL_WINDOW: u32 = 128 * 1024;
-    const MIN_LOCAL_WINDOW: u32 = 1024;
     const MIN_WINDOW: u32 = 150;
 
     pub fn new_outbound(conn_id_recv: u16) -> Self {
@@ -223,16 +222,9 @@ impl ConnectionState {
         }
     }
 
-    pub fn max_window_size(&self) -> usize {
-        cmp::min(self.remote_wnd, self.local_wnd) as usize
-    }
-
-    pub fn shrink_local_window(&mut self) {
-        self.local_wnd = cmp::max(self.local_wnd - 1024, Self::MIN_LOCAL_WINDOW);
-    }
-
-    pub fn grow_local_window(&mut self) {
-        self.local_wnd = cmp::min(self.local_wnd + 1024, Self::MAX_LOCAL_WINDOW);
+    /// Receive window advertised by the peer
+    pub fn remote_window_size(&self) -> usize {
+        self.remote_wnd as usize
     }
 
     /// Check that `received_header` is a reply to our handshake packet (SYN for outbound
