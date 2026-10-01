@@ -66,6 +66,25 @@ impl Stream for Retransmitter {
     }
 }
 
+fn retransmit(entry: &mut InFlight) -> Bytes {
+    entry.sent_at = Instant::now();
+    entry.sent_times += 1;
+    entry.need_resend = false;
+    entry.packet.clone()
+}
+
+fn can_send(len: usize, peer_window: usize, in_flight: usize, cwnd: usize) -> bool {
+    in_flight == 0 || in_flight + len <= cmp::min(cwnd, peer_window)
+}
+
+/// Bytes sent but not yet acked, excluding packets that are considered lost.
+fn total_bytes_in_flight<'e>(send_queue: impl IntoIterator<Item = &'e InFlight>) -> usize {
+    send_queue
+        .into_iter()
+        .filter(|entry| !entry.need_resend)
+        .fold(0, |total, entry| total + entry.packet.len())
+}
+
 impl Retransmitter {
     pub const PACKET_SIZE: usize = 1472; // ethernet MTU
     const INITIAL_RTO: Duration = sec!(1);
@@ -86,14 +105,6 @@ impl Retransmitter {
         }
     }
 
-    /// Bytes sent but not yet acked, excluding packets that are considered lost.
-    pub fn total_bytes_in_flight(&self) -> usize {
-        self.send_queue
-            .iter()
-            .filter(|entry| !entry.need_resend)
-            .fold(0, |total, entry| total + entry.packet.len())
-    }
-
     /// Whether any packets are waiting for [`Retransmitter::resend_lost`].
     pub fn has_lost_packets(&self) -> bool {
         self.send_queue.iter().any(|entry| entry.need_resend)
@@ -102,15 +113,17 @@ impl Retransmitter {
     /// Whether a packet of `len` bytes may be sent now without exceeding the congestion window or
     /// the receive window of the peer.
     pub fn can_send(&self, len: usize, peer_window: usize) -> bool {
-        let in_flight = self.total_bytes_in_flight();
-        in_flight == 0 || in_flight + len <= cmp::min(self.cwnd, peer_window)
+        let in_flight = total_bytes_in_flight(&self.send_queue);
+        can_send(len, peer_window, in_flight, self.cwnd)
     }
 
     fn poll_next_retransmit(&mut self, cx: &mut Context<'_>) -> Poll<Bytes> {
         let timed_out =
             self.timer.as_mut().as_pin_mut().is_some_and(|timer| timer.poll(cx).is_ready());
 
-        if timed_out && !self.send_queue.is_empty() {
+        if timed_out && let Some(first_in_flight) = self.send_queue.front_mut() {
+            let packet_to_resend = retransmit(first_in_flight);
+
             self.timeout = cmp::min(self.timeout * 2, Self::MAX_TIMEOUT);
             self.arm_timer();
 
@@ -118,12 +131,12 @@ impl Retransmitter {
             self.ssthresh = cmp::max(self.cwnd / 2, 2 * Self::PACKET_SIZE);
             self.cwnd = Self::PACKET_SIZE;
 
-            // every packet should be considered lost
-            for entry in &mut self.send_queue {
+            // every packet except the one we're retransmitting should be considered lost
+            for entry in self.send_queue.iter_mut().skip(1) {
                 entry.need_resend = true;
             }
             self.fast_timeout = true;
-            Poll::Ready(self.retransmit(0))
+            Poll::Ready(packet_to_resend)
         } else {
             Poll::Pending
         }
@@ -131,20 +144,14 @@ impl Retransmitter {
 
     /// Retransmit the oldest lost packet if it fits into the window.
     pub fn resend_lost(&mut self, peer_window: usize) -> Option<Bytes> {
-        let index = self.send_queue.iter().position(|entry| entry.need_resend)?;
-        if self.can_send(self.send_queue[index].packet.len(), peer_window) {
-            Some(self.retransmit(index))
+        let bytes_in_flight = total_bytes_in_flight(&self.send_queue);
+        let oldest_lost = self.send_queue.iter_mut().find(|entry| entry.need_resend)?;
+
+        if can_send(oldest_lost.packet.len(), peer_window, bytes_in_flight, self.cwnd) {
+            Some(retransmit(oldest_lost))
         } else {
             None
         }
-    }
-
-    fn retransmit(&mut self, index: usize) -> Bytes {
-        let entry = &mut self.send_queue[index];
-        entry.sent_at = Instant::now();
-        entry.sent_times += 1;
-        entry.need_resend = false;
-        entry.packet.clone()
     }
 
     pub fn add_new_packet(&mut self, packet: Bytes, seq_nr: Seq) {
@@ -176,42 +183,46 @@ impl Retransmitter {
             if *sent_times == 1 {
                 // update RTT and RTO
                 let packet_rtt = sent_at.elapsed().as_millis();
-                match &mut self.rtt {
-                    Some(Rtt { rtt, rtt_var }) => {
-                        let abs_delta = rtt.abs_diff(packet_rtt);
-                        *rtt_var = (3 * *rtt_var + abs_delta) / 4;
-                        *rtt = (7 * *rtt + packet_rtt) / 8;
+                let estimate = match &mut self.rtt {
+                    Some(estimate) => {
+                        let abs_delta = estimate.rtt.abs_diff(packet_rtt);
+                        estimate.rtt_var = (3 * estimate.rtt_var + abs_delta) / 4;
+                        estimate.rtt = (7 * estimate.rtt + packet_rtt) / 8;
+                        estimate
                     }
-                    None => {
-                        self.rtt = Some(Rtt {
-                            rtt: packet_rtt,
-                            rtt_var: packet_rtt / 2,
-                        });
-                    }
-                }
-
-                let estimate = self.rtt.as_ref().unwrap();
+                    None => self.rtt.insert(Rtt {
+                        rtt: packet_rtt,
+                        rtt_var: packet_rtt / 2,
+                    }),
+                };
                 self.rto = cmp::max(
                     millisec!((estimate.rtt + estimate.rtt_var * 4) as u64),
                     Self::MIN_RTO,
                 );
             }
 
-            // consider the window to be limiting the sending rate if more than half of it is used
-            let cwnd_limited = self.total_bytes_in_flight() * 2 > self.cwnd;
-            let acked_bytes: usize = self
-                .send_queue
-                .iter()
-                .take_while(|entry| entry.seq_nr <= acked_seq_nr)
-                .map(|entry| entry.packet.len())
-                .sum();
-            self.send_queue.retain(|in_flight| in_flight.seq_nr > acked_seq_nr);
-
-            // don't grow the window when it's not what limits the sending rate
-            if cwnd_limited {
-                self.grow_cwnd(acked_bytes);
+            // grow the window only when it limits the sending rate, i.e. more than half of it is
+            // used; must be computed before acked packets are removed
+            let should_increase_cwnd = total_bytes_in_flight(&self.send_queue) * 2 > self.cwnd;
+            if should_increase_cwnd {
+                let acked_bytes: usize = self
+                    .send_queue
+                    .iter()
+                    .take_while(|entry| entry.seq_nr <= acked_seq_nr)
+                    .map(|entry| entry.packet.len())
+                    .sum();
+                if self.cwnd < self.ssthresh {
+                    // slow start
+                    self.cwnd = cmp::min(self.cwnd + acked_bytes, self.ssthresh);
+                } else {
+                    // congestion avoidance: one packet per RTT
+                    self.cwnd += cmp::max(Self::PACKET_SIZE * acked_bytes / self.cwnd, 1);
+                }
             }
 
+            self.send_queue.retain(|in_flight| in_flight.seq_nr > acked_seq_nr);
+
+            // reset the backoff
             self.timeout = self.rto;
             if self.send_queue.is_empty() {
                 self.timer.set(None);
@@ -220,34 +231,27 @@ impl Retransmitter {
             }
         }
 
+        // packets acked by the peer must never be fast-resent
         let next_seq_nr = acked_seq_nr + Seq::ONE;
         if self.fast_resend_seq_nr.is_none_or(|seq_nr| seq_nr < next_seq_nr) {
             self.fast_resend_seq_nr = Some(next_seq_nr);
         }
 
+        // after a timeout, each ack that moves forward triggers a resend of the oldest unacked
+        // packet, which is then excluded from further fast resends
         if self.fast_timeout {
-            let oldest_unacked = self.send_queue.front().map_or(next_seq_nr, |entry| entry.seq_nr);
-            if Some(oldest_unacked) != self.fast_resend_seq_nr {
-                // the packet that timed out has already been resent, leave fast-timeout mode
-                self.fast_timeout = false;
-            } else if !self.send_queue.is_empty() {
-                // resend the oldest packet and increment fast_resend_seq_nr to not allow another
-                // fast resend on it again
-                self.fast_resend_seq_nr = Some(oldest_unacked + Seq::ONE);
-                return Some(self.retransmit(0));
+            if let Some(oldest_unacked) = self.send_queue.front_mut()
+                && self.fast_resend_seq_nr == Some(oldest_unacked.seq_nr)
+            {
+                self.fast_resend_seq_nr = Some(oldest_unacked.seq_nr + Seq::ONE);
+                return Some(retransmit(oldest_unacked));
             }
+
+            // the oldest packet has already been fast-resent (duplicate ack) or everything is
+            // acked, leave fast-timeout mode
+            self.fast_timeout = false;
         }
         None
-    }
-
-    fn grow_cwnd(&mut self, acked_bytes: usize) {
-        if self.cwnd < self.ssthresh {
-            // slow start
-            self.cwnd = cmp::min(self.cwnd + acked_bytes, self.ssthresh);
-        } else {
-            // congestion avoidance: one packet per RTT
-            self.cwnd += cmp::max(Self::PACKET_SIZE * acked_bytes / self.cwnd, 1);
-        }
     }
 
     fn arm_timer(&mut self) {
@@ -292,7 +296,7 @@ mod tests {
 
             // the other packets are considered lost and don't count as in flight
             assert!(retransmitter.has_lost_packets());
-            assert_eq!(retransmitter.total_bytes_in_flight(), P1.len());
+            assert_eq!(total_bytes_in_flight(&retransmitter.send_queue), P1.len());
         }
 
         assert_eq!(retransmitter.process_ack(seq(3)), None);
@@ -312,7 +316,10 @@ mod tests {
         assert_eq!(retransmitter.resend_lost(usize::MAX), Some(P3));
         assert_eq!(retransmitter.resend_lost(usize::MAX), None);
         assert!(!retransmitter.has_lost_packets());
-        assert_eq!(retransmitter.total_bytes_in_flight(), P1.len() + P2.len() + P3.len());
+        assert_eq!(
+            total_bytes_in_flight(&retransmitter.send_queue),
+            P1.len() + P2.len() + P3.len()
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -325,7 +332,7 @@ mod tests {
         assert_eq!(retransmitter.process_ack(seq(0)), None);
         assert_eq!(retransmitter.process_ack(seq(1)), None);
 
-        assert_eq!(retransmitter.total_bytes_in_flight(), 0);
+        assert_eq!(total_bytes_in_flight(&retransmitter.send_queue), 0);
         assert_eq!(retransmitter.resend_lost(0), Some(P2));
     }
 
@@ -335,7 +342,7 @@ mod tests {
         assert_eq!(retransmitter.next().await.unwrap(), P1);
 
         assert_eq!(retransmitter.process_ack(seq(1)), Some(P2));
-        assert_eq!(retransmitter.total_bytes_in_flight(), P2.len());
+        assert_eq!(total_bytes_in_flight(&retransmitter.send_queue), P2.len());
         assert!(retransmitter.has_lost_packets());
 
         assert_eq!(retransmitter.process_ack(seq(2)), Some(P3));
@@ -369,7 +376,7 @@ mod tests {
         assert_eq!(retransmitter.process_ack(seq(1)), None);
         assert_eq!(retransmitter.process_ack(seq(2)), None);
         assert!(!retransmitter.has_lost_packets());
-        assert_eq!(retransmitter.total_bytes_in_flight(), P3.len());
+        assert_eq!(total_bytes_in_flight(&retransmitter.send_queue), P3.len());
     }
 
     #[tokio::test(start_paused = true)]
