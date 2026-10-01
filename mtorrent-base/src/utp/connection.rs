@@ -195,14 +195,14 @@ impl IngressProcessor {
                             with!(|state| state.process_header(&header));
                         }
                         TypeVer::Data => {
+                            with!(|state| state.process_header(&header));
+                            self.ack_required_reporter.signal_one();
                             if let Err(e) = write_and_flush(&mut self.sender, &mut packet).await {
                                 log::debug!(
                                     "Ingress processor for {peer_addr} exiting: pipe closed ({e})"
                                 );
                                 return Ok(());
                             }
-                            with!(|state| state.process_header(&header));
-                            self.ack_required_reporter.signal_one();
                         }
                         TypeVer::Fin => {
                             log::debug!("Ingress processor for {peer_addr} exiting: received FIN");
@@ -477,6 +477,7 @@ mod tests {
     use rstest::rstest;
     use std::hash::RandomState;
     use std::net::Ipv4Addr;
+    use tokio::io::AsyncReadExt;
     use tokio::{join, task};
 
     const PEER_ADDR: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 6881);
@@ -793,12 +794,13 @@ mod tests {
                 .unwrap();
         }
 
-        fn receive_remote_packet(&mut self, type_ver: TypeVer, seq_nr: Seq, ack_nr: Seq) {
-            let data: &[u8] = if type_ver == TypeVer::Data {
-                b"remote"
-            } else {
-                &[]
-            };
+        fn receive_remote_packet(
+            &mut self,
+            type_ver: TypeVer,
+            seq_nr: Seq,
+            ack_nr: Seq,
+            data: &[u8],
+        ) {
             let packet = packet(type_ver, self.conn_id, seq_nr, ack_nr, data);
             self.ingress_tx.try_send(packet).unwrap();
         }
@@ -828,7 +830,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // while blocked, remote data arrives which requires an ack, and more local data is written
-        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"remote");
         task::yield_now().await;
         conn.write_local_data(b"local3");
 
@@ -856,7 +858,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // remote data arrives while blocked
-        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0));
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"remote");
         task::yield_now().await;
 
         let sent = conn.sent_headers().await;
@@ -882,7 +884,7 @@ mod tests {
         conn.write_local_data(b"local2");
         task::yield_now().await;
         // remote acks both packets while blocked
-        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(2));
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(2), &[]);
         task::yield_now().await;
 
         let sent = conn.sent_headers().await;
@@ -922,19 +924,55 @@ mod tests {
 
         // ack of the retransmitted packet triggers fast resend of the next one, and the remaining
         // lost packet is resent because it fits into the window
-        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1));
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1), &[]);
         let sent = conn.sent_headers().await;
         let sent_seqs: Vec<_> = sent.iter().map(|h| h.seq_nr).collect();
         assert_eq!(sent_seqs, [seq(2), seq(3)]);
 
         // duplicate ack doesn't trigger any retransmits
-        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1));
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(1), &[]);
         let sent = conn.sent_headers().await;
         assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
 
-        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(3));
+        conn.receive_remote_packet(TypeVer::State, REMOTE_SEQ, seq(3), &[]);
         time::sleep(sec!(10)).await;
         let sent = conn.sent_headers().await;
         assert!(sent.is_empty(), "unexpected retransmit: {sent:?}");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_data_is_acked_when_local_pipe_is_full() {
+        let mut conn = Established::new(8).await;
+
+        // payload exceeds the pipe capacity, so delivery to the local side blocks
+        let payload = vec![0xAB; 2000];
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), &payload);
+
+        // ack is sent even though the local side hasn't read anything
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(summary, [(TypeVer::State, REMOTE_SEQ)]);
+
+        // outgoing data acks the received packet as well
+        conn.write_local_data(b"local1");
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(summary, [(TypeVer::Data, REMOTE_SEQ)]);
+
+        // draining the pipe delivers the whole payload and doesn't trigger extra acks
+        let mut received = Vec::new();
+        while received.len() < payload.len() {
+            let bytes_read = conn
+                .remote_pipe
+                .read_buf(&mut received)
+                .now_or_never()
+                .expect("data not delivered")
+                .unwrap();
+            assert_ne!(bytes_read, 0, "pipe closed");
+            task::yield_now().await;
+        }
+        assert_eq!(received, payload);
+        let sent = conn.sent_headers().await;
+        assert!(sent.is_empty(), "unexpected packets: {sent:?}");
     }
 }
