@@ -168,12 +168,6 @@ impl IoDriver {
                         );
                         self.connections.remove(remote_addr);
                     }
-                    Err(e) if is_transient_error(&e.kind()) => {
-                        // The error may have been caused by an earlier packet sent to a different
-                        // peer (e.g. ICMP port unreachable), so don't blame this connection.
-                        log::warn!("Send failed to {remote_addr}, dropping packet: {e}");
-                        self.dropped_packets += 1;
-                    }
                     Err(e) => {
                         // `e` is guaranteed to never be WouldBlock here
                         log::error!("Send failed to {remote_addr}: {e}");
