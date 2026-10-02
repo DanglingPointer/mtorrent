@@ -245,6 +245,7 @@ fn is_fatal_error(e: &io::Error) -> bool {
         io::ErrorKind::ConnectionRefused
         | io::ErrorKind::ConnectionReset
         | io::ErrorKind::UnexpectedEof
+        | io::ErrorKind::BrokenPipe
         | io::ErrorKind::TimedOut
         | io::ErrorKind::Interrupted
         // the 2 below happen when the preliminary connection hasn't exited yet:
@@ -471,6 +472,7 @@ mod tests {
             io::ErrorKind::ConnectionRefused,
             io::ErrorKind::ConnectionReset,
             io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::BrokenPipe,
             io::ErrorKind::TimedOut,
             io::ErrorKind::AddrInUse,
             io::ErrorKind::AddrNotAvailable,
