@@ -171,7 +171,11 @@ impl IngressProcessor {
         let mut last_received_ack = None;
 
         while let Some(mut packet) = self.receiver.next().await {
-            let header = Header::decode_from(&mut packet)?;
+            let header = match Header::decode_from(&mut packet) {
+                Ok(decoded) => decoded,
+                Err(e) if e.kind() == io::ErrorKind::Unsupported => continue,
+                Err(e) => return Err(e),
+            };
             skip_extensions(&mut packet, &header)?;
 
             if log_enabled!(log::Level::Trace) {
@@ -817,6 +821,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_unsupported_packet_is_dropped_without_disconnecting() {
+        let mut conn = Established::new(8).await;
+
+        // valid header but unrecognised type_ver byte
+        let mut bad =
+            BytesMut::from(&packet(TypeVer::Data, conn.conn_id, REMOTE_SEQ, seq(0), b"junk")[..]);
+        bad[0] = 0x64;
+        conn.ingress_tx.try_send(bad.freeze()).unwrap();
+        task::yield_now().await;
+
+        // nothing is sent in response to the dropped packet
+        assert!(conn.sent_headers().await.is_empty());
+
+        // connection is still alive: a valid DATA packet is delivered and acked
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"remote");
+        let sent = conn.sent_headers().await;
+        let summary: Vec<_> = sent.iter().map(|h| (h.type_ver, h.ack_nr)).collect();
+        assert_eq!(summary, [(TypeVer::State, REMOTE_SEQ)]);
+
+        let mut buf = [0u8; 6];
+        conn.remote_pipe
+            .read_exact(&mut buf)
+            .now_or_never()
+            .expect("data not delivered")
+            .unwrap();
+        assert_eq!(&buf, b"remote");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
