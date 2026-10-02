@@ -1,11 +1,10 @@
-mod client;
 mod handler;
 mod incoming;
+mod outgoing;
 
 #[cfg(test)]
 mod tests;
 
-use super::error::Error;
 use super::msgs::*;
 use super::udp;
 use futures_util::StreamExt;
@@ -17,8 +16,8 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc;
 
-pub(super) use client::*;
 pub(super) use incoming::*;
+pub(super) use outgoing::*;
 
 /// Create the layer that facilitates inbound and outbound transactions (queries).
 pub fn setup_queries(
@@ -61,15 +60,15 @@ impl QueryRouter {
                 biased;
                 outgoing = self.outgoing_queries_source.next() => {
                     let Some(query) = outgoing else { break };
-                    if let Err(e) = self.handler.handle_outgoing(query).await {
+                    if let Err(e) = self.handler.handle_outgoing_query(query).await {
                         log::warn!("Error while handling outbound query: {e}");
                         break;
                     }
                 }
                 incoming = self.incoming_msgs_source.recv() => {
                     let Some(msg) = incoming else { break };
-                    if let Err(e) = self.handler.handle_incoming(msg).await {
-                        log::warn!("Error while handling inbound query: {e}");
+                    if let Err(e) = self.handler.handle_incoming_message(msg).await {
+                        log::warn!("Error while handling inbound message: {e}");
                         break;
                     }
                 }
@@ -77,10 +76,4 @@ impl QueryRouter {
             }
         }
     }
-}
-
-struct OutgoingQuery {
-    query: QueryMsg,
-    destination_addr: SocketAddr,
-    response_sink: local_oneshot::Sender<Result<ResponseMsg, Error>>,
 }

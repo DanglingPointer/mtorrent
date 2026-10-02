@@ -1,4 +1,4 @@
-use super::{OutboundQueries, OutgoingQuery};
+use super::OutboundQueries;
 use crate::error::Error;
 use crate::msgs::*;
 use local_async_utils::prelude::*;
@@ -6,6 +6,12 @@ use mtorrent_utils::trace_stopwatch;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use tokio::sync::Semaphore;
+
+pub(super) struct OutgoingQuery {
+    pub(super) query: QueryMsg,
+    pub(super) destination_addr: SocketAddr,
+    pub(super) response_sink: local_oneshot::Sender<Result<ResponseMsg, Error>>,
+}
 
 /// Client for sending outgoing queries to different nodes.
 pub(crate) struct QueryClient {

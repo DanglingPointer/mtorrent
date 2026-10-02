@@ -37,7 +37,7 @@ impl Handler {
         }
     }
 
-    pub async fn handle_outgoing(&mut self, query: OutgoingQuery) -> Result<(), Error> {
+    pub async fn handle_outgoing_query(&mut self, query: OutgoingQuery) -> Result<(), Error> {
         let tid = self.next_tid;
         self.next_tid = tid.wrapping_add(1);
 
@@ -59,7 +59,7 @@ impl Handler {
         }
     }
 
-    pub async fn handle_incoming(
+    pub async fn handle_incoming_message(
         &mut self,
         (msg, src_addr): (Message, SocketAddr),
     ) -> Result<(), Error> {

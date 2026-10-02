@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(From)]
-pub enum IncomingQuery {
+pub(crate) enum IncomingQuery {
     Ping(IncomingPingQuery),
     FindNode(IncomingFindNodeQuery),
     GetPeers(IncomingGetPeersQuery),
@@ -20,7 +20,7 @@ pub enum IncomingQuery {
 }
 
 #[cfg_attr(test, derive(Debug))]
-pub struct IncomingGenericQuery<Q, R> {
+pub(crate) struct IncomingGenericQuery<Q, R> {
     transaction_id: Vec<u8>,
     query: Q,
     response_sink: Option<mpsc::OwnedPermit<(Message, SocketAddr)>>,
@@ -29,10 +29,11 @@ pub struct IncomingGenericQuery<Q, R> {
     _response_type: PhantomData<R>,
 }
 
-pub type IncomingPingQuery = IncomingGenericQuery<PingArgs, PingResponse>;
-pub type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResponse>;
-pub type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
-pub type IncomingAnnouncePeerQuery = IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
+pub(crate) type IncomingPingQuery = IncomingGenericQuery<PingArgs, PingResponse>;
+pub(crate) type IncomingFindNodeQuery = IncomingGenericQuery<FindNodeArgs, FindNodeResponse>;
+pub(crate) type IncomingGetPeersQuery = IncomingGenericQuery<GetPeersArgs, GetPeersResponse>;
+pub(crate) type IncomingAnnouncePeerQuery =
+    IncomingGenericQuery<AnnouncePeerArgs, AnnouncePeerResponse>;
 
 impl IncomingQuery {
     pub(super) fn new(
@@ -62,7 +63,7 @@ impl IncomingQuery {
         }
     }
 
-    pub fn node_id(&self) -> &U160 {
+    pub(crate) fn node_id(&self) -> &U160 {
         match self {
             IncomingQuery::Ping(q) => &q.args().id,
             IncomingQuery::FindNode(q) => &q.args().id,
@@ -71,7 +72,7 @@ impl IncomingQuery {
         }
     }
 
-    pub fn source_addr(&self) -> &SocketAddr {
+    pub(crate) fn source_addr(&self) -> &SocketAddr {
         match self {
             IncomingQuery::Ping(q) => q.source_addr(),
             IncomingQuery::FindNode(q) => q.source_addr(),
@@ -82,15 +83,15 @@ impl IncomingQuery {
 }
 
 impl<Q, R> IncomingGenericQuery<Q, R> {
-    pub fn args(&self) -> &Q {
+    pub(crate) fn args(&self) -> &Q {
         &self.query
     }
 
-    pub fn source_addr(&self) -> &SocketAddr {
+    pub(crate) fn source_addr(&self) -> &SocketAddr {
         &self.source_addr
     }
 
-    pub fn respond(mut self, response: R) -> Result<(), Error>
+    pub(crate) fn respond(mut self, response: R) -> Result<(), Error>
     where
         R: Into<ResponseMsg> + Debug,
     {
@@ -110,7 +111,7 @@ impl<Q, R> IncomingGenericQuery<Q, R> {
         }
     }
 
-    pub fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
+    pub(crate) fn respond_error(mut self, error: ErrorMsg) -> Result<(), Error> {
         log::debug!("[{}] <= {:?}", self.source_addr, error);
         let sender = self.response_sink.take().unwrap_or_else(|| unreachable!()).send((
             Message {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::Error;
 use crate::u160::U160;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::{self, yield_now};
