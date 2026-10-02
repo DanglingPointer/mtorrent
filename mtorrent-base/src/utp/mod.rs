@@ -1,6 +1,7 @@
 mod connection;
 mod handle;
 mod protocol;
+mod reorderer;
 mod retransmitter;
 mod seq;
 mod udp;

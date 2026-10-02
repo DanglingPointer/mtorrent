@@ -66,7 +66,7 @@ pub struct EndpointHandle {
 
 impl EndpointHandle {
     const PIPE_CAPACITY: usize = crate::pwp::MAX_BLOCK_SIZE;
-    const INGRESS_QUEUE: usize = 64;
+    const INGRESS_QUEUE: usize = 128;
 
     pub(super) fn new(cmds: mpsc::Sender<udp::Command>) -> Self {
         Self {

@@ -1,6 +1,7 @@
 use super::protocol::{
     ConnectionState, Header, TypeVer, ValidationError, dbg_header_extensions, skip_extensions,
 };
+use super::reorderer::Reorderer;
 use super::retransmitter::Retransmitter;
 use super::seq::Seq;
 use bytes::buf::Limit;
@@ -168,6 +169,18 @@ impl IngressProcessor {
     async fn run(&mut self, peer_addr: &SocketAddr, stats: &mut IngressStats) -> io::Result<()> {
         define_with!(self.state);
 
+        macro_rules! flush_data {
+            ($header:expr, $packet:expr) => {{
+                with!(|state| state.process_header(&$header));
+                self.ack_required_reporter.signal_one();
+                if let Err(e) = write_and_flush(&mut self.sender, &mut $packet).await {
+                    log::debug!("Ingress processor for {peer_addr} exiting: pipe closed ({e})");
+                    return Ok(());
+                }
+            }};
+        }
+
+        let mut reorderer = Reorderer::new();
         let mut last_received_ack = None;
 
         while let Some(mut packet) = self.receiver.next().await {
@@ -199,13 +212,15 @@ impl IngressProcessor {
                             with!(|state| state.process_header(&header));
                         }
                         TypeVer::Data => {
-                            with!(|state| state.process_header(&header));
-                            self.ack_required_reporter.signal_one();
-                            if let Err(e) = write_and_flush(&mut self.sender, &mut packet).await {
-                                log::debug!(
-                                    "Ingress processor for {peer_addr} exiting: pipe closed ({e})"
+                            flush_data!(header, packet);
+                            // drain the reorder buffer if possible
+                            let mut last_seq = header.seq_nr;
+                            while let Some((header, mut packet)) = reorderer.next_packet(last_seq) {
+                                last_seq = header.seq_nr;
+                                debug_assert!(
+                                    with!(|state| state.validate_header(&header)).is_ok()
                                 );
-                                return Ok(());
+                                flush_data!(header, packet);
                             }
                         }
                         TypeVer::Fin => {
@@ -242,10 +257,14 @@ impl IngressProcessor {
                             self.ack_required_reporter.signal_one();
                         }
                     }
-                    e @ ValidationError::OutOfOrder { .. } => {
+                    e @ ValidationError::OutOfOrder { expected_seq, .. } => {
                         stats.seq_jump_count += 1;
                         if log_enabled!(log::Level::Trace) {
                             log::trace!("Received out-of-order packet from {peer_addr}: {e}");
+                        }
+                        if header.type_ver == TypeVer::Data {
+                            // keep it until the missing packets arrive
+                            reorderer.add_packet(header, packet, expected_seq);
                         }
                     }
                 },
@@ -1007,5 +1026,32 @@ mod tests {
         assert_eq!(received, payload);
         let sent = conn.sent_headers().await;
         assert!(sent.is_empty(), "unexpected packets: {sent:?}");
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_out_of_order_data_is_delivered_in_order_once_gap_is_filled() {
+        let mut conn = Established::new(8).await;
+
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ + seq(2), seq(0), b"cc");
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ + seq(1), seq(0), b"bb");
+        task::yield_now().await;
+
+        // nothing is delivered while the first packet is missing
+        let mut buf = [0u8; 6];
+        assert!(conn.remote_pipe.read(&mut buf).now_or_never().is_none());
+
+        conn.receive_remote_packet(TypeVer::Data, REMOTE_SEQ, seq(0), b"aa");
+        let sent = conn.sent_headers().await;
+        assert_eq!(
+            sent.last().map(|h| (h.type_ver, h.ack_nr)),
+            Some((TypeVer::State, REMOTE_SEQ + seq(2)))
+        );
+
+        conn.remote_pipe
+            .read_exact(&mut buf)
+            .now_or_never()
+            .expect("data not delivered")
+            .unwrap();
+        assert_eq!(&buf, b"aabbcc");
     }
 }
