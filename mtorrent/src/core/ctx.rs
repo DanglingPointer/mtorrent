@@ -479,17 +479,29 @@ fn preliminary_snapshot(ctx: &PreliminaryCtx) -> StateSnapshot<'_> {
 }
 
 fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
-    let bitfield = ctx.accountant.downloaded_pieces_bitfield();
+    let downloaded_pieces = ctx.accountant.downloaded_pieces_bitfield();
+    // Excluded pieces are forgotten by the piece tracker, so they aren't missing. Unless they have
+    // been downloaded anyway (e.g. restored from a previous download), they're the only pieces
+    // that are neither missing nor downloaded. Verified pieces are forgotten too, but remain
+    // downloaded.
+    let relevant_pieces = {
+        let mut missing_pieces = ctx.piece_tracker.missing_pieces_bitfield();
+        missing_pieces |= &downloaded_pieces;
+        missing_pieces
+    };
+
     let metadata_pieces = ctx.metainfo.size().div_ceil(pwp::MAX_BLOCK_SIZE);
     StateSnapshot {
         peers: ctx.peer_states.iter().map(|(addr, state)| (*addr, state)).collect(),
         pieces: PiecesSnapshot {
-            total: bitfield.len(),
-            downloaded: bitfield.count_ones(),
-            bitfield,
+            total: relevant_pieces.count_ones(),
+            downloaded: downloaded_pieces.count_ones(),
+            bitfield: downloaded_pieces,
         },
         bytes: BytesSnapshot {
-            total: ctx.pieces.total_len(),
+            total: relevant_pieces
+                .iter_ones()
+                .fold(0, |total, piece| total + ctx.pieces.piece_len(piece)),
             downloaded: ctx.accountant.accounted_bytes(),
         },
         requests: RequestsSnapshot {
@@ -846,6 +858,51 @@ mod tests {
             Default::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn test_main_snapshot_with_excluded_pieces() {
+        let handle = main_ctx();
+        define_with_ctx!(handle);
+
+        // (pieces.total, pieces.downloaded, pieces.bitfield.len(), bytes.total)
+        let snapshot_counts = || {
+            with_ctx!(|ctx| {
+                let snapshot = main_snapshot(ctx);
+                (
+                    snapshot.pieces.total,
+                    snapshot.pieces.downloaded,
+                    snapshot.pieces.bitfield.len(),
+                    snapshot.bytes.total,
+                )
+            })
+        };
+
+        let (piece_count, total_len, last_len) = with_ctx!(|ctx| {
+            let piece_count = ctx.pieces.piece_count();
+            (piece_count, ctx.pieces.total_len(), ctx.pieces.piece_len(piece_count - 1))
+        });
+        let last = piece_count - 1;
+        assert!(last_len < with_ctx!(|ctx| ctx.pieces.piece_len(0)), "need a short last piece");
+
+        // fresh: everything is to be downloaded
+        assert_eq!(snapshot_counts(), (piece_count, 0, piece_count, total_len));
+
+        // last piece excluded: forgotten without being downloaded
+        with_ctx!(|ctx| ctx.piece_tracker.forget_piece(last));
+        assert_eq!(snapshot_counts(), (piece_count - 1, 0, piece_count, total_len - last_len));
+
+        // first piece downloaded but not verified
+        with_ctx!(|ctx| ctx.accountant.submit_piece(0));
+        assert_eq!(snapshot_counts(), (piece_count - 1, 1, piece_count, total_len - last_len));
+
+        // first piece verified: still counted as to be downloaded
+        with_ctx!(|ctx| ctx.piece_tracker.forget_piece(0));
+        assert_eq!(snapshot_counts(), (piece_count - 1, 1, piece_count, total_len - last_len));
+
+        // excluded piece downloaded anyway (e.g. restored from a previous download): counted again
+        with_ctx!(|ctx| ctx.accountant.submit_piece(last));
+        assert_eq!(snapshot_counts(), (piece_count, 2, piece_count, total_len));
     }
 
     fn preliminary_ctx() -> Handle<PreliminaryCtx> {
