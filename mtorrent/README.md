@@ -29,3 +29,4 @@ Alternatively, compile [`rill`](https://github.com/sachesi/rill) or [`mtorrent-e
 - Protocol Encryption (MSE/PE)
 - uTP
 - sequential download vs rarest-piece-first
+- selective download (skipping some files of a multi-file torrent)

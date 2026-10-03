@@ -161,7 +161,7 @@ impl PeerBuilder {
         .unwrap();
         let content_storage = if let Some(content_path) = self.content_path {
             let (client, content_storage_server) =
-                startup::create_content_storage(&metainfo, content_path).unwrap();
+                startup::create_content_storage(&metainfo, content_path, &[]).unwrap();
             task::spawn(async move {
                 content_storage_server.run().await;
             });

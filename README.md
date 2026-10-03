@@ -31,6 +31,8 @@ This repo contains reusable library crates and a CLI executable. For GUI version
 - [x] [Protocol Encryption](https://css.csail.mit.edu/6.858/2018/projects/bgu-kelvinlu.pdf)
 - [x] [uTP](https://github.com/bittorrent/libutp)
 - [x] [UPnP](https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf)
+- [x] Optional sequential download
+- [x] Selective download
 - [ ] [IPv6 DHT](https://www.bittorrent.org/beps/bep_0032.html)
 - [ ] [STUN (for DHT)?](https://datatracker.ietf.org/doc/html/rfc8489)
 - [ ] [Fast Extension](https://www.bittorrent.org/beps/bep_0006.html)
