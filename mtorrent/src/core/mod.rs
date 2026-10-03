@@ -27,3 +27,12 @@ pub enum CriticalTask {
     ConnectControl,
     PieceVerifier,
 }
+
+/// How a supervised download stage ended, if it didn't fail.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StageExit<T> {
+    /// The stage completed and produced `T`.
+    Completed(T),
+    /// The `cancel` future resolved before the stage completed.
+    Cancelled,
+}

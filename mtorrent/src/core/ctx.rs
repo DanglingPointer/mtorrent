@@ -1,5 +1,5 @@
-use super::{CriticalTask, ctrl};
-use crate::app::main::{DownloadStrategy, Mode, Outcome};
+use super::{CriticalTask, StageExit, ctrl};
+use crate::app::main::{DownloadStrategy, Mode};
 use crate::utils::disk;
 use crate::utils::listener::{
     BytesSnapshot, MetainfoSnapshot, PiecesSnapshot, RequestsSnapshot, StateListener, StateSnapshot,
@@ -14,6 +14,7 @@ use mtorrent_utils::task_watcher::Exit;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::pin::{Pin, pin};
 use std::rc::Rc;
@@ -205,14 +206,13 @@ impl MainCtx {
 
 const COMPLETION_CHECK_INTERVAL: Duration = millisec!(500);
 
-/// Returns `Ok(None)` if `cancel` resolved before the metadata was downloaded.
 pub async fn supervise_metadata_download<L: StateListener>(
     ctx_handle: Handle<PreliminaryCtx>,
     metainfo_filepath: impl AsRef<Path>,
     state_listener: &mut L,
-    mut cancel: Pin<&mut impl Future<Output = ()>>,
+    cancel: Pin<&mut impl Future<Output = ()>>,
     critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
-) -> io::Result<Option<impl IntoIterator<Item = SocketAddr> + 'static>> {
+) -> io::Result<StageExit<impl IntoIterator<Item = SocketAddr> + 'static>> {
     define_with_ctx!(ctx_handle);
 
     fn save_metadata_if_complete(
@@ -227,51 +227,75 @@ pub async fn supervise_metadata_download<L: StateListener>(
         }
     }
 
-    let mut critical_task_exits = critical_task_exits.fuse();
-    let mut premature_exit = critical_task_exits.next();
-
-    let mut snapshot_reporter =
-        pin!(submit_snapshots_periodically(&ctx_handle, state_listener, preliminary_snapshot));
-
-    let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
-    completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
-
-    loop {
-        select! {
-            biased;
-            _ = &mut snapshot_reporter => unreachable!(),
-            _ = completion_check_timer.tick() => {
-                if with_ctx!(|ctx| save_metadata_if_complete(ctx, &metainfo_filepath))? {
-                    return Ok(Some(with_ctx!(|ctx| mem::take(&mut ctx.discovered_peers))));
-                }
+    let exit = supervise(
+        &ctx_handle,
+        state_listener,
+        preliminary_snapshot,
+        cancel,
+        critical_task_exits,
+        |ctx| {
+            if save_metadata_if_complete(ctx, &metainfo_filepath)? {
+                Ok(ControlFlow::Break(mem::take(&mut ctx.discovered_peers)))
+            } else {
+                Ok(ControlFlow::Continue(()))
             }
-            _ = &mut cancel => {
-                with_ctx!(|ctx| log::info!(
-                    "Metadata download for torrent '{}' has been cancelled",
-                    ctx.magnet.name().unwrap_or("unnamed")
-                ));
-                return Ok(None);
-            }
-            Some(exit) = &mut premature_exit => {
-                return Err(premature_exit_error(exit));
-            }
-        }
+        },
+    )
+    .await?;
+
+    if matches!(exit, StageExit::Cancelled) {
+        with_ctx!(|ctx| log::info!(
+            "Metadata download for torrent '{}' has been cancelled",
+            ctx.magnet.name().unwrap_or("unnamed")
+        ));
     }
+    Ok(exit)
 }
 
 pub async fn supervise_content_download<L: StateListener>(
     ctx_handle: Handle<MainCtx>,
     state_listener: &mut L,
+    cancel: Pin<&mut impl Future<Output = ()>>,
+    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
+) -> io::Result<StageExit<()>> {
+    define_with_ctx!(ctx_handle);
+
+    let exit =
+        supervise(&ctx_handle, state_listener, main_snapshot, cancel, critical_task_exits, |ctx| {
+            Ok(if ctrl::is_finished(ctx) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            })
+        })
+        .await?;
+
+    if matches!(exit, StageExit::Cancelled) {
+        with_ctx!(|ctx| log::info!(
+            "Content download for torrent '{}' has been cancelled",
+            ctx.metainfo.name().unwrap_or("unnamed")
+        ));
+    }
+    Ok(exit)
+}
+
+/// Periodically calls `check_completion` until it breaks with a value (`Completed`), `cancel`
+/// resolves (`Cancelled`), or a critical task exits (`Err`).
+async fn supervise<C, L: StateListener, T>(
+    ctx_handle: &Handle<C>,
+    state_listener: &mut L,
+    generate_snapshot: fn(&C) -> StateSnapshot<'_>,
     mut cancel: Pin<&mut impl Future<Output = ()>>,
     critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
-) -> io::Result<Outcome> {
+    mut check_completion: impl FnMut(&mut C) -> io::Result<ControlFlow<T>>,
+) -> io::Result<StageExit<T>> {
     define_with_ctx!(ctx_handle);
 
     let mut critical_task_exits = critical_task_exits.fuse();
     let mut premature_exit = critical_task_exits.next();
 
     let mut snapshot_reporter =
-        pin!(submit_snapshots_periodically(&ctx_handle, state_listener, main_snapshot));
+        pin!(submit_snapshots_periodically(ctx_handle, state_listener, generate_snapshot));
 
     let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
     completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
@@ -281,19 +305,22 @@ pub async fn supervise_content_download<L: StateListener>(
             biased;
             _ = &mut snapshot_reporter => unreachable!(),
             _ = completion_check_timer.tick() => {
-                if with_ctx!(|ctx| ctrl::is_finished(ctx)) {
-                    return Ok(Outcome::Finished);
+                if let ControlFlow::Break(result) = with_ctx!(|ctx| check_completion(ctx))? {
+                    return Ok(StageExit::Completed(result));
                 }
             }
             _ = &mut cancel => {
-                with_ctx!(|ctx| log::info!(
-                    "Content download for torrent '{}' has been cancelled",
-                    ctx.metainfo.name().unwrap_or("unnamed")
-                ));
-                return Ok(Outcome::Cancelled);
+                return Ok(StageExit::Cancelled);
             }
             Some(exit) = &mut premature_exit => {
-                return Err(premature_exit_error(exit));
+                return Err(match exit {
+                    Exit::Completed(tag) => {
+                        io::Error::other(format!("task {tag:?} completed prematurely"))
+                    }
+                    Exit::Dropped(tag) => {
+                        io::Error::other(format!("task {tag:?} was dropped prematurely"))
+                    }
+                });
             }
         }
     }
@@ -396,15 +423,6 @@ async fn apply_loaded_progress(
                 log::warn!("Verification of piece {piece_index} failed: {e}");
                 with_ctx!(|ctx| ctx.accountant.remove_piece(piece_index));
             }
-        }
-    }
-}
-
-fn premature_exit_error(exit: Exit<CriticalTask>) -> io::Error {
-    match exit {
-        Exit::Completed(tag) => io::Error::other(format!("task {tag:?} completed prematurely")),
-        Exit::Dropped(tag) => {
-            io::Error::other(format!("task {tag:?} was dropped prematurely (panicked or aborted)"))
         }
     }
 }
@@ -873,10 +891,7 @@ mod tests {
         .await
         .expect("supervisor did not react to stopped critical task");
         let error = result.unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "task PieceVerifier was dropped prematurely (panicked or aborted)"
-        );
+        assert_eq!(error.to_string(), "task PieceVerifier was dropped prematurely");
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -902,7 +917,7 @@ mod tests {
             stream_panicking_after_end(),
         )
         .await;
-        assert_eq!(result.unwrap(), Outcome::Cancelled);
+        assert_eq!(result.unwrap(), StageExit::Cancelled);
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -935,6 +950,6 @@ mod tests {
             stream_panicking_after_end(),
         )
         .await;
-        assert!(result.unwrap().is_none());
+        assert!(matches!(result.unwrap(), StageExit::Cancelled));
     }
 }

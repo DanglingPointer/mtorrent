@@ -45,6 +45,15 @@ pub enum Outcome {
     Cancelled,
 }
 
+impl<T> From<core::StageExit<T>> for Outcome {
+    fn from(exit: core::StageExit<T>) -> Self {
+        match exit {
+            core::StageExit::Completed(_) => Outcome::Finished,
+            core::StageExit::Cancelled => Outcome::Cancelled,
+        }
+    }
+}
+
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -227,7 +236,7 @@ pub async fn single_torrent(
             )
             .await
         } else {
-            let Some((metainfo_filepath, peers)) = preliminary_stage(
+            let core::StageExit::Completed((metainfo_filepath, peers)) = preliminary_stage(
                 params.clone(),
                 metainfo_uri,
                 &cfg.output_dir,
@@ -238,7 +247,7 @@ pub async fn single_torrent(
             )
             .await?
             else {
-                return Ok(Outcome::Cancelled);
+                return Ok(core::StageExit::Cancelled);
             };
             log::info!("Metadata downloaded successfully, starting content download");
             main_stage(
@@ -262,7 +271,9 @@ pub async fn single_torrent(
         }
     };
 
-    run_then_cleanup(download, shutdown_upnp, tasks_to_join).await
+    run_then_cleanup(download, shutdown_upnp, tasks_to_join)
+        .await
+        .map(Outcome::from)
 }
 
 /// Run a future, then wait for cleanup before returning its result.
@@ -281,7 +292,6 @@ where
     result
 }
 
-/// Returns `Ok(None)` if `cancel` resolved before the metadata was downloaded.
 async fn preliminary_stage(
     params: Params,
     magnet_link: impl AsRef<str>,
@@ -290,7 +300,7 @@ async fn preliminary_stage(
     listener: &mut impl listener::StateListener,
     cancel: Pin<&mut impl Future<Output = ()>>,
     handles: Handles<'_>,
-) -> io::Result<Option<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)>> {
+) -> io::Result<core::StageExit<(PathBuf, impl IntoIterator<Item = SocketAddr> + 'static)>> {
     let magnet_link: input::MagnetLink = magnet_link
         .as_ref()
         .parse()
@@ -384,7 +394,10 @@ async fn preliminary_stage(
     )
     .await;
     tasks.shutdown().await;
-    Ok(result?.map(|peers| (metainfo_filepath, peers)))
+    Ok(match result? {
+        core::StageExit::Completed(peers) => core::StageExit::Completed((metainfo_filepath, peers)),
+        core::StageExit::Cancelled => core::StageExit::Cancelled,
+    })
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -397,7 +410,7 @@ async fn main_stage(
     cancel: Pin<&mut impl Future<Output = ()>>,
     handles: Handles<'_>,
     extra_peers: impl IntoIterator<Item = SocketAddr>,
-) -> io::Result<Outcome> {
+) -> io::Result<core::StageExit<()>> {
     let metainfo = startup::read_metainfo(&metainfo_filepath)
         .inspect_err(|e| log::error!("Invalid metainfo file: {e}"))?;
     let _sw = info_stopwatch!("Main stage for torrent '{}'", metainfo.name().unwrap_or("n/a"));
