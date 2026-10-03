@@ -1,4 +1,5 @@
 use super::ctx;
+use crate::app::main::Mode;
 use crate::core::PeerReporter;
 use crate::utils::disk;
 use futures_util::future;
@@ -91,8 +92,9 @@ async fn announce_periodically(
     mut handler: impl AnnounceHandler,
     config_dir: impl AsRef<Path>,
 ) {
+    let mut sequence_num = 0;
     loop {
-        let request = handler.generate_request();
+        let request = handler.generate_request(sequence_num);
         log::debug!("Announcing to {url:?}: {request:?}");
         match tracker_client.announce(url.clone(), request).await {
             Ok(mut response) => {
@@ -102,6 +104,7 @@ async fn announce_periodically(
                 for peer_addr in response.peers {
                     peer_reporter.report_discovered(peer_addr, PeerOrigin::Tracker).await;
                 }
+                sequence_num += 1;
                 time::sleep_until(reannounce_at).await;
             }
             Err(e) => {
@@ -130,31 +133,39 @@ fn trackers_from_metainfo(metainfo: &Metainfo) -> Box<dyn Iterator<Item = &str> 
 // ------------------------------------------------------------------------------------------------
 
 trait AnnounceHandler {
-    fn generate_request(&mut self) -> AnnounceRequest;
+    fn generate_request(&mut self, sequence_num: usize) -> AnnounceRequest;
     fn preprocess_response(&mut self, response: &mut AnnounceResponse);
 }
 
 impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
-    fn generate_request(&mut self) -> AnnounceRequest {
-        self.with(|ctx| AnnounceRequest {
-            info_hash: *ctx.metainfo.info_hash(),
-            downloaded: ctx.accountant.accounted_bytes(),
-            left: ctx.accountant.missing_bytes(),
-            uploaded: ctx.peer_states.uploaded_bytes(),
-            local_peer_id: *ctx.const_data.local_peer_id(),
-            listener_port: ctx.const_data.pwp_external_port(),
-            event: if ctx.accountant.missing_bytes() == 0 {
-                Some(AnnounceEvent::Completed)
-            } else if ctx.accountant.accounted_bytes() == 0 || ctx.peer_states.iter().count() == 0 {
-                Some(AnnounceEvent::Started)
-            } else {
-                None
-            },
-            num_want: if ctx.accountant.missing_bytes() == 0 {
-                0
-            } else {
-                100
-            },
+    fn generate_request(&mut self, sequence_num: usize) -> AnnounceRequest {
+        self.with(|ctx| {
+            let missing_pieces = ctx.piece_tracker.missing_pieces_bitfield();
+            let missing_bytes = missing_pieces
+                .iter_ones()
+                .fold(0, |total, piece_index| total + ctx.pieces.piece_len(piece_index));
+            AnnounceRequest {
+                info_hash: *ctx.metainfo.info_hash(),
+                downloaded: ctx.accountant.accounted_bytes(),
+                left: missing_bytes,
+                uploaded: ctx.peer_states.uploaded_bytes(),
+                local_peer_id: *ctx.const_data.local_peer_id(),
+                listener_port: ctx.const_data.pwp_external_port(),
+                event: if sequence_num == 0 {
+                    Some(AnnounceEvent::Started)
+                } else if missing_pieces.not_any() {
+                    Some(AnnounceEvent::Completed)
+                } else {
+                    None
+                },
+                num_want: if missing_pieces.not_any()
+                    && matches!(ctx.const_data.mode(), Mode::Leech)
+                {
+                    0
+                } else {
+                    100
+                },
+            }
         })
     }
 
@@ -164,7 +175,7 @@ impl AnnounceHandler for ctx::Handle<ctx::MainCtx> {
 }
 
 impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
-    fn generate_request(&mut self) -> AnnounceRequest {
+    fn generate_request(&mut self, sequence_num: usize) -> AnnounceRequest {
         self.with(|ctx| AnnounceRequest {
             info_hash: *ctx.magnet.info_hash(),
             downloaded: 0,
@@ -172,7 +183,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
             uploaded: 0,
             local_peer_id: *ctx.const_data.local_peer_id(),
             listener_port: ctx.const_data.pwp_external_port(),
-            event: Some(AnnounceEvent::Started),
+            event: (sequence_num == 0).then_some(AnnounceEvent::Started),
             num_want: 100,
         })
     }
@@ -195,6 +206,7 @@ impl AnnounceHandler for ctx::Handle<ctx::PreliminaryCtx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::main::DownloadStrategy;
     use mtorrent_base::input::MagnetLink;
     use mtorrent_utils::peer_id::PeerId;
     use std::collections::HashSet;
@@ -378,5 +390,104 @@ mod tests {
         // verify discovered_peers
         let discovered_peers = handle.with(|ctx| ctx.discovered_peers.clone());
         assert_eq!(discovered_peers, [peer1, peer2, peer3].into_iter().collect());
+    }
+
+    #[rstest::rstest]
+    #[case::leech(Mode::Leech, 0)]
+    #[case::seeder(Mode::Seeder, 100)]
+    fn test_main_ctx_announce_request(#[case] mode: Mode, #[case] num_want_when_complete: usize) {
+        let metainfo = Metainfo::from_file("../mtorrent-cli/tests/assets/example.torrent").unwrap();
+        let mut handle = ctx::MainCtx::new(
+            metainfo,
+            PeerId::from(&[0u8; 20]),
+            6881,
+            6881,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+            DownloadStrategy::RarestFirst,
+            mode,
+        )
+        .unwrap();
+        let (total_len, piece_count, first_len, last_len) = handle.with(|ctx| {
+            let piece_count = ctx.pieces.piece_count();
+            (
+                ctx.pieces.total_len(),
+                piece_count,
+                ctx.pieces.piece_len(0),
+                ctx.pieces.piece_len(piece_count - 1),
+            )
+        });
+        assert!(last_len < first_len, "test requires a short last piece");
+        assert!(piece_count > 3, "test requires more than 3 pieces");
+
+        // piece 1 is excluded: forgotten without being downloaded
+        let excluded_piece = 1;
+        let excluded_len = handle.with(|ctx| {
+            ctx.piece_tracker.forget_piece(excluded_piece);
+            ctx.pieces.piece_len(excluded_piece)
+        });
+
+        // fresh: first announce is Started, everything except the excluded piece is left
+        let request = handle.generate_request(0);
+        assert!(matches!(request.event, Some(AnnounceEvent::Started)), "{request:?}");
+        assert_eq!(request.downloaded, 0);
+        assert_eq!(request.left, total_len - excluded_len);
+        assert_eq!(request.num_want, 100);
+
+        // first piece downloaded but not verified: counts as downloaded, but still left
+        handle.with(|ctx| ctx.accountant.submit_piece(0));
+        let request = handle.generate_request(1);
+        assert!(request.event.is_none(), "{request:?}");
+        assert_eq!(request.downloaded, first_len);
+        assert_eq!(request.left, total_len - excluded_len);
+        assert_eq!(request.num_want, 100);
+
+        // first piece verified, last piece downloaded and verified: only remaining pieces are left
+        handle.with(|ctx| {
+            ctx.piece_tracker.forget_piece(0);
+            ctx.accountant.submit_piece(piece_count - 1);
+            ctx.piece_tracker.forget_piece(piece_count - 1);
+        });
+        let request = handle.generate_request(2);
+        assert!(request.event.is_none(), "{request:?}");
+        assert_eq!(request.downloaded, first_len + last_len);
+        assert_eq!(request.left, total_len - excluded_len - first_len - last_len);
+        assert_eq!(request.num_want, 100);
+
+        // all non-excluded pieces downloaded and verified: Completed, nothing left
+        handle.with(|ctx| {
+            for piece_index in (0..piece_count).filter(|&i| i != excluded_piece) {
+                ctx.accountant.submit_piece(piece_index);
+                ctx.piece_tracker.forget_piece(piece_index);
+            }
+        });
+        let request = handle.generate_request(3);
+        assert!(matches!(request.event, Some(AnnounceEvent::Completed)), "{request:?}");
+        assert_eq!(request.downloaded, total_len - excluded_len);
+        assert_eq!(request.left, 0);
+        assert_eq!(request.num_want, num_want_when_complete);
+    }
+
+    #[test]
+    fn test_preliminary_ctx_announce_started_only_first() {
+        let magnet = "magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9"
+            .parse::<MagnetLink>()
+            .unwrap();
+        let mut handle = ctx::PreliminaryCtx::new(
+            magnet,
+            PeerId::from(&[0u8; 20]),
+            6881,
+            6881,
+            Ipv4Addr::LOCALHOST,
+            Ipv6Addr::LOCALHOST,
+            None,
+        );
+
+        let request = handle.generate_request(0);
+        assert!(matches!(request.event, Some(AnnounceEvent::Started)), "{request:?}");
+
+        let request = handle.generate_request(1);
+        assert!(request.event.is_none(), "{request:?}");
     }
 }
