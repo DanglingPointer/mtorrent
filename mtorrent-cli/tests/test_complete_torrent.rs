@@ -21,6 +21,22 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tokio::{join, runtime, task, time};
 
+/// Creates a directory and removes it on drop, even if the test panics.
+struct TestDir(&'static str);
+
+impl TestDir {
+    fn create(path: &'static str) -> Self {
+        fs::create_dir_all(path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(self.0);
+    }
+}
+
 trait Peer {
     const NEEDS_INPUT_DATA: bool;
 
@@ -1045,6 +1061,7 @@ async fn collect_reported_addrs(
 #[tokio::test]
 async fn test_accept_50_seeders_and_download_multifile_torrent() {
     let output_dir = "test_accept_50_seeders_and_download_multifile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
     let port = 15000;
 
@@ -1078,13 +1095,13 @@ async fn test_accept_50_seeders_and_download_multifile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_50_utp_seeders_and_download_multifile_torrent() {
     let output_dir = "test_accept_50_utp_seeders_and_download_multifile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
     let port = 15001;
 
@@ -1118,13 +1135,13 @@ async fn test_accept_50_utp_seeders_and_download_multifile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test(flavor = "local")]
 async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     let output_dir = "test_connect_to_50_seeders_and_download_multifile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
     let port = 15002;
 
@@ -1175,13 +1192,13 @@ async fn test_connect_to_50_seeders_and_download_multifile_torrent() {
     tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_1_leech_and_upload_multifile_torrent() {
     let output_dir = "test_accept_1_leech_and_upload_multifile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets";
     let port = 15003;
 
@@ -1215,13 +1232,13 @@ async fn test_accept_1_leech_and_upload_multifile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(output_dir, data_dir, MULTIFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_1_utp_leech_and_upload_multifile_torrent() {
     let output_dir = "test_accept_1_utp_leech_and_upload_multifile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets";
     let port = 15004;
 
@@ -1255,13 +1272,13 @@ async fn test_accept_1_utp_leech_and_upload_multifile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(output_dir, data_dir, MULTIFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_50_seeders_and_download_monofile_torrent() {
     let output_dir = "test_accept_50_seeders_and_download_monofile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/pcap";
     let port = 16000;
 
@@ -1295,13 +1312,13 @@ async fn test_accept_50_seeders_and_download_monofile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_50_utp_seeders_and_download_monofile_torrent() {
     let output_dir = "test_accept_50_utp_seeders_and_download_monofile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/pcap";
     let port = 16001;
 
@@ -1335,13 +1352,13 @@ async fn test_accept_50_utp_seeders_and_download_monofile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test(flavor = "local")]
 async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
     let output_dir = "test_connect_to_50_seeders_and_download_monofile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/pcap";
     let port = 16002;
 
@@ -1396,13 +1413,13 @@ async fn test_connect_to_50_seeders_and_download_monofile_torrent() {
     tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_1_leech_and_upload_monofile_torrent() {
     let output_dir = "test_accept_1_leech_and_upload_monofile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets";
     let port = 16003;
 
@@ -1436,13 +1453,13 @@ async fn test_accept_1_leech_and_upload_monofile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(output_dir, data_dir, MONOFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test]
 async fn test_accept_1_utp_leech_and_upload_monofile_torrent() {
     let output_dir = "test_accept_1_utp_leech_and_upload_monofile_torrent";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets";
     let port = 16004;
 
@@ -1476,15 +1493,14 @@ async fn test_accept_1_utp_leech_and_upload_monofile_torrent() {
     kill_seeding_mtorrent(mtorrent);
 
     compare_input_and_output(output_dir, data_dir, MONOFILE_TORRENT_NAME);
-    std::fs::remove_dir_all(output_dir).unwrap();
     let _ = std::fs::remove_file("tests/assets/.mtorrent_cfg");
 }
 
 #[tokio::test(flavor = "local")]
 async fn test_download_torrent_from_magnet_link() {
     let output_dir = "test_download_torrent_from_magnet_link";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
-    fs::create_dir_all(output_dir).unwrap();
     let port = 17000;
 
     let peer_count = 10;
@@ -1537,14 +1553,13 @@ async fn test_download_torrent_from_magnet_link() {
     tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
-    fs::remove_dir_all(output_dir).unwrap();
 }
 
 #[tokio::test(flavor = "local")]
 async fn test_utp_download_torrent_from_magnet_link() {
     let output_dir = "test_utp_download_torrent_from_magnet_link";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/pcap";
-    fs::create_dir_all(output_dir).unwrap();
     let port = 17001;
 
     let peer_count = 10;
@@ -1593,7 +1608,6 @@ async fn test_utp_download_torrent_from_magnet_link() {
     wait_for_leeching_mtorrent(mtorrent, peers).await;
 
     compare_input_and_output(data_dir, output_dir, MONOFILE_TORRENT_NAME);
-    fs::remove_dir_all(output_dir).unwrap();
 }
 
 #[tokio::test(flavor = "local")]
@@ -1605,6 +1619,7 @@ async fn test_stop_resume_utp_download() {
         .init();
 
     let output_dir = "test_stop_resume_utp_download";
+    let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
     let port = 17002;
 
@@ -1750,5 +1765,4 @@ async fn test_stop_resume_utp_download() {
     tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
-    fs::remove_dir_all(output_dir).unwrap();
 }

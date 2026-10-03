@@ -15,6 +15,22 @@ struct ConfigContent {
     nodes: Vec<String>,
 }
 
+/// Creates a directory and removes it on drop, even if the test panics.
+struct TestDir(&'static Path);
+
+impl TestDir {
+    fn create(path: &'static (impl AsRef<Path> + ?Sized)) -> Self {
+        fs::create_dir_all(path).unwrap();
+        Self(path.as_ref())
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(self.0);
+    }
+}
+
 fn loopback_iface_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "Loopback Pseudo-Interface 1"
@@ -28,7 +44,7 @@ fn loopback_iface_name() -> &'static str {
 #[test]
 fn test_bootstrap_dht_node() {
     let working_dir = "test_bootstrap_dht_node";
-    fs::create_dir_all(working_dir).unwrap();
+    let _dir_guard = TestDir::create(working_dir);
 
     let config_file = Path::new(working_dir).join(".mtorrent_dht");
     assert!(matches!(fs::exists(&config_file), Ok(false)));
@@ -65,8 +81,6 @@ fn test_bootstrap_dht_node() {
     let content: ConfigContent = serde_json::from_str(&config_str).unwrap();
     assert_eq!(content.local_id.len(), 40);
     assert!(content.nodes.len() > 6, "Only {} nodes in config", content.nodes.len());
-
-    fs::remove_dir_all(working_dir).unwrap();
 }
 
 #[test]
@@ -78,8 +92,8 @@ fn test_two_dht_nodes_discover_and_announce() {
 
     let working_dir1 = Path::new("test_two_dht_nodes_1");
     let working_dir2 = Path::new("test_two_dht_nodes_2");
-    fs::create_dir_all(working_dir1).unwrap();
-    fs::create_dir_all(working_dir2).unwrap();
+    let _dir1_guard = TestDir::create(working_dir1);
+    let _dir2_guard = TestDir::create(working_dir2);
 
     let node1_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 50193).into();
     let node2_addr: SocketAddr = (Ipv4Addr::LOCALHOST, 50194).into();
@@ -178,7 +192,4 @@ fn test_two_dht_nodes_discover_and_announce() {
         "{:?}",
         content2.nodes
     );
-
-    fs::remove_dir_all(working_dir1).unwrap();
-    fs::remove_dir_all(working_dir2).unwrap();
 }
