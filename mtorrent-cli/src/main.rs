@@ -3,6 +3,7 @@ use local_async_utils::prelude::*;
 use mtorrent::app;
 use mtorrent::app::dht;
 use mtorrent::utils::listener;
+use mtorrent_base::input;
 use mtorrent_utils::peer_id::PeerId;
 use mtorrent_utils::{info_stopwatch, worker};
 use std::io;
@@ -43,6 +44,48 @@ struct Cli {
     /// Keep seeding after the download is complete (until interrupted)
     #[arg(long)]
     seed: bool,
+
+    /// Comma-separated 0-based indices of files to skip (see --list-files). Excluded files are
+    /// deleted when the download stops. Only for multi-file torrents
+    #[arg(
+        short = 'x',
+        long,
+        value_name = "INDICES",
+        value_delimiter = ',',
+        conflicts_with = "seed"
+    )]
+    exclude: Vec<usize>,
+
+    /// Print the files of a .torrent file with their indices and exit
+    #[arg(long, conflicts_with_all = ["seed", "exclude"])]
+    list_files: bool,
+}
+
+fn list_files(metainfo_uri: &str) -> io::Result<()> {
+    if !Path::new(metainfo_uri).is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--list-files requires a path to a .torrent file",
+        ));
+    }
+    let metainfo = input::Metainfo::from_file(metainfo_uri)?;
+
+    let files: Vec<(usize, PathBuf)> = if let Some(files) = metainfo.files() {
+        files.collect()
+    } else {
+        let length = metainfo
+            .length()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no length in metainfo"))?;
+        let name = metainfo.name().unwrap_or("unnamed");
+        vec![(length, PathBuf::from(name))]
+    };
+
+    let index_width = files.len().saturating_sub(1).to_string().len();
+    let length_width = files.iter().map(|(len, _)| len.to_string().len()).max().unwrap_or(0);
+    for (index, (length, path)) in files.iter().enumerate() {
+        println!("{index:>index_width$}  {length:>length_width$}  {}", path.display());
+    }
+    Ok(())
 }
 
 struct SnapshotLogger;
@@ -74,6 +117,10 @@ fn main() -> io::Result<()> {
     let _sw = info_stopwatch!("mtorrent");
 
     let cli = Cli::parse();
+
+    if cli.list_files {
+        return list_files(&cli.metainfo_uri);
+    }
 
     let output_dir = if let Some(cli_arg) = cli.output {
         cli_arg
@@ -159,7 +206,7 @@ fn main() -> io::Result<()> {
                 } else {
                     app::main::Mode::Leech
                 },
-                excluded_files: Vec::new(),
+                excluded_files: cli.exclude,
             },
             app::main::Context {
                 dht_handle: dht_cmds,

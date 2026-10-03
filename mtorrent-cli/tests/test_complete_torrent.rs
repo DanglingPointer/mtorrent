@@ -251,6 +251,7 @@ impl Seeder {
         upload_chans: pwp::UploadChannels,
         content_storage: data::StorageClient,
         info: data::PieceInfo,
+        require_all_pieces_downloaded: bool,
     ) {
         let piece_count = info.piece_count();
         let bitfield = {
@@ -351,8 +352,10 @@ impl Seeder {
                 break;
             }
         }
-        assert!(remote_pieces.all());
-        assert_eq!(haves_count + bitfield_ones_count, remote_pieces.len());
+        if require_all_pieces_downloaded {
+            assert!(remote_pieces.all());
+            assert_eq!(haves_count + bitfield_ones_count, remote_pieces.len());
+        }
         drop(tx);
     }
 }
@@ -399,9 +402,41 @@ impl Peer for Seeder {
                 upload_chans,
                 content_storage,
                 pieces,
+                true,
             )
             .await;
         }
+    }
+}
+
+/// Seeder that serves content until the remote disconnects, without requiring the remote to
+/// download all pieces.
+struct PartialSeeder;
+
+impl Peer for PartialSeeder {
+    const NEEDS_INPUT_DATA: bool = true;
+
+    async fn run(
+        index: u8,
+        peer_count: usize,
+        download_chans: pwp::DownloadChannels,
+        upload_chans: pwp::UploadChannels,
+        ext_chans: Option<pwp::ExtendedChannels>,
+        content_storage: data::StorageClient,
+        _meta_storage: data::StorageClient,
+        metainfo: Rc<Metainfo>,
+    ) {
+        assert!(ext_chans.is_none());
+        Seeder::seed_content(
+            index as usize,
+            peer_count,
+            download_chans,
+            upload_chans,
+            content_storage,
+            get_piece_info(&metainfo),
+            false,
+        )
+        .await;
     }
 }
 
@@ -896,6 +931,31 @@ async fn start_tracker<'a>(
     (server, mock)
 }
 
+fn verify_files_identical(p1: impl AsRef<Path>, p2: impl AsRef<Path>) {
+    let name1 = p1.as_ref().to_string_lossy().into_owned();
+    let name2 = p2.as_ref().to_string_lossy().into_owned();
+    let mut f1 = File::open(p1).unwrap();
+    let mut f2 = File::open(p2).unwrap();
+    let buff1: &mut [u8] = &mut [0; 1024];
+    let buff2: &mut [u8] = &mut [0; 1024];
+    loop {
+        match (f1.read(buff1), f2.read(buff2)) {
+            (Ok(f1_read_len), Ok(f2_read_len)) => {
+                if f1_read_len != f2_read_len {
+                    panic!("{name1} and {name2} are different");
+                }
+                if f1_read_len == 0 {
+                    break;
+                }
+                if buff1[0..f1_read_len] != buff2[0..f2_read_len] {
+                    panic!("{name1} and {name2} are different");
+                }
+            }
+            _ => panic!(),
+        }
+    }
+}
+
 fn compare_input_and_output(
     input_dir: impl AsRef<Path> + Debug,
     output_dir: impl AsRef<Path>,
@@ -906,30 +966,6 @@ fn compare_input_and_output(
     assert!(input_dir.as_ref().is_dir());
     println!("comparing {input_dir:?} and {output_dir:?}");
 
-    fn verify_files_identical(p1: impl AsRef<Path>, p2: impl AsRef<Path>) {
-        let name1 = p1.as_ref().to_string_lossy().into_owned();
-        let name2 = p2.as_ref().to_string_lossy().into_owned();
-        let mut f1 = File::open(p1).unwrap();
-        let mut f2 = File::open(p2).unwrap();
-        let buff1: &mut [u8] = &mut [0; 1024];
-        let buff2: &mut [u8] = &mut [0; 1024];
-        loop {
-            match (f1.read(buff1), f2.read(buff2)) {
-                (Ok(f1_read_len), Ok(f2_read_len)) => {
-                    if f1_read_len != f2_read_len {
-                        panic!("{name1} and {name2} are different");
-                    }
-                    if f1_read_len == 0 {
-                        break;
-                    }
-                    if buff1[0..f1_read_len] != buff2[0..f2_read_len] {
-                        panic!("{name1} and {name2} are different");
-                    }
-                }
-                _ => panic!(),
-            }
-        }
-    }
     for (input, output) in iter::zip(
         fs::read_dir(input_dir).unwrap().filter(|item| {
             item.as_ref().is_ok_and(|dir_entry| {
@@ -1766,4 +1802,114 @@ async fn test_stop_resume_utp_download() {
     tracker_mock.assert_async().await;
 
     compare_input_and_output(data_dir, output_dir, MULTIFILE_TORRENT_NAME);
+}
+
+#[tokio::test(flavor = "local")]
+async fn test_connect_to_seeders_and_download_multifile_torrent_with_excluded_file() {
+    let output_dir = "test_connect_to_seeders_and_download_multifile_torrent_with_excluded_file";
+    let _dir_guard = TestDir::create(output_dir);
+    let data_dir = "tests/assets/screenshots";
+    let port = 17003;
+    let excluded_file_index = 1;
+
+    // few seeders, so that each of them owns pieces in every file and mtorrent connects to all
+    let seeder_count = 5;
+
+    let (addr_tx, addr_rx) = mpsc::unbounded_channel::<SocketAddr>();
+
+    let peers = task::spawn_local(launch_peers::<PartialSeeder>(
+        MULTIFILE_METAINFO_FILE,
+        data_dir,
+        ConnectionMode::Incoming {
+            num_peers: seeder_count,
+            addr_tx,
+        },
+        false,
+        port,
+    ));
+
+    let seeder_ips = collect_reported_addrs(addr_rx, seeder_count).await;
+
+    let (server, tracker_mock) =
+        start_tracker(seeder_ips.iter(), "%FA%A75%97%E7%99h%E1%94o%CB%22%3E%27J%A5%BB%7D.%DA", 1)
+            .await;
+
+    let metainfo_file = create_torrent_file_from_template(
+        MULTIFILE_METAINFO_FILE,
+        output_dir,
+        server.socket_address().port(),
+    );
+
+    let mtorrent = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg(&metainfo_file)
+        .arg("-o")
+        .arg(output_dir)
+        .arg("--config-dir")
+        .arg(output_dir)
+        .arg("--no-dht")
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-i")
+        .arg(loopback_iface_name())
+        .arg("-x")
+        .arg(excluded_file_index.to_string())
+        .env("MTORRENT_PWP_MODE", "TCP_ONLY")
+        .spawn()
+        .expect("failed to execute 'mtorrent'");
+
+    wait_for_leeching_mtorrent(mtorrent, peers).await;
+
+    tracker_mock.assert_async().await;
+
+    let metainfo = Metainfo::from_file(MULTIFILE_METAINFO_FILE).unwrap();
+    let content_dir = Path::new(output_dir).join(MULTIFILE_TORRENT_NAME);
+    for (index, (_length, path)) in metainfo.files().unwrap().enumerate() {
+        let output_path = content_dir.join(&path);
+        if index == excluded_file_index {
+            assert!(!output_path.exists(), "{output_path:?} should have been deleted");
+        } else {
+            verify_files_identical(Path::new(data_dir).join(&path), output_path);
+        }
+    }
+}
+
+#[test]
+fn test_list_files() {
+    let output = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg("--list-files")
+        .arg(MULTIFILE_METAINFO_FILE)
+        .output()
+        .expect("failed to execute 'mtorrent'");
+    assert!(output.status.success(), "'mtorrent' exited with {}", output.status);
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    println!("Output:\n{stdout}");
+    let listed_files: Vec<(usize, usize, String)> = stdout
+        .lines()
+        .map(|line| {
+            let mut parts = line.split_whitespace();
+            let index = parts.next().unwrap().parse().unwrap();
+            let length = parts.next().unwrap().parse().unwrap();
+            // file names can contain spaces
+            let name = parts.collect::<Vec<_>>().join(" ");
+            (index, length, name)
+        })
+        .collect();
+
+    let metainfo = Metainfo::from_file(MULTIFILE_METAINFO_FILE).unwrap();
+    let expected_files: Vec<(usize, usize, String)> = metainfo
+        .files()
+        .unwrap()
+        .enumerate()
+        .map(|(index, (length, path))| (index, length, path.display().to_string()))
+        .collect();
+    assert_eq!(expected_files.len(), 3);
+    assert_eq!(listed_files, expected_files);
+
+    let output = process::Command::new(env!("CARGO_BIN_EXE_mtorrent-cli"))
+        .arg("--list-files")
+        .arg("magnet:?xt=urn:btih:1EBD3DBFBB25C1333F51C99C7EE670FC2A1727C9")
+        .output()
+        .expect("failed to execute 'mtorrent'");
+    assert!(!output.status.success(), "'mtorrent' should fail for a magnet link");
 }
