@@ -425,7 +425,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "local")]
     async fn test_replaced_untrusted_peer_verifies_queued_pieces_without_trusting_replacement() {
         let mut data = new_data();
         let mut verified_pieces = data.progress_reporter.subscribe();
@@ -460,7 +460,7 @@ mod tests {
         assert!(!data.trusted_peers.contains(&peer_addr));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "local")]
     async fn test_replaced_good_peer_is_not_trusted_after_queued_pieces_verified() {
         let mut data = new_data();
         let mut verified_pieces = data.progress_reporter.subscribe();

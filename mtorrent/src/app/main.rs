@@ -441,6 +441,12 @@ async fn main_stage(
         core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
     tasks_to_cancel.spawn_local(tw.watch(core::CriticalTask::PieceVerifier, verifier.run()));
 
+    tasks_to_cancel.spawn_local(core::restore_and_persist_progress(
+        ctx.clone(),
+        content_dir,
+        content_storage.clone(),
+    ));
+
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {
             content_storage,
@@ -502,8 +508,7 @@ async fn main_stage(
         }
     });
 
-    let result =
-        core::supervise_content_download(ctx, content_dir, listener, cancel, tw.into_exits()).await;
+    let result = core::supervise_content_download(ctx, listener, cancel, tw.into_exits()).await;
     tasks_to_cancel.shutdown().await;
     join_all_with_timeout!(tasks_to_join, sec!(3));
     result

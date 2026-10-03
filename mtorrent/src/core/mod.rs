@@ -10,7 +10,8 @@ mod verifier;
 pub(crate) use announces::{make_periodic_announces, make_preliminary_announces};
 pub(crate) use connections::*;
 pub(crate) use ctx::{
-    Handle, MainCtx, PreliminaryCtx, supervise_content_download, supervise_metadata_download,
+    Handle, MainCtx, PreliminaryCtx, restore_and_persist_progress, supervise_content_download,
+    supervise_metadata_download,
 };
 #[expect(unused_imports)]
 pub(crate) use peer::{

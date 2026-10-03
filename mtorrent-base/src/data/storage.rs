@@ -108,10 +108,10 @@ pub fn new_mock_storage(total_size: usize) -> StorageClient {
 #[doc(hidden)]
 pub fn new_mock_storage_with_verifier(
     total_size: usize,
-    verify: impl Fn(usize, usize) -> bool + Send + 'static,
+    verify: impl Fn(usize, usize) -> bool + 'static,
 ) -> StorageClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
-    tokio::task::spawn(async move {
+    tokio::task::spawn_local(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 Command::WriteBlock {
