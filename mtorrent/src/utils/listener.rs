@@ -53,11 +53,14 @@ pub struct StateSnapshot<'s> {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiecesSnapshot {
-    /// Total number of pieces in the torrent.
+    /// Number of pieces to be downloaded, i.e. all pieces of the torrent except those that lie
+    /// entirely within excluded files and haven't been downloaded (excluded pieces restored from
+    /// a previous download are included). Can be less than the length of `bitfield`.
     pub total: usize,
     /// Number of pieces that have been downloaded.
     pub downloaded: usize,
-    /// Downloaded pieces represented as an array of zeroes and ones.
+    /// Downloaded pieces represented as an array of zeroes and ones. Its length is the total
+    /// number of pieces in the torrent, including excluded pieces.
     #[serde(serialize_with = "serialize_bitfield")]
     pub bitfield: Bitfield,
 }
@@ -66,7 +69,9 @@ pub struct PiecesSnapshot {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BytesSnapshot {
-    /// Total number of bytes in the torrent.
+    /// Number of bytes to be downloaded, i.e. the total size of the pieces counted in
+    /// [`PiecesSnapshot::total`]. Pieces that overlap both excluded and wanted files are included
+    /// in full.
     pub total: usize,
     /// Number of bytes that have been downloaded.
     pub downloaded: usize,
