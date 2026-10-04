@@ -11,8 +11,9 @@ use tokio::sync::{mpsc, oneshot};
 
 /// Create new storage handle-actor pair, for files specified by `length_path_it` in the directory
 /// `parent_dir`. If the files don't exist, new files with the specified size will be created.
-/// Files whose indices (in the order of `length_path_it`) are in `excluded_files` will be deleted
-/// from disk when the storage actor is dropped.
+/// Existing files are resized to the specified size. Files whose indices (in the order of
+/// `length_path_it`) are in `excluded_files` will be deleted from disk when the storage actor is
+/// dropped, unless they existed before the storage was created.
 pub fn new_async_storage<P: AsRef<Path>>(
     parent_dir: impl AsRef<Path>,
     length_path_it: impl IntoIterator<Item = (usize, P)>,
@@ -273,7 +274,8 @@ where
 
 // ------------------------------------------------------------------------------------------------
 
-/// Storage of files on disk. Excluded files are deleted when the storage is dropped.
+/// Storage of files on disk. Excluded files that didn't exist before the storage was created are
+/// deleted when the storage is dropped.
 pub(super) struct FileStorage {
     inner: GenericStorage<fs::File>,
     files_to_delete: Vec<PathBuf>,
@@ -320,8 +322,9 @@ impl FileStorage {
             GenericStorage::from_length_file_pairs(length_path_pairs.into_iter().enumerate().map(
                 |(index, (length, path))| -> io::Result<(usize, fs::File)> {
                     let path = parent_dir.join(path.as_ref());
+                    let delete_on_drop = excluded_files.contains(&index) && !path.is_file();
                     let file = open_or_create(&path, length)?;
-                    if excluded_files.contains(&index) {
+                    if delete_on_drop {
                         files_to_delete.push(path);
                     }
                     Ok((length, file))
@@ -746,6 +749,25 @@ mod tests {
         assert_eq!(entries.count(), 0, "Expected parent_dir to be empty, but found entries");
 
         fs::remove_dir_all(parent_dir).unwrap();
+    }
+
+    #[test]
+    fn test_existing_excluded_files_are_kept() {
+        let parent_dir = Path::new("test_storage_keeps_existing_excluded_files");
+        fs::create_dir_all(parent_dir).unwrap();
+        fs::write(parent_dir.join("file0"), b"0123456789").unwrap();
+
+        let files = (0..3).map(|i| (10, format!("file{i}")));
+        let storage = FileStorage::new(parent_dir, files, &[0, 1]).unwrap();
+        drop(storage);
+
+        let file_exists = |i: usize| parent_dir.join(format!("file{i}")).exists();
+        let existing_after_drop = [file_exists(0), file_exists(1), file_exists(2)];
+        let file0_content = fs::read(parent_dir.join("file0"));
+
+        fs::remove_dir_all(parent_dir).unwrap();
+        assert_eq!(existing_after_drop, [true, false, true]);
+        assert_eq!(file0_content.unwrap(), b"0123456789");
     }
 
     #[test]

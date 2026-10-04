@@ -38,7 +38,7 @@ Options:
       --no-upnp                Disable UPnP
       --no-dht                 Disable DHT
       --seed                   Keep seeding after the download is complete (until interrupted)
-  -f, --files <INDICES>        Download only the files with these comma-separated 0-based indices (see --list-files). Other files are deleted when the download stops
+  -f, --files <INDICES>        Download only the files with these comma-separated 0-based indices (see --list-files). Other files created by mtorrent are deleted when the download stops
       --list-files             Print the files of a .torrent file with their indices and exit
   -h, --help                   Print help
   -V, --version                Print version

@@ -61,7 +61,8 @@ pub enum FileSelection {
     #[default]
     All,
     /// Download only the files with the given 0-based indices (in the order they appear in the
-    /// metainfo). The other files are deleted from disk when the download stops.
+    /// metainfo). The other files are deleted from disk when the download stops, unless they
+    /// existed before the download started.
     Only(Vec<usize>),
 }
 
@@ -141,7 +142,8 @@ struct Params {
 /// `cancel` resolved first.
 ///
 /// Files not selected in [`Config::file_selection`] are deleted from disk when the content
-/// download stops, regardless of whether it completed or was cancelled. An invalid file selection
+/// download stops, regardless of whether it completed or was cancelled, unless they existed
+/// before the content download started. An invalid file selection
 /// is reported as an error when the content download starts, i.e. for a magnet link only after
 /// the metadata has been downloaded.
 ///

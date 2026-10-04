@@ -46,7 +46,7 @@ struct Cli {
     seed: bool,
 
     /// Download only the files with these comma-separated 0-based indices (see --list-files).
-    /// Other files are deleted when the download stops
+    /// Other files created by mtorrent are deleted when the download stops
     #[arg(
         short,
         long,
