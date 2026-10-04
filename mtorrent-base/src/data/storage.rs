@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 /// from disk when the storage actor is dropped.
 pub fn new_async_storage<P: AsRef<Path>>(
     parent_dir: impl AsRef<Path>,
-    length_path_it: impl Iterator<Item = (usize, P)>,
+    length_path_it: impl IntoIterator<Item = (usize, P)>,
     excluded_files: &[usize],
 ) -> Result<(StorageClient, StorageServer), Error> {
     let storage = FileStorage::new(parent_dir.as_ref(), length_path_it, excluded_files)?;
@@ -282,7 +282,7 @@ pub(super) struct FileStorage {
 impl FileStorage {
     pub(super) fn new<P: AsRef<Path>>(
         parent_dir: &Path,
-        length_path_it: impl Iterator<Item = (usize, P)>,
+        length_path_it: impl IntoIterator<Item = (usize, P)>,
         excluded_files: &[usize],
     ) -> Result<Self, Error> {
         fn open_or_create(path: &Path, length: usize) -> io::Result<fs::File> {
@@ -309,20 +309,25 @@ impl FileStorage {
             }
         }
 
+        let length_path_pairs: Vec<(usize, P)> = length_path_it
+            .into_iter()
+            .map(|(len, path)| validate_path(path.as_ref()).map(|()| (len, path)))
+            .collect::<io::Result<_>>()?;
+
         let mut files_to_delete = Vec::new();
 
-        let inner = GenericStorage::from_length_file_pairs(length_path_it.enumerate().map(
-            |(index, (length, path)): (usize, (usize, P))| -> io::Result<(usize, fs::File)> {
-                let path = path.as_ref();
-                validate_path(path)?;
-                let path = parent_dir.join(path);
-                let file = open_or_create(&path, length)?;
-                if excluded_files.contains(&index) {
-                    files_to_delete.push(path);
-                }
-                Ok((length, file))
-            },
-        ))?;
+        let inner =
+            GenericStorage::from_length_file_pairs(length_path_pairs.into_iter().enumerate().map(
+                |(index, (length, path))| -> io::Result<(usize, fs::File)> {
+                    let path = parent_dir.join(path.as_ref());
+                    let file = open_or_create(&path, length)?;
+                    if excluded_files.contains(&index) {
+                        files_to_delete.push(path);
+                    }
+                    Ok((length, file))
+                },
+            ))?;
+
         Ok(Self {
             inner,
             files_to_delete,
@@ -717,6 +722,28 @@ mod tests {
             panic!("Expected error, but got Ok");
         };
         assert!(matches!(err, Error::IOError(_)), "Unexpected error: {err:?}");
+
+        fs::remove_dir_all(parent_dir).unwrap();
+    }
+
+    #[test]
+    fn test_residual_files_after_path_validation_failure() {
+        let parent_dir = Path::new("test_residual_files_after_path_validation_failure");
+        fs::create_dir_all(parent_dir).unwrap();
+
+        let good_file_path = Path::new("subdir/good.txt");
+        let bad_file_path = Path::new("../bad.txt");
+
+        let result =
+            FileStorage::new(parent_dir, [(1024, &good_file_path), (1024, &bad_file_path)], &[]);
+        let Err(err) = result else {
+            panic!("Expected error, but got Ok");
+        };
+        assert!(matches!(err, Error::IOError(_)), "Unexpected error: {err:?}");
+
+        // verify parent_dir is empty after the failed creation
+        let entries = fs::read_dir(parent_dir).unwrap();
+        assert_eq!(entries.count(), 0, "Expected parent_dir to be empty, but found entries");
 
         fs::remove_dir_all(parent_dir).unwrap();
     }
