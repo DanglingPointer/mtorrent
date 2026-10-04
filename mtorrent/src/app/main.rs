@@ -260,7 +260,7 @@ pub async fn single_torrent(
             )
             .await
         } else {
-            let core::StageExit::Completed((metainfo_filepath, peers)) = preliminary_stage(
+            let (metainfo_filepath, peers) = match preliminary_stage(
                 params.clone(),
                 metainfo_uri,
                 &cfg.output_dir,
@@ -270,8 +270,9 @@ pub async fn single_torrent(
                 handles.clone(),
             )
             .await?
-            else {
-                return Ok(core::StageExit::Cancelled);
+            {
+                core::StageExit::Completed(output) => output,
+                core::StageExit::Cancelled => return Ok(core::StageExit::Cancelled),
             };
             log::info!("Metadata downloaded successfully, starting content download");
             main_stage(
