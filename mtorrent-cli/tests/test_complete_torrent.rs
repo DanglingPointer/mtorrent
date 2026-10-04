@@ -423,20 +423,31 @@ impl Peer for PartialSeeder {
         upload_chans: pwp::UploadChannels,
         ext_chans: Option<pwp::ExtendedChannels>,
         content_storage: data::StorageClient,
-        _meta_storage: data::StorageClient,
+        meta_storage: data::StorageClient,
         metainfo: Rc<Metainfo>,
     ) {
-        assert!(ext_chans.is_none());
-        Seeder::seed_content(
-            index as usize,
-            peer_count,
-            download_chans,
-            upload_chans,
-            content_storage,
-            get_piece_info(&metainfo),
-            false,
-        )
-        .await;
+        if let Some(ext_chans) = ext_chans {
+            Seeder::seed_metainfo(
+                index,
+                download_chans,
+                upload_chans,
+                ext_chans,
+                meta_storage,
+                metainfo.size(),
+            )
+            .await;
+        } else {
+            Seeder::seed_content(
+                index as usize,
+                peer_count,
+                download_chans,
+                upload_chans,
+                content_storage,
+                get_piece_info(&metainfo),
+                false,
+            )
+            .await;
+        }
     }
 }
 
@@ -1602,7 +1613,9 @@ async fn test_utp_download_torrent_from_magnet_link() {
 
     let (addr_tx, addr_rx) = mpsc::unbounded_channel::<SocketAddr>();
 
-    let peers = task::spawn_local(launch_peers::<Seeder>(
+    // use PartialSeeder because mtorrent is in Leech mode and may exit before reporting all
+    // pieces
+    let peers = task::spawn_local(launch_peers::<PartialSeeder>(
         MONOFILE_METAINFO_FILE,
         data_dir,
         ConnectionMode::IncomingUtpDynamic {
