@@ -405,6 +405,11 @@ async fn apply_loaded_progress(
     let pieces = with_ctx!(|ctx| ctx.pieces.clone());
 
     loaded_state.resize(pieces.piece_count(), false);
+
+    // Only restore pieces that we still want. At this point the only pieces that aren't missing
+    // are the excluded ones, because exclude_files() is called before the progress is restored.
+    loaded_state &= with_ctx!(|ctx| ctx.piece_tracker.missing_pieces_bitfield());
+
     let _sw = info_stopwatch!("Rechecking {} saved pieces", loaded_state.count_ones());
 
     // mark all loaded pieces as downloaded but not verified
@@ -480,10 +485,8 @@ fn preliminary_snapshot(ctx: &PreliminaryCtx) -> StateSnapshot<'_> {
 
 fn main_snapshot(ctx: &MainCtx) -> StateSnapshot<'_> {
     let downloaded_pieces = ctx.accountant.downloaded_pieces_bitfield();
-    // Excluded pieces are forgotten by the piece tracker, so they aren't missing. Unless they have
-    // been downloaded anyway (e.g. restored from a previous download), they're the only pieces
-    // that are neither missing nor downloaded. Verified pieces are forgotten too, but remain
-    // downloaded.
+    // Excluded pieces are the only ones that are neither missing (they've been forgotten by the
+    // piece tracker) nor downloaded. Verified pieces are forgotten too, but remain downloaded.
     let relevant_pieces = {
         let mut missing_pieces = ctx.piece_tracker.missing_pieces_bitfield();
         missing_pieces |= &downloaded_pieces;
@@ -536,6 +539,7 @@ impl ConstData {
 mod tests {
     use super::*;
     use crate::utils::startup;
+    use std::cell::RefCell;
     use tokio::task;
 
     /// Creates a directory and removes it on drop, even if the test panics.
@@ -640,6 +644,47 @@ mod tests {
 
         assert_eq!(downloaded_pieces(&handle), vec![0, 2, 3]);
         assert_eq!(verified_pieces(&handle), vec![0, 2, 3]);
+    }
+
+    #[tokio::test(start_paused = true, flavor = "local")]
+    async fn test_loaded_progress_ignores_excluded_pieces() {
+        let dir = "test_loaded_progress_ignores_excluded_pieces";
+        let _dir_guard = TestDir::create(dir);
+        let handle = main_ctx();
+        save_progress_with(dir, &handle, &[0, 1, 2]);
+
+        // piece 1 is excluded before the progress is restored
+        handle.with(|ctx| ctx.piece_tracker.forget_piece(1));
+
+        let (total_len, piece_len, info_hash, piece_count) = handle.with(|ctx| {
+            (
+                ctx.pieces.total_len(),
+                ctx.pieces.piece_len(0),
+                *ctx.metainfo.info_hash(),
+                ctx.pieces.piece_count(),
+            )
+        });
+        let verified_offsets = Rc::new(RefCell::new(Vec::new()));
+        let storage = data::new_mock_storage_with_verifier(total_len, {
+            let verified_offsets = verified_offsets.clone();
+            move |global_offset, _length| {
+                verified_offsets.borrow_mut().push(global_offset);
+                true
+            }
+        });
+        let mut task = pin!(restore_and_persist_progress(handle.clone(), dir, storage));
+        let _ = time::timeout(sec!(1), &mut task).await;
+
+        // the excluded piece is neither checked on disk, nor marked as downloaded or verified
+        assert_eq!(*verified_offsets.borrow(), vec![0, 2 * piece_len]);
+        assert_eq!(downloaded_pieces(&handle), vec![0, 2]);
+        assert_eq!(verified_pieces(&handle), vec![0, 2]);
+
+        // and it's removed from the progress file
+        let mut saved_state =
+            disk::ProgressFile::open(dir).unwrap().load_progress(&info_hash).unwrap();
+        saved_state.resize(piece_count, false);
+        assert_eq!(saved_state.iter_ones().collect::<Vec<_>>(), vec![0, 2]);
     }
 
     #[tokio::test(start_paused = true, flavor = "local")]
@@ -899,10 +944,6 @@ mod tests {
         // first piece verified: still counted as to be downloaded
         with_ctx!(|ctx| ctx.piece_tracker.forget_piece(0));
         assert_eq!(snapshot_counts(), (piece_count - 1, 1, piece_count, total_len - last_len));
-
-        // excluded piece downloaded anyway (e.g. restored from a previous download): counted again
-        with_ctx!(|ctx| ctx.accountant.submit_piece(last));
-        assert_eq!(snapshot_counts(), (piece_count, 2, piece_count, total_len));
     }
 
     fn preliminary_ctx() -> Handle<PreliminaryCtx> {

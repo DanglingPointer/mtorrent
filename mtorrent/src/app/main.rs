@@ -473,6 +473,7 @@ async fn main_stage(
         params.mode,
     )?;
 
+    // must be called before restoring progress, so that pieces of excluded files aren't restored
     if let Err(e) = core::exclude_files(&ctx, &excluded_files) {
         log::error!("Failed to exclude unselected files: {e}");
     }
