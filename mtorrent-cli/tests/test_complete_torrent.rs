@@ -1730,7 +1730,7 @@ async fn test_stop_resume_utp_download() {
         bind_interface: Some(loopback_iface_name().into()),
         download_strategy: Default::default(),
         mode: app::main::Mode::Seeder,
-        excluded_files: Vec::new(),
+        file_selection: app::main::FileSelection::All,
     };
     let context = Context {
         dht_handle: None,
@@ -1805,12 +1805,12 @@ async fn test_stop_resume_utp_download() {
 }
 
 #[tokio::test(flavor = "local")]
-async fn test_connect_to_seeders_and_download_multifile_torrent_with_excluded_file() {
-    let output_dir = "test_connect_to_seeders_and_download_multifile_torrent_with_excluded_file";
+async fn test_connect_to_seeders_and_download_multifile_torrent_with_selected_files() {
+    let output_dir = "test_connect_to_seeders_and_download_multifile_torrent_with_selected_files";
     let _dir_guard = TestDir::create(output_dir);
     let data_dir = "tests/assets/screenshots";
     let port = 17003;
-    let excluded_file_index = 1;
+    let selected_files = [0, 2];
 
     // few seeders, so that each of them owns pieces in every file and mtorrent connects to all
     let seeder_count = 5;
@@ -1851,8 +1851,8 @@ async fn test_connect_to_seeders_and_download_multifile_torrent_with_excluded_fi
         .arg(port.to_string())
         .arg("-i")
         .arg(loopback_iface_name())
-        .arg("-x")
-        .arg(excluded_file_index.to_string())
+        .arg("--files")
+        .arg(selected_files.map(|index| index.to_string()).join(","))
         .env("MTORRENT_PWP_MODE", "TCP_ONLY")
         .spawn()
         .expect("failed to execute 'mtorrent'");
@@ -1865,10 +1865,10 @@ async fn test_connect_to_seeders_and_download_multifile_torrent_with_excluded_fi
     let content_dir = Path::new(output_dir).join(MULTIFILE_TORRENT_NAME);
     for (index, (_length, path)) in metainfo.files().unwrap().enumerate() {
         let output_path = content_dir.join(&path);
-        if index == excluded_file_index {
-            assert!(!output_path.exists(), "{output_path:?} should have been deleted");
-        } else {
+        if selected_files.contains(&index) {
             verify_files_identical(Path::new(data_dir).join(&path), output_path);
+        } else {
+            assert!(!output_path.exists(), "{output_path:?} should have been deleted");
         }
     }
 }

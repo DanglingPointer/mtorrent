@@ -54,6 +54,17 @@ impl<T> From<core::StageExit<T>> for Outcome {
     }
 }
 
+/// Which files of a torrent to download.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FileSelection {
+    /// Download all files.
+    #[default]
+    All,
+    /// Download only the files with the given 0-based indices (in the order they appear in the
+    /// metainfo). The other files are deleted from disk when the download stops.
+    Only(Vec<usize>),
+}
+
 /// Configuration for a single torrent download.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -73,9 +84,10 @@ pub struct Config {
     pub download_strategy: DownloadStrategy,
     /// Mode of operation (leech or seeder).
     pub mode: Mode,
-    /// Indices of files (in the order they appear in the metainfo) that should not be downloaded.
-    /// Only supported in [`Mode::Leech`] and for multi-file torrents.
-    pub excluded_files: Vec<usize>,
+    /// Files to download. Selecting files is only supported in [`Mode::Leech`]. The selection must
+    /// not be empty, and all indices must be valid (for a single-file torrent, only index 0 can be
+    /// selected). Otherwise [`single_torrent`] fails when starting the content download.
+    pub file_selection: FileSelection,
 }
 
 /// Context for a single torrent download.
@@ -110,7 +122,7 @@ struct Params {
     bind_interface: Option<String>,
     download_strategy: DownloadStrategy,
     mode: Mode,
-    excluded_files: Vec<usize>,
+    file_selection: FileSelection,
 }
 
 /// Download a single torrent given a magnet link or a path to its metainfo file.
@@ -128,8 +140,10 @@ struct Params {
 /// Returns [`Outcome::Finished`] if the download completed, or [`Outcome::Cancelled`] if
 /// `cancel` resolved first.
 ///
-/// Files listed in [`Config::excluded_files`] are deleted from disk when the content download
-/// stops, regardless of whether it completed or was cancelled.
+/// Files not selected in [`Config::file_selection`] are deleted from disk when the content
+/// download stops, regardless of whether it completed or was cancelled. An invalid file selection
+/// is reported as an error when the content download starts, i.e. for a magnet link only after
+/// the metadata has been downloaded.
 ///
 /// To stop the download, resolve `cancel` and keep polling the returned future until it
 /// completes. Dropping the future instead is not a proper way to cancel: background tasks are
@@ -226,7 +240,7 @@ pub async fn single_torrent(
         bind_interface: cfg.bind_interface,
         download_strategy: cfg.download_strategy,
         mode: cfg.mode,
-        excluded_files: cfg.excluded_files,
+        file_selection: cfg.file_selection,
     };
 
     let download = async {
@@ -427,12 +441,12 @@ async fn main_stage(
         .as_ref()
         .join(metainfo_filepath.as_ref().file_stem().unwrap_or_default());
 
+    let excluded_files = core::files_to_exclude(&params.file_selection, &metainfo, params.mode)
+        .inspect_err(|e| log::error!("Invalid file selection: {e}"))?;
+
     let tw = TaskWatcher::new();
 
     let mut tasks_to_join = task::JoinSet::new();
-
-    let mut excluded_files = params.excluded_files;
-    startup::sanitize_excluded_files(&mut excluded_files, &metainfo, params.mode);
 
     let (content_storage, content_storage_server) =
         startup::create_content_storage(&metainfo, &content_dir, &excluded_files)?;
@@ -460,20 +474,20 @@ async fn main_stage(
     )?;
 
     if let Err(e) = core::exclude_files(&ctx, &excluded_files) {
-        log::error!("Failed to exclude selected files: {e}");
+        log::error!("Failed to exclude unselected files: {e}");
     }
 
     let mut tasks_to_cancel = task::JoinSet::new();
-
-    let (verifier_handle, verifier) =
-        core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
-    tasks_to_cancel.spawn_local(tw.watch(core::CriticalTask::PieceVerifier, verifier.run()));
 
     tasks_to_cancel.spawn_local(core::restore_and_persist_progress(
         ctx.clone(),
         content_dir,
         content_storage.clone(),
     ));
+
+    let (verifier_handle, verifier) =
+        core::piece_verifier(ctx.clone(), content_storage.clone(), 512);
+    tasks_to_cancel.spawn_local(tw.watch(core::CriticalTask::PieceVerifier, verifier.run()));
 
     let (peer_reporter, connect_throttle) =
         core::connect_control(|peer_reporter| core::MainConnectionData {

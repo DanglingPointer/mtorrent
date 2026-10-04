@@ -18,7 +18,7 @@ Alternatively, compile locally and install using `cargo install mtorrent-cli`.
 - Peer Exchange extension
 - Magnet links and metadata exchange
 - DHT
-- Selective download (skipping some files of a multi-file torrent)
+- Selective download (downloading only some files of a multi-file torrent)
 
 # Usage
 ```
@@ -38,18 +38,18 @@ Options:
       --no-upnp                Disable UPnP
       --no-dht                 Disable DHT
       --seed                   Keep seeding after the download is complete (until interrupted)
-  -x, --exclude <INDICES>      Comma-separated 0-based indices of files to skip (see --list-files). Excluded files are deleted when the download stops. Only for multi-file torrents
+  -f, --files <INDICES>        Download only the files with these comma-separated 0-based indices (see --list-files). Other files are deleted when the download stops
       --list-files             Print the files of a .torrent file with their indices and exit
   -h, --help                   Print help
   -V, --version                Print version
 ```
 
-To download only some of the files, first list the files with their indices, then exclude the unwanted ones:
+To download only some of the files, first list the files with their indices, then select the ones to download:
 ```
 $ mtorrent-cli --list-files screenshots.torrent
 0  412007  Screenshot from 2024-01-21 15-38-37.png
 1  346505  Screenshot from 2024-02-06 16-46-22.png
 2  306096  Screenshot from 2024-02-10 00-16-37.png
-$ mtorrent-cli screenshots.torrent -x 0,2
+$ mtorrent-cli screenshots.torrent --files 1
 ```
-Excluding files is not supported together with `--seed`. Invalid indices are ignored.
+Selecting files is not supported together with `--seed`. If any of the indices is invalid, mtorrent-cli exits with an error.

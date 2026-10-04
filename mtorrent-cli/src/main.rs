@@ -45,19 +45,19 @@ struct Cli {
     #[arg(long)]
     seed: bool,
 
-    /// Comma-separated 0-based indices of files to skip (see --list-files). Excluded files are
-    /// deleted when the download stops. Only for multi-file torrents
+    /// Download only the files with these comma-separated 0-based indices (see --list-files).
+    /// Other files are deleted when the download stops
     #[arg(
-        short = 'x',
+        short,
         long,
         value_name = "INDICES",
         value_delimiter = ',',
-        conflicts_with = "seed"
+        conflicts_with_all = ["seed", "list_files"],
     )]
-    exclude: Vec<usize>,
+    files: Vec<usize>,
 
     /// Print the files of a .torrent file with their indices and exit
-    #[arg(long, conflicts_with_all = ["seed", "exclude"])]
+    #[arg(long, conflicts_with_all = ["seed", "files"])]
     list_files: bool,
 }
 
@@ -206,7 +206,11 @@ fn main() -> io::Result<()> {
                 } else {
                     app::main::Mode::Leech
                 },
-                excluded_files: cli.exclude,
+                file_selection: if cli.files.is_empty() {
+                    app::main::FileSelection::All
+                } else {
+                    app::main::FileSelection::Only(cli.files)
+                },
             },
             app::main::Context {
                 dht_handle: dht_cmds,

@@ -1,13 +1,19 @@
 use super::ctx;
-use crate::app::main::Mode;
+use crate::app::main::{FileSelection, Mode};
 use local_async_utils::shared::Shared;
+use mtorrent_base::input;
 use std::io;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SelectionError {
-    #[error("invalid file index {0}")]
-    InvalidFileIndex(usize),
+    #[error("empty file selection is not allowed")]
+    EmptySelection,
+    #[error("invalid file index {index} (total number of files: {file_count})")]
+    InvalidFileIndex {
+        index: usize,
+        file_count: usize,
+    },
     #[error("cannot exclude files from a single-file torrent")]
     SingleFileTorrent,
     #[error("file exclusion is only supported in leech mode")]
@@ -17,12 +23,38 @@ pub enum SelectionError {
 impl From<SelectionError> for io::Error {
     fn from(e: SelectionError) -> Self {
         let kind = match &e {
-            SelectionError::InvalidFileIndex(_) => io::ErrorKind::InvalidInput,
+            SelectionError::EmptySelection => io::ErrorKind::InvalidInput,
+            SelectionError::InvalidFileIndex { .. } => io::ErrorKind::InvalidInput,
             SelectionError::SingleFileTorrent => io::ErrorKind::InvalidInput,
             SelectionError::UnsupportedMode => io::ErrorKind::Unsupported,
         };
         io::Error::new(kind, e)
     }
+}
+
+/// Returns the indices of all files that are not selected by `selection`, or an empty list for
+/// [`FileSelection::All`]. Fails if a [`FileSelection::Only`] can't be applied: it's empty, `mode`
+/// is not [`Mode::Leech`], or it contains an index that is out of range (a single-file torrent
+/// counts as one file, so only index 0 is valid).
+pub fn files_to_exclude(
+    selection: &FileSelection,
+    metainfo: &input::Metainfo,
+    mode: Mode,
+) -> Result<Vec<usize>, SelectionError> {
+    let FileSelection::Only(selected_files) = selection else {
+        return Ok(Vec::new());
+    };
+    if selected_files.is_empty() {
+        return Err(SelectionError::EmptySelection);
+    }
+    if !matches!(mode, Mode::Leech) {
+        return Err(SelectionError::UnsupportedMode);
+    }
+    let file_count = metainfo.files().map_or(1, Iterator::count);
+    if let Some(&index) = selected_files.iter().find(|&&index| index >= file_count) {
+        return Err(SelectionError::InvalidFileIndex { index, file_count });
+    }
+    Ok((0..file_count).filter(|index| !selected_files.contains(index)).collect())
 }
 
 /// Make sure pieces that lie entirely within excluded files are never downloaded. Pieces that
@@ -76,7 +108,10 @@ fn forget_excluded_pieces(
         if let Some((_position, is_excluded)) = files.get_mut(excluded_file_index) {
             *is_excluded = true;
         } else {
-            return Err(SelectionError::InvalidFileIndex(excluded_file_index));
+            return Err(SelectionError::InvalidFileIndex {
+                index: excluded_file_index,
+                file_count: files.len(),
+            });
         }
     }
 
@@ -133,6 +168,14 @@ mod tests {
         piece_len: usize,
         mode: Mode,
     ) -> ctx::Handle<ctx::MainCtx> {
+        make_ctx(make_multi_file_metainfo(file_lengths, piece_len), mode)
+    }
+
+    fn make_single_file_ctx(len: usize, piece_len: usize, mode: Mode) -> ctx::Handle<ctx::MainCtx> {
+        make_ctx(make_single_file_metainfo(len, piece_len), mode)
+    }
+
+    fn make_multi_file_metainfo(file_lengths: &[usize], piece_len: usize) -> input::Metainfo {
         let files_list = file_lengths
             .iter()
             .enumerate()
@@ -144,19 +187,18 @@ mod tests {
             })
             .collect();
         let total_len = file_lengths.iter().sum();
-        make_ctx(("files".into(), Element::List(files_list)), total_len, piece_len, mode)
+        make_metainfo(("files".into(), Element::List(files_list)), total_len, piece_len)
     }
 
-    fn make_single_file_ctx(len: usize, piece_len: usize, mode: Mode) -> ctx::Handle<ctx::MainCtx> {
-        make_ctx(("length".into(), Element::Integer(len as i64)), len, piece_len, mode)
+    fn make_single_file_metainfo(len: usize, piece_len: usize) -> input::Metainfo {
+        make_metainfo(("length".into(), Element::Integer(len as i64)), len, piece_len)
     }
 
-    fn make_ctx(
+    fn make_metainfo(
         content_entry: (Element, Element),
         total_len: usize,
         piece_len: usize,
-        mode: Mode,
-    ) -> ctx::Handle<ctx::MainCtx> {
+    ) -> input::Metainfo {
         let piece_count = total_len.div_ceil(piece_len);
         let info = Element::Dictionary(BTreeMap::from([
             ("name".into(), "test".into()),
@@ -164,8 +206,10 @@ mod tests {
             ("pieces".into(), Element::ByteString(vec![0u8; 20 * piece_count])),
             content_entry,
         ]));
-        let metainfo = input::Metainfo::from_bencode(info, 0).unwrap();
+        input::Metainfo::from_bencode(info, 0).unwrap()
+    }
 
+    fn make_ctx(metainfo: input::Metainfo, mode: Mode) -> ctx::Handle<ctx::MainCtx> {
         ctx::MainCtx::new(
             metainfo,
             [0u8; 20].into(),
@@ -178,6 +222,48 @@ mod tests {
             mode,
         )
         .unwrap()
+    }
+
+    #[rstest::rstest]
+    #[case::all_leech(Mode::Leech, FileSelection::All, Ok(vec![]))]
+    #[case::all_seeder(Mode::Seeder, FileSelection::All, Ok(vec![]))]
+    #[case::subset(Mode::Leech, FileSelection::Only(vec![0, 2]), Ok(vec![1, 3]))]
+    #[case::unsorted_with_duplicates(
+        Mode::Leech,
+        FileSelection::Only(vec![3, 0, 3]),
+        Ok(vec![1, 2])
+    )]
+    #[case::all_files(Mode::Leech, FileSelection::Only(vec![0, 1, 2, 3]), Ok(vec![]))]
+    #[case::empty(Mode::Leech, FileSelection::Only(vec![]), Err(SelectionError::EmptySelection))]
+    #[case::invalid_index(
+        Mode::Leech,
+        FileSelection::Only(vec![1, 4, 7]),
+        Err(SelectionError::InvalidFileIndex { index: 4, file_count: 4 })
+    )]
+    #[case::seeder(Mode::Seeder, FileSelection::Only(vec![0]), Err(SelectionError::UnsupportedMode))]
+    fn test_files_to_exclude_for_multi_file_torrent(
+        #[case] mode: Mode,
+        #[case] selection: FileSelection,
+        #[case] expected: Result<Vec<usize>, SelectionError>,
+    ) {
+        let metainfo = make_multi_file_metainfo(&[10, 10, 10, 10], 10);
+        assert_eq!(files_to_exclude(&selection, &metainfo, mode), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::all(FileSelection::All, Ok(vec![]))]
+    #[case::only_file(FileSelection::Only(vec![0]), Ok(vec![]))]
+    #[case::only_file_twice(FileSelection::Only(vec![0, 0]), Ok(vec![]))]
+    #[case::invalid_index(
+        FileSelection::Only(vec![1]),
+        Err(SelectionError::InvalidFileIndex { index: 1, file_count: 1 })
+    )]
+    fn test_files_to_exclude_for_single_file_torrent(
+        #[case] selection: FileSelection,
+        #[case] expected: Result<Vec<usize>, SelectionError>,
+    ) {
+        let metainfo = make_single_file_metainfo(30, 10);
+        assert_eq!(files_to_exclude(&selection, &metainfo, Mode::Leech), expected);
     }
 
     #[rstest::rstest]
@@ -222,7 +308,16 @@ mod tests {
         define_with_ctx!(handle);
 
         let result = exclude_files(&handle, &[0, 3]);
-        assert!(matches!(result, Err(SelectionError::InvalidFileIndex(3))), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(SelectionError::InvalidFileIndex {
+                    index: 3,
+                    file_count: 3
+                })
+            ),
+            "{result:?}"
+        );
         with_ctx!(|ctx| {
             let forgotten = forgotten_pieces(ctx);
             assert!(forgotten.is_empty(), "unexpected forgotten pieces: {forgotten:?}");
