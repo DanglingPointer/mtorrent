@@ -16,7 +16,7 @@ pub enum SelectionError {
     },
     #[error("cannot exclude files from a single-file torrent")]
     SingleFileTorrent,
-    #[error("file exclusion is only supported in leech mode")]
+    #[error("file selection is only supported in leech mode")]
     UnsupportedMode,
 }
 
@@ -44,16 +44,20 @@ pub fn files_to_exclude(
     let FileSelection::Only(selected_files) = selection else {
         return Ok(Vec::new());
     };
+
     if selected_files.is_empty() {
         return Err(SelectionError::EmptySelection);
     }
+
     if !matches!(mode, Mode::Leech) {
         return Err(SelectionError::UnsupportedMode);
     }
+
     let file_count = metainfo.files().map_or(1, Iterator::count);
     if let Some(&index) = selected_files.iter().find(|&&index| index >= file_count) {
         return Err(SelectionError::InvalidFileIndex { index, file_count });
     }
+
     Ok((0..file_count).filter(|index| !selected_files.contains(index)).collect())
 }
 
