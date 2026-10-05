@@ -352,7 +352,7 @@ mod tests {
         task::yield_now().await;
 
         // verify that uTP is running and the port is in use
-        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        handle.restart(PeerReporter::new_stub()).await.unwrap();
         task::yield_now().await;
         assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
 
@@ -385,7 +385,7 @@ mod tests {
         task::yield_now().await;
 
         // verify that uTP is running and the port is in use
-        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        handle.restart(PeerReporter::new_stub()).await.unwrap();
         task::yield_now().await;
         assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
 
@@ -418,7 +418,7 @@ mod tests {
         task::yield_now().await;
 
         // verify that uTP is running and the port is in use
-        handle.restart(PeerReporter::new_mock()).await.unwrap();
+        handle.restart(PeerReporter::new_stub()).await.unwrap();
         task::yield_now().await;
         assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).await.is_err());
 

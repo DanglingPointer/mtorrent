@@ -169,18 +169,7 @@ pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
     if local_addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
-    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
-    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
-    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
-    // See https://stackoverflow.com/a/14388707/4432988 for details.
-    socket.set_reuse_address(true)?;
-    #[cfg(not(windows))]
-    socket.set_reuse_port(true)?;
-    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0
-    // timeout See https://stackoverflow.com/a/71975993
-    socket.set_linger(Some(Duration::ZERO))?;
-    socket.set_tcp_nodelay(true)?;
-    socket.set_nonblocking(true)?;
+    set_tcp_options(&socket)?;
 
     // bind
     if let Some(interface) = interface {
@@ -199,6 +188,30 @@ pub fn bound_tcp_socket(local_addr: SocketAddr, interface: Option<&str>) -> io::
         use std::os::windows::io::{FromRawSocket, IntoRawSocket};
         Ok(FromRawSocket::from_raw_socket(socket.into_raw_socket()))
     }
+}
+
+/// Set the following socket options on an existing socket:
+/// - SO_REUSEADDR (on all platforms) and SO_REUSEPORT (on unix)
+/// - SO_LINGER with 0 timeout, to avoid TIME_WAIT
+/// - TCP_NODELAY
+/// - O_NONBLOCK
+pub fn set_tcp_options<'s>(socket: impl Into<SockRef<'s>>) -> io::Result<()> {
+    let socket = socket.into();
+
+    // To use the same local addr and port for outgoing PWP connections and for TCP listener,
+    // (in order to deal with endpoint-independent NAT mappings, https://www.rfc-editor.org/rfc/rfc5128#section-2.3)
+    // we need to set SO_REUSEADDR on Windows, and SO_REUSEADDR and SO_REUSEPORT on Linux.
+    // See https://stackoverflow.com/a/14388707/4432988 for details.
+    socket.set_reuse_address(true)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_port(true)?;
+    // To avoid putting socket into TIME_WAIT when disconnecting someone, enable SO_LINGER with 0
+    // timeout See https://stackoverflow.com/a/71975993
+    socket.set_linger(Some(Duration::ZERO))?;
+    socket.set_tcp_nodelay(true)?;
+    socket.set_nonblocking(true)?;
+
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------------------------

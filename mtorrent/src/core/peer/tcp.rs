@@ -121,6 +121,7 @@ pub async fn run_pwp_listener(
         log::info!("TCP listener started on {}", listener.local_addr()?);
         loop {
             let (stream, addr) = listener.accept().await?;
+            net::set_tcp_options(&stream)?;
             peer_reporter.report_accepted_tcp(addr, stream).await;
         }
     }
@@ -193,6 +194,7 @@ mod tests {
 
         let connect_task_handle = task::spawn_local(async move {
             let (socket, peer_addr) = listener.accept().await.unwrap();
+            net::set_tcp_options(&socket).unwrap();
             new_inbound_connection(
                 &PeerId::generate_new(),
                 &[0u8; 20],
@@ -220,8 +222,38 @@ mod tests {
         connect_task_handle.abort();
         let read_result = drain_socket(&mut peer_socket).await;
         let read_error = read_result.unwrap_err();
-        // RST rather than EOF because the accepted socket inherits SO_LINGER=0 from the listener
-        // created by net::bound_tcp_socket()
+        // RST rather than EOF because net::set_tcp_options() sets SO_LINGER to 0
+        assert_eq!(read_error.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    #[tokio::test(flavor = "local")]
+    async fn test_listener_sets_tcp_options_on_accepted_streams() {
+        // Note: on Linux accepted sockets inherit SO_LINGER and TCP_NODELAY from the listening
+        // socket so this test only makes sense on other platforms
+
+        // reserve a free port; SO_REUSEADDR/SO_REUSEPORT allow the listener to bind it too
+        let listener_addr = net::bound_tcp_socket((Ipv4Addr::LOCALHOST, 0).into(), None)
+            .unwrap()
+            .local_addr()
+            .unwrap();
+
+        let (reporter, mut accepted_peers) = PeerReporter::new_mock();
+        let listener_handle = task::spawn_local(run_pwp_listener(listener_addr, None, reporter));
+        task::yield_now().await;
+
+        let mut client_socket =
+            timeout(sec!(1), TcpStream::connect(listener_addr)).await.unwrap().unwrap();
+
+        let accepted = timeout(sec!(1), accepted_peers.recv_tcp()).await.unwrap();
+        let (_addr, accepted_stream) = accepted.expect("listener should have accepted a stream");
+        listener_handle.abort();
+
+        assert!(accepted_stream.nodelay().unwrap());
+        assert_eq!(accepted_stream.linger().unwrap(), Some(sec!(0)));
+
+        // RST rather than EOF on close proves SO_LINGER=0 was set on the accepted stream
+        drop(accepted_stream);
+        let read_error = drain_socket(&mut client_socket).await.unwrap_err();
         assert_eq!(read_error.kind(), io::ErrorKind::ConnectionReset);
     }
 }

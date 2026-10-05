@@ -238,7 +238,7 @@ impl PeerBuilder {
                 metainfo_storage,
                 ctx_handle: ctx_handle.clone(),
                 pwp_worker_handle: tokio::runtime::Handle::current(),
-                peer_reporter: PeerReporter::new_mock(),
+                peer_reporter: PeerReporter::new_stub(),
                 verifier: verifier_handle,
                 utp_handle: UtpHandle::new_mock(),
             };
@@ -294,7 +294,7 @@ impl PeerBuilder {
             ulchans,
             extchans.unwrap(),
             ctx_handle.clone(),
-            PeerReporter::new_mock(),
+            PeerReporter::new_stub(),
         );
 
         (ctx_handle, Box::pin(run_future))

@@ -64,7 +64,7 @@ mod tests {
     async fn test_restart_dht_search_when_it_finishes() {
         let (cmd_sender, mut cmd_receiver) = mpsc::channel(1);
 
-        task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_mock(), 6881));
+        task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_stub(), 6881));
         task::yield_now().await;
 
         let find_peers_cmd = cmd_receiver.try_recv().expect("search should have started");
@@ -92,7 +92,7 @@ mod tests {
     async fn test_dont_restart_dht_search_periodically() {
         let (cmd_sender, mut cmd_receiver) = mpsc::channel(1);
 
-        task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_mock(), 6881));
+        task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_stub(), 6881));
         task::yield_now().await;
 
         let find_peers_cmd = cmd_receiver.try_recv().expect("search should have started");
@@ -108,7 +108,7 @@ mod tests {
         let (cmd_sender, _) = mpsc::channel(1);
 
         let handle =
-            task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_mock(), 6881));
+            task::spawn(run_dht_search([0; 20], cmd_sender, PeerReporter::new_stub(), 6881));
 
         task::yield_now().await;
         assert!(

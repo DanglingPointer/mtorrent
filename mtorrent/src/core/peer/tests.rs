@@ -160,7 +160,7 @@ async fn run_listening_seeder(
         metainfo_storage: meta_storage,
         ctx_handle: handle,
         pwp_worker_handle: runtime::Handle::current(),
-        peer_reporter: PeerReporter::new_mock(),
+        peer_reporter: PeerReporter::new_stub(),
         verifier: verifier_handle,
         utp_handle: UtpHandle::new_mock(),
     });

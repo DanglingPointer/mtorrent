@@ -436,12 +436,41 @@ async fn incoming_pwp_connection<C: PeerConnector>(
 
 #[cfg(test)]
 impl PeerReporter {
-    pub fn new_mock() -> Self {
+    pub fn new_stub() -> Self {
         let (discovered_tx, _discovered_rx) = mpsc::channel(1);
         let (accepted_tx, _accepted_rx) = mpsc::channel(1);
         Self {
             discovered_reporter: discovered_tx,
             accepted_reporter: accepted_tx,
+        }
+    }
+
+    pub fn new_mock() -> (Self, AcceptedPeersMonitor) {
+        let (discovered_tx, _discovered_rx) = mpsc::channel(1);
+        let (accepted_tx, accepted_rx) = mpsc::channel(1);
+        let reporter = Self {
+            discovered_reporter: discovered_tx,
+            accepted_reporter: accepted_tx,
+        };
+        (reporter, AcceptedPeersMonitor(accepted_rx))
+    }
+}
+
+#[cfg(test)]
+pub struct AcceptedPeersMonitor(mpsc::Receiver<InboundConnect>);
+
+#[cfg(test)]
+impl AcceptedPeersMonitor {
+    pub async fn recv_tcp(&mut self) -> Option<(SocketAddr, TcpStream)> {
+        match self.0.recv().await? {
+            InboundConnect {
+                addr,
+                data: InboundData::Tcp(stream),
+            } => Some((addr, stream)),
+            InboundConnect {
+                data: InboundData::Utp(_),
+                ..
+            } => None,
         }
     }
 }
