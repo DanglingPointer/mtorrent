@@ -3,7 +3,7 @@ use super::ctx;
 use bytes::BytesMut;
 use mtorrent_base::{pe, pwp};
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::task_scope::TaskScope;
+use mtorrent_utils::task_scope::spawn_scoped_on;
 use mtorrent_utils::{info_stopwatch, net};
 use std::io;
 use std::net::SocketAddr;
@@ -28,34 +28,32 @@ pub async fn new_outbound_connection(
     let interface = data.bind_interface().map(ToOwned::to_owned);
     let local_port = data.pwp_internal_port();
 
-    let mut scope = TaskScope::new();
-    scope
-        .spawn_on(
-            async move {
-                let socket = net::bound_tcp_socket(
-                    SocketAddr::new(local_addr, local_port),
-                    interface.as_deref(),
-                )?;
-                let mut stream = socket.connect(peer_addr).await?;
-                let crypto = if protocol_encryption_enabled {
-                    pe::outbound_handshake(&mut stream, &info_hash, &[0u8; 0][..]).await?
-                } else {
-                    None
-                };
-                pwp::channels_for_outbound_connection(
-                    &local_peer_id,
-                    &info_hash,
-                    extension_protocol_enabled,
-                    peer_addr,
-                    stream,
-                    None,
-                    crypto,
-                )
-                .await
-            },
-            pwp_runtime,
-        )
-        .await?
+    spawn_scoped_on(
+        async move {
+            let socket = net::bound_tcp_socket(
+                SocketAddr::new(local_addr, local_port),
+                interface.as_deref(),
+            )?;
+            let mut stream = socket.connect(peer_addr).await?;
+            let crypto = if protocol_encryption_enabled {
+                pe::outbound_handshake(&mut stream, &info_hash, &[0u8; 0][..]).await?
+            } else {
+                None
+            };
+            pwp::channels_for_outbound_connection(
+                &local_peer_id,
+                &info_hash,
+                extension_protocol_enabled,
+                peer_addr,
+                stream,
+                None,
+                crypto,
+            )
+            .await
+        },
+        pwp_runtime,
+    )
+    .await?
 }
 
 pub async fn new_inbound_connection(
@@ -69,43 +67,41 @@ pub async fn new_inbound_connection(
     let local_peer_id = *local_peer_id;
     let info_hash = *info_hash;
 
-    let mut scope = TaskScope::new();
-    scope
-        .spawn_on(
-            async move {
-                match pe::detect_encryption(stream).await? {
-                    pe::MaybeEncrypted::Plain(stream) => {
-                        pwp::channels_for_inbound_connection(
-                            &local_peer_id,
-                            &info_hash,
-                            extension_protocol_enabled,
-                            remote_ip,
-                            stream,
-                            None,
-                        )
-                        .await
-                    }
-                    pe::MaybeEncrypted::Encrypted(mut stream) => {
-                        let mut ia_buffer = BytesMut::new();
-                        let crypto =
-                            pe::inbound_handshake(&mut stream, &info_hash, &mut ia_buffer).await?;
-                        let (_, stream) = stream.into_parts();
-                        let stream = pe::PrefixedStream::new(ia_buffer, stream);
-                        pwp::channels_for_inbound_connection(
-                            &local_peer_id,
-                            &info_hash,
-                            extension_protocol_enabled,
-                            remote_ip,
-                            stream,
-                            crypto,
-                        )
-                        .await
-                    }
+    spawn_scoped_on(
+        async move {
+            match pe::detect_encryption(stream).await? {
+                pe::MaybeEncrypted::Plain(stream) => {
+                    pwp::channels_for_inbound_connection(
+                        &local_peer_id,
+                        &info_hash,
+                        extension_protocol_enabled,
+                        remote_ip,
+                        stream,
+                        None,
+                    )
+                    .await
                 }
-            },
-            pwp_runtime,
-        )
-        .await?
+                pe::MaybeEncrypted::Encrypted(mut stream) => {
+                    let mut ia_buffer = BytesMut::new();
+                    let crypto =
+                        pe::inbound_handshake(&mut stream, &info_hash, &mut ia_buffer).await?;
+                    let (_, stream) = stream.into_parts();
+                    let stream = pe::PrefixedStream::new(ia_buffer, stream);
+                    pwp::channels_for_inbound_connection(
+                        &local_peer_id,
+                        &info_hash,
+                        extension_protocol_enabled,
+                        remote_ip,
+                        stream,
+                        crypto,
+                    )
+                    .await
+                }
+            }
+        },
+        pwp_runtime,
+    )
+    .await?
 }
 
 pub async fn run_pwp_listener(

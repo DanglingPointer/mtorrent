@@ -6,7 +6,7 @@ use local_async_utils::prelude::*;
 use mtorrent_base::{pe, pwp, utp};
 use mtorrent_utils::net;
 use mtorrent_utils::peer_id::PeerId;
-use mtorrent_utils::task_scope::TaskScope;
+use mtorrent_utils::task_scope::{TaskScope, spawn_scoped_local};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::sync::{mpsc, oneshot};
@@ -121,46 +121,42 @@ impl UtpActor {
             cmd_receiver,
         } = self;
 
-        let mut scope = TaskScope::new();
-        _ = scope
-            .spawn_local(async move {
-                let _sw = info_stopwatch!(sec!(0), "UtpActor");
+        _ = spawn_scoped_local(async move {
+            let _sw = info_stopwatch!(sec!(0), "UtpActor");
 
-                let local_addr_v4 = SocketAddr::V4(local_addr_v4);
-                let local_addr_v6 = SocketAddr::V6(local_addr_v6);
+            let local_addr_v4 = SocketAddr::V4(local_addr_v4);
+            let local_addr_v6 = SocketAddr::V6(local_addr_v6);
 
-                let mut tasks = task::JoinSet::new();
+            let mut tasks = task::JoinSet::new();
 
-                let v6_result = create_endpoint(local_addr_v6, interface.as_deref(), &mut tasks);
-                let v4_result = create_endpoint(local_addr_v4, interface.as_deref(), &mut tasks);
+            let v6_result = create_endpoint(local_addr_v6, interface.as_deref(), &mut tasks);
+            let v4_result = create_endpoint(local_addr_v4, interface.as_deref(), &mut tasks);
 
-                for (result, local_addr) in
-                    [(&v4_result, local_addr_v4), (&v6_result, local_addr_v6)]
-                {
-                    match result {
-                        Ok((_, _)) => log::info!("Created uTP endpoint on {local_addr}"),
-                        Err(e) => log::error!("Failed to create uTP endpoint on {local_addr}: {e}"),
-                    }
+            for (result, local_addr) in [(&v4_result, local_addr_v4), (&v6_result, local_addr_v6)] {
+                match result {
+                    Ok((_, _)) => log::info!("Created uTP endpoint on {local_addr}"),
+                    Err(e) => log::error!("Failed to create uTP endpoint on {local_addr}: {e}"),
                 }
+            }
 
-                match (v4_result, v6_result) {
-                    (Ok(v4), Ok(v6)) => {
-                        run_bridge(v4, v6, cmd_receiver).await;
-                    }
-                    (Ok(v4), Err(_)) => {
-                        let ep = v4.0.clone();
-                        run_bridge(v4, (ep, stream::pending()), cmd_receiver).await;
-                    }
-                    (Err(_), Ok(v6)) => {
-                        let ep = v6.0.clone();
-                        run_bridge((ep, stream::pending()), v6, cmd_receiver).await;
-                    }
-                    (Err(_), Err(_)) => {}
+            match (v4_result, v6_result) {
+                (Ok(v4), Ok(v6)) => {
+                    run_bridge(v4, v6, cmd_receiver).await;
                 }
+                (Ok(v4), Err(_)) => {
+                    let ep = v4.0.clone();
+                    run_bridge(v4, (ep, stream::pending()), cmd_receiver).await;
+                }
+                (Err(_), Ok(v6)) => {
+                    let ep = v6.0.clone();
+                    run_bridge((ep, stream::pending()), v6, cmd_receiver).await;
+                }
+                (Err(_), Err(_)) => {}
+            }
 
-                join_all_with_timeout!(tasks, sec!(3));
-            })
-            .await;
+            join_all_with_timeout!(tasks, sec!(3));
+        })
+        .await;
     }
 }
 
