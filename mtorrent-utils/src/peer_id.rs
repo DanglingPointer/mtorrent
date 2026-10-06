@@ -7,6 +7,7 @@ use std::ops::Deref;
 pub struct PeerId([u8; 20]); // immutable wrapper
 
 impl PeerId {
+    /// Generate a new 20-byte peer ID containing the mtorrent version prefix and random bytes.
     pub fn generate_new() -> Self {
         const PREFIX: &[u8] = concat!(
             "-mt0",

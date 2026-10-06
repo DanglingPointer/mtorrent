@@ -2,10 +2,13 @@ use std::collections::vec_deque::{IntoIter, Iter};
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
+/// Capacity policy for a [`FifoSet`].
 pub trait Policy: Clone {
+    /// Return the maximum number of elements retained by the set.
     fn capacity(&self) -> usize;
 }
 
+/// A policy that limits a [`FifoSet`] to a fixed number of elements.
 #[derive(Clone, Copy, Debug)]
 pub struct Bounded(usize);
 impl Policy for Bounded {
@@ -14,6 +17,7 @@ impl Policy for Bounded {
     }
 }
 
+/// A policy that allows a [`FifoSet`] to grow without a fixed limit.
 #[derive(Clone, Copy, Debug)]
 pub struct Unbounded;
 impl Policy for Unbounded {
@@ -22,6 +26,7 @@ impl Policy for Unbounded {
     }
 }
 
+/// An insertion-ordered set that retains each value at most once.
 #[derive(Debug)]
 pub struct FifoSet<T, P: Policy> {
     ringbuf: VecDeque<T>,
@@ -29,7 +34,9 @@ pub struct FifoSet<T, P: Policy> {
     policy: P,
 }
 
+/// A [`FifoSet`] without a fixed capacity limit.
 pub type UnboundedFifoSet<T> = FifoSet<T, Unbounded>;
+/// A [`FifoSet`] that evicts its oldest element when it reaches capacity.
 pub type BoundedFifoSet<T> = FifoSet<T, Bounded>;
 
 impl<T> FifoSet<T, Bounded> {
@@ -45,6 +52,7 @@ impl<T> FifoSet<T, Bounded> {
 }
 
 impl<T> FifoSet<T, Unbounded> {
+    /// Create an empty [`UnboundedFifoSet`].
     pub fn new() -> Self {
         Self {
             ringbuf: VecDeque::new(),
@@ -53,6 +61,7 @@ impl<T> FifoSet<T, Unbounded> {
         }
     }
 
+    /// Create an empty [`UnboundedFifoSet`] with space for at least `capacity` elements.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             ringbuf: VecDeque::with_capacity(capacity),
@@ -63,15 +72,18 @@ impl<T> FifoSet<T, Unbounded> {
 }
 
 impl<T, P: Policy> FifoSet<T, P> {
+    /// Iterate over elements from oldest to newest.
     pub fn iter(&self) -> Iter<'_, T> {
         self.ringbuf.iter()
     }
 
+    /// Return the number of elements in the set.
     pub fn len(&self) -> usize {
         debug_assert!(self.ringbuf.len() == self.set.len());
         self.ringbuf.len()
     }
 
+    /// Return whether the set contains no elements.
     pub fn is_empty(&self) -> bool {
         debug_assert!(self.ringbuf.len() == self.set.len());
         self.ringbuf.is_empty()

@@ -7,11 +7,18 @@ use std::{fmt, io, str};
 use thiserror::Error;
 
 /// Bencoded element.
+///
+/// Byte strings, including dictionary keys, may contain arbitrary bytes and are not required to be
+/// ASCII or UTF-8.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone)]
 pub enum Element {
+    /// A signed integer.
     Integer(i64),
+    /// An arbitrary byte string, with no text-encoding requirement.
     ByteString(Vec<u8>),
+    /// An ordered list of bencoded elements.
     List(Vec<Element>),
+    /// A dictionary mapping arbitrary byte-string keys to bencoded values.
     Dictionary(BTreeMap<Element, Element>),
 }
 
@@ -100,16 +107,25 @@ impl fmt::Display for Element {
 /// Errors that can occur during parsing of bencoded data.
 #[derive(Debug, Error, Display)]
 pub enum ParseError {
+    /// The input contains no data.
     EmptySource,
+    /// The input starts with a byte that cannot begin a bencoded element.
     #[display("invalid prefix ({_0})")]
     InvalidPrefix(u8),
+    /// An integer does not start with the `i` prefix.
     NoIntegerPrefix,
+    /// An integer has no terminating `e` suffix.
     NoIntegerEnd,
+    /// A byte string has no delimiter between its length and contents.
     NoStringDelimeter,
+    /// A byte string declares a length greater than the remaining input.
     #[display("invalid string length ({_0})")]
     InvalidStringLength(usize),
+    /// A list does not start with the `l` prefix.
     NoListPrefix,
+    /// A dictionary does not start with the `d` prefix.
     NoDictionaryPrefix,
+    /// Parsing failed because of an underlying conversion error.
     #[display("{_0}")]
     ExternalError(#[source] Box<dyn Error + Send + Sync>),
 }

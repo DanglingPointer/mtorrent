@@ -37,8 +37,8 @@ jobs:
       env:
         RUSTDOCFLAGS: --cfg docsrs -Dwarnings
         RUSTFLAGS: -Dwarnings
-    - name: Check mtorrent docs
-      run: cargo +nightly doc --package mtorrent --lib --no-deps --all-features --document-private-items
+    - name: Check public docs
+      run: cargo +nightly doc -p mtorrent -p mtorrent-utils --lib --no-deps --all-features --document-private-items
       env:
         RUSTDOCFLAGS: --cfg docsrs -Dwarnings -Dmissing_docs
         RUSTFLAGS: -Dwarnings

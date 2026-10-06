@@ -4,9 +4,11 @@ use std::{io, thread};
 use tokio::runtime;
 use tokio::sync::oneshot;
 
+/// Utilities for creating a worker thread without a tokio runtime.
 pub mod simple {
     use super::*;
 
+    /// Configuration for a dedicated worker thread.
     pub struct Config {
         /// Name of the worker thread.
         pub name: String,
@@ -48,9 +50,11 @@ pub mod simple {
     }
 }
 
+/// Utilities for running a Tokio runtime on a dedicated worker thread.
 pub mod rt {
     use super::*;
 
+    /// Configuration for a worker thread and its Tokio runtime.
     pub struct Config {
         /// Name of the worker thread.
         pub name: String,

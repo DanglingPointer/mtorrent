@@ -26,6 +26,7 @@ pub enum Error {
     Timeout,
 }
 
+/// Result type returned by UPnP port-mapping operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<igd_next::Error> for Error {

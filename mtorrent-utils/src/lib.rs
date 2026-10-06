@@ -1,5 +1,32 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-//! Collection of miscellaneous utilities used by the [`mtorrent`](https://crates.io/crates/mtorrent) crate and its components. Some of the utilities are specific to the BitTorrent protocol, while others are generic and can be used in any Tokio-based application.
+//! Collection of miscellaneous utilities used by the [`mtorrent`](https://crates.io/crates/mtorrent)
+//! crate and its components. Some utilities are specific to the BitTorrent protocol, while others
+//! are generic and can be used in any Tokio-based application.
+//!
+//! # Utilities
+//!
+//! ## BitTorrent and networking
+//!
+//! - [`benc`] parses and serializes bencoded data.
+//! - [`peer_id`] generates and represents BitTorrent peer IDs.
+//! - [`net`] provides local-address discovery, socket configuration, deterministic dynamic ports,
+//!   and compact peer-address decoding.
+//! - [`split_stream`] abstracts splitting bidirectional streams into read and write halves.
+//! - [`upnp`] maintains UPnP/IGD port mappings in a background task.
+//!
+//! ## Async tasks and runtimes
+//!
+//! - [`loop_select`] cooperatively polls several operations sharing mutable state.
+//! - [`select_next`] waits for the next item from any stream in a keyed collection.
+//! - [`task_scope`] aborts spawned Tokio tasks when their scope or handle is dropped.
+//! - [`task_watcher`] reports whether watched futures completed or were dropped.
+//! - [`worker`] runs closures or single-threaded Tokio runtimes on dedicated threads.
+//!
+//! ## General utilities
+//!
+//! - [`bandwidth`] measures average bitrate.
+//! - [`fifo_set`] provides insertion-ordered sets with optional bounded capacity.
+//! - [`connect_recorder`] tracks connected and recently seen peers.
 
 /// Bitrate measurement utilities.
 pub mod bandwidth;
@@ -14,6 +41,7 @@ pub mod fifo_set;
 pub mod net;
 
 /// Single-value watch channel for `!Send` types.
+#[doc(hidden)]
 pub mod local_watch;
 
 /// Cooperative poll-loop multiplexing multiple futures.

@@ -277,7 +277,10 @@ pub fn port_from_hash(h: &impl Hash) -> u16 {
 }
 
 /// Iterator decoding compact representation of IPv4 addresses from bytes (6 bytes per address).
-pub struct SocketAddrV4BytesIter<'d>(pub &'d [u8]);
+pub struct SocketAddrV4BytesIter<'d>(
+    /// The unconsumed compact IPv4 address bytes.
+    pub &'d [u8],
+);
 
 impl<'d> Iterator for SocketAddrV4BytesIter<'d> {
     type Item = SocketAddrV4;
@@ -304,7 +307,10 @@ impl<'d> ExactSizeIterator for SocketAddrV4BytesIter<'d> {
 }
 
 /// Iterator decoding compact representation of IPv6 addresses from bytes (18 bytes per address).
-pub struct SocketAddrV6BytesIter<'d>(pub &'d [u8]);
+pub struct SocketAddrV6BytesIter<'d>(
+    /// The unconsumed compact IPv6 address bytes.
+    pub &'d [u8],
+);
 
 impl<'d> Iterator for SocketAddrV6BytesIter<'d> {
     type Item = SocketAddrV6;
