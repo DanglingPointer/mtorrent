@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ops::ControlFlow;
 use std::path::Path;
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fs, io, mem};
@@ -285,43 +285,58 @@ async fn supervise<C, L: StateListener, T>(
     ctx_handle: &Handle<C>,
     state_listener: &mut L,
     generate_snapshot: fn(&C) -> StateSnapshot<'_>,
-    mut cancel: Pin<&mut impl Future<Output = ()>>,
-    critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
+    cancel: Pin<&mut impl Future<Output = ()>>,
+    mut critical_task_exits: impl Stream<Item = Exit<CriticalTask>> + Unpin,
     mut check_completion: impl FnMut(&mut C) -> io::Result<ControlFlow<T>>,
 ) -> io::Result<StageExit<T>> {
     define_with_ctx!(ctx_handle);
 
-    let mut critical_task_exits = critical_task_exits.fuse();
-    let mut premature_exit = critical_task_exits.next();
+    let snapshot_reporter = async {
+        let mut submit_snapshot = CallOnDrop(|| {
+            with_ctx!(|ctx| {
+                let snapshot = generate_snapshot(ctx);
+                state_listener.on_snapshot(snapshot);
+            })
+        });
+        let mut timer = time::interval(L::INTERVAL);
+        timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        loop {
+            timer.tick().await;
+            submit_snapshot();
+        }
+    };
 
-    let mut snapshot_reporter =
-        pin!(submit_snapshots_periodically(ctx_handle, state_listener, generate_snapshot));
+    let periodic_completion_check = async {
+        let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
+        completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        loop {
+            completion_check_timer.tick().await;
+            if let ControlFlow::Break(result) = with_ctx!(|ctx| check_completion(ctx))? {
+                return Ok::<_, io::Error>(result);
+            }
+        }
+    };
 
-    let mut completion_check_timer = time::interval(COMPLETION_CHECK_INTERVAL);
-    completion_check_timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
-
-    loop {
-        select! {
-            biased;
-            _ = &mut snapshot_reporter => unreachable!(),
-            _ = completion_check_timer.tick() => {
-                if let ControlFlow::Break(result) = with_ctx!(|ctx| check_completion(ctx))? {
-                    return Ok(StageExit::Completed(result));
+    select! {
+        biased;
+        _ = snapshot_reporter => {
+            unreachable!()
+        }
+        result = periodic_completion_check => {
+            Ok(StageExit::Completed(result?))
+        }
+        _ = cancel => {
+            Ok(StageExit::Cancelled)
+        }
+        Some(exit) = critical_task_exits.next() => {
+            Err(match exit {
+                Exit::Completed(tag) => {
+                    io::Error::other(format!("task {tag:?} completed prematurely"))
                 }
-            }
-            _ = &mut cancel => {
-                return Ok(StageExit::Cancelled);
-            }
-            Some(exit) = &mut premature_exit => {
-                return Err(match exit {
-                    Exit::Completed(tag) => {
-                        io::Error::other(format!("task {tag:?} completed prematurely"))
-                    }
-                    Exit::Dropped(tag) => {
-                        io::Error::other(format!("task {tag:?} was dropped prematurely"))
-                    }
-                });
-            }
+                Exit::Dropped(tag) => {
+                    io::Error::other(format!("task {tag:?} was dropped prematurely"))
+                }
+            })
         }
     }
 }
@@ -447,29 +462,6 @@ impl<F: FnMut()> Drop for CallOnDrop<F> {
     }
 }
 
-async fn submit_snapshots_periodically<C, L: StateListener>(
-    ctx_handle: &Handle<C>,
-    state_listener: &mut L,
-    generate_snapshot: fn(&C) -> StateSnapshot<'_>,
-) -> ! {
-    define_with_ctx!(ctx_handle);
-
-    let mut submit_snapshot = CallOnDrop(|| {
-        with_ctx!(|ctx| {
-            let snapshot = generate_snapshot(ctx);
-            state_listener.on_snapshot(snapshot);
-        })
-    });
-
-    let mut timer = time::interval(L::INTERVAL);
-    timer.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
-
-    loop {
-        timer.tick().await;
-        submit_snapshot();
-    }
-}
-
 fn preliminary_snapshot(ctx: &PreliminaryCtx) -> StateSnapshot<'_> {
     StateSnapshot {
         peers: ctx.peer_states.iter().map(|(addr, state)| (*addr, state)).collect(),
@@ -540,6 +532,7 @@ mod tests {
     use super::*;
     use crate::utils::startup;
     use std::cell::RefCell;
+    use std::pin::pin;
     use tokio::task;
 
     /// Creates a directory and removes it on drop, even if the test panics.
