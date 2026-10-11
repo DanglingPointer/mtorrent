@@ -187,7 +187,7 @@ type WriteResult = Result<(), Error>;
 type ReadResult = Result<Vec<u8>, Error>;
 type VerifyResult = Result<bool, Error>;
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug)]
 enum Command {
     WriteBlock {
