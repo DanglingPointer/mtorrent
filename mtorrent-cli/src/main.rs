@@ -114,13 +114,13 @@ fn main() -> io::Result<()> {
         .init()
         .map_err(io::Error::other)?;
 
-    let _sw = info_stopwatch!("mtorrent");
-
     let cli = Cli::parse();
 
     if cli.list_files {
         return list_files(&cli.metainfo_uri);
     }
+
+    let _sw = info_stopwatch!("mtorrent");
 
     let output_dir = if let Some(cli_arg) = cli.output {
         cli_arg

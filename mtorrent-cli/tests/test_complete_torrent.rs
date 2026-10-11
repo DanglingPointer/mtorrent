@@ -1901,8 +1901,16 @@ fn test_list_files() {
         .lines()
         .map(|line| {
             let mut parts = line.split_whitespace();
-            let index = parts.next().unwrap().parse().unwrap();
-            let length = parts.next().unwrap().parse().unwrap();
+            let index = parts
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap_or_else(|e| panic!("Failed to parse index ({e}), line: '{line}'"));
+            let length = parts
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap_or_else(|e| panic!("Failed to parse length ({e}), line: '{line}'"));
             // file names can contain spaces
             let name = parts.collect::<Vec<_>>().join(" ");
             (index, length, name)
