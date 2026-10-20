@@ -1,9 +1,10 @@
 [![Build and test](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml/badge.svg)](https://github.com/DanglingPointer/mtorrent/actions/workflows/ci.yml)
 [![Crates.io Version](https://img.shields.io/crates/v/mtorrent)](https://crates.io/crates/mtorrent)
 [![codecov](https://codecov.io/github/DanglingPointer/mtorrent/graph/badge.svg?token=UA46BNVZ4T)](https://codecov.io/github/DanglingPointer/mtorrent)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/DanglingPointer/badge.svg)](https://hub.xerj.org/contributors/DanglingPointer)
 
 # mtorrent
-Lightweight BitTorrent engine in Rust. Blazingly fast, incredibly robust and very impressive in general.
+A lightweight BitTorrent engine in Rust, with a focus on speed, robustness and security.
 
 This repo contains reusable library crates and a CLI executable. For GUI versions check out the following:
 - [`mtorrent-gui`](https://github.com/DanglingPointer/mtorrent-gui)
