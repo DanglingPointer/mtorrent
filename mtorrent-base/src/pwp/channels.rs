@@ -1228,7 +1228,7 @@ mod tests {
 
     #[tokio::test(start_paused = true, flavor = "local")]
     async fn test_receiver_times_out_after_2_min() {
-        let (sock1, _sock2) = io::duplex(0);
+        let (sock1, _sock2) = io::duplex(1);
         let (_download, _upload, _, runner) = setup_channels!(
             sock1,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
@@ -1257,7 +1257,7 @@ mod tests {
             .run_until(async {
                 const TIMEOUT: Duration = sec!(10);
 
-                let (sock1, _sock2) = io::duplex(0);
+                let (sock1, _sock2) = io::duplex(1);
                 let (mut download, mut _upload, _, _runner) = setup_channels!(
                     sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
@@ -1292,7 +1292,7 @@ mod tests {
             .run_until(async {
                 const TIMEOUT: Duration = sec!(10);
 
-                let (sock1, _sock2) = io::duplex(0);
+                let (sock1, _sock2) = io::duplex(1);
                 let (mut _download, mut upload, _, _runner) = setup_channels!(
                     sock1,
                     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 6666)),
